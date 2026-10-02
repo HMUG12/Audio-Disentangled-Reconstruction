@@ -1,0 +1,39 @@
+# ADR 配置 - 4GB 显存档 (保守)
+# 适用: GTX 1650 / MX450 / 集成显卡 / 旧款 N 卡
+# 特点: batch_size=1, 短序列, 强制 Grad Ckpt
+
+framework_version: "0.1.0"
+config_preset: "vram_4gb"
+
+data:
+  sample_rate: 24000
+  hop_length: 256
+  n_mels: 80
+  enable_separation: true
+  enable_denoise: false  # 4G 显存,跳过降噪
+  slice_max_sec: 8.0
+  asr_model: "tiny"      # 用最小模型
+  g2p_backend: "g2pW"
+
+train:
+  batch_size: 1
+  gradient_accumulation_steps: 16  # 等效 batch=16
+  learning_rate: 5.0e-5            # 小 batch 用更小 lr
+  num_epochs: 15
+  precision: "fp16"
+  use_gradient_checkpointing: true  # 必开
+  use_flash_attn: false
+  use_qlora: true                   # 强烈推荐 4G 档开 QLoRA
+  qlora_r: 8                        # 小 rank 节省显存
+  qlora_alpha: 16
+  qlora_dropout: 0.05
+  qlora_target_modules:
+    - "q_proj"
+    - "v_proj"
+  save_every_n_steps: 200
+  log_every_n_steps: 20
+
+infer:
+  n_timesteps: 10  # 减少推理步数
+  speed: 1.0
+  temperature: 1.0

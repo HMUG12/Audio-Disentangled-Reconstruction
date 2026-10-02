@@ -1,0 +1,41 @@
+# ADR 配置 - 6GB 显存档 (推荐)
+# 适用: RTX 2060 / 3060 / GTX 1660 Ti
+# 特点: balance 性能与质量, M1 目标档位
+
+framework_version: "0.1.0"
+config_preset: "vram_6gb"
+
+data:
+  sample_rate: 24000
+  hop_length: 256
+  n_mels: 80
+  enable_separation: true
+  enable_denoise: true
+  slice_max_sec: 10.0
+  asr_model: "small"
+  g2p_backend: "g2pW"
+
+train:
+  batch_size: 2
+  gradient_accumulation_steps: 8  # 等效 batch=16
+  learning_rate: 1.0e-4
+  num_epochs: 10
+  precision: "fp16"
+  use_gradient_checkpointing: true
+  use_flash_attn: false           # 6G 暂不开 FlashAttn
+  use_qlora: true                 # 推荐
+  qlora_r: 16
+  qlora_alpha: 32
+  qlora_dropout: 0.05
+  qlora_target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+  save_every_n_steps: 300
+  log_every_n_steps: 30
+
+infer:
+  n_timesteps: 20
+  speed: 1.0
+  temperature: 1.0

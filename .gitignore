@@ -1,0 +1,49 @@
+# ============================================================
+# ADR .gitignore
+# 原则: 只入库源码/配置/文档; 权重、数据、个人录音一律不入库
+# ============================================================
+
+# ---- 个人录音 (生物特征数据, 绝不入库) ----
+*.mp3
+*.m4a
+*.aac
+*.flac
+data/voices/
+
+# ---- 音频数据集 (OpenCpop 等体积大且有授权约束) ----
+data/opencpop/
+data/opencpop_npz/
+*.wav
+
+# ---- 模型权重 / 第三方仓库 (GB 级) ----
+third_party/
+examples/
+output/
+*.pth
+*.ckpt
+*.onnx
+
+# ---- 压缩包 / 日志 ----
+*.zip
+*.log
+*.tmp
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# ---- IDE / 工具 ----
+.trae/
+.vscode/
+.idea/
+
+# ---- 系统杂项 ----
+测试log.txt
+Thumbs.db
+.DS_Store
+desktop.ini

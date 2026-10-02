@@ -1,0 +1,58 @@
+# ADR 一键启动 (Docker Compose)
+#
+# 用法:
+#   docker-compose up -d        # 后台启动 WebUI
+#   docker-compose logs -f      # 查看日志
+#   docker-compose exec adr bash  # 进入容器
+#   docker-compose down         # 停止
+
+version: "3.9"
+
+services:
+  adr:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: adr:latest
+    container_name: adr-clone
+    restart: unless-stopped
+
+    # GPU 透传 (需要 nvidia-container-toolkit)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    # 端口映射
+    ports:
+      - "7860:7860"  # Gradio WebUI
+      - "8000:8000"  # (可选) FastAPI 服务
+
+    # 卷挂载 (持久化)
+    volumes:
+      - ../workspace:/workspace          # 工作目录
+      - adr_cache:/root/.cache/adr        # 预训练模型缓存
+      - adr_output:/app/output            # 输出文件
+      - adr_logs:/app/logs                # 日志
+
+    # 环境变量
+    environment:
+      - ADR_PRESET=vram_8gb
+      - PYTHONUNBUFFERED=1
+      - GRADIO_SERVER_NAME=0.0.0.0
+      - GRADIO_SERVER_PORT=7860
+
+    # 共享内存 (PyTorch DataLoader)
+    shm_size: "4g"
+
+    # stdin 保持打开 (交互)
+    stdin_open: true
+    tty: true
+
+volumes:
+  adr_cache:
+  adr_output:
+  adr_logs:
