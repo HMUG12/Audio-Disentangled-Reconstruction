@@ -1,0 +1,33 @@
+# ADR 配置 - 8GB+ 显存档 (激进)
+# 适用: RTX 3060 / 3070 / 4060 / 3080
+# 特点: 大 batch, 开 FlashAttn, 高质量
+
+framework_version: "0.1.0"
+config_preset: "vram_8gb"
+
+data:
+  sample_rate: 24000
+  hop_length: 256
+  n_mels: 80
+  enable_separation: true
+  enable_denoise: true
+  slice_max_sec: 12.0
+  asr_model: "small"  # 可升级到 "medium" / "large-v3"
+  g2p_backend: "g2pW"
+
+train:
+  batch_size: 4
+  gradient_accumulation_steps: 4  # 等效 batch=16
+  learning_rate: 2.0e-4
+  num_epochs: 10
+  precision: "fp16"
+  use_gradient_checkpointing: true
+  use_flash_attn: true             # 8G 显存够, 开 FlashAttn
+  use_qlora: false                 # 8G 可以全量微调
+  save_every_n_steps: 500
+  log_every_n_steps: 50
+
+infer:
+  n_timesteps: 30
+  speed: 1.0
+  temperature: 1.0
