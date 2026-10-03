@@ -96,10 +96,21 @@ class GSVEngine:
 
             _ta.load = _sf_load
 
-    def warmup(self):
-        """预热: 后台线程调用, 把权重加载从首次合成挪到启动期 (A1)。"""
+    def warmup(self, vits_weights: Optional[str] = None,
+               t2s_weights: Optional[str] = None):
+        """预热: 后台线程调用, 把权重加载从首次合成挪到启动期 (A1)。
+
+        传权重时额外热换到目标权重 — 否则首次流式调用要付 ~12s 的
+        init_vits_weights 罚金 (实测 bench_stream_variance)。
+        """
         with self._lock:
             self._lazy_init()
+            if vits_weights or t2s_weights:
+                with self._gsv_context():
+                    if vits_weights:
+                        self._tts.init_vits_weights(str(vits_weights))
+                    if t2s_weights:
+                        self._tts.init_t2s_weights(str(t2s_weights))
 
     @staticmethod
     def _sanitize_text(text: str) -> str:
@@ -140,6 +151,7 @@ class GSVEngine:
         t2s_weights: Optional[str] = None,
         vits_weights: Optional[str] = None,
         split_method: str = "cut3",
+        head_seed: int = -1,
     ):
         """流式合成: 逐块 yield (wav_chunk float32 [-1,1], sr)。
 
@@ -147,6 +159,8 @@ class GSVEngine:
         首包优化: 先合成预切的 ≤30 字短首段, 再合成剩余 (W1, 实测首包
         25.3s→2.7s 级)。split_method: cut3 按句号切(默认, 首包最优)
               / cut1 凑四句一切 / cut0 不切 / cut5 按标点切
+        head_seed: ≥0 时固定首段采样种子 — 首包延迟从 2.7~4.9s 方差
+              收敛到确定值 (后续段仍随机, 不伤韵律多样性)
         """
         import numpy as np
 
@@ -176,8 +190,9 @@ class GSVEngine:
                     self._tts.init_vits_weights(vits_weights)
                 if t2s_weights:
                     self._tts.init_t2s_weights(t2s_weights)
-                for seg in segments:
+                for i, seg in enumerate(segments):
                     inputs["text"] = seg
+                    inputs["seed"] = head_seed if (i == 0 and head_seed >= 0) else -1
                     for sr, chunk in self._tts.run(inputs):
                         chunk = np.asarray(chunk, dtype=np.float32)
                         if np.abs(chunk).max() > 1.5:

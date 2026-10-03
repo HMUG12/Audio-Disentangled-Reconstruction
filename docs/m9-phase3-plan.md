@@ -90,9 +90,16 @@
 - 回归: 快速子集 168 passed / 1 skipped; 慢训练测试单独补跑
 - 已知坑: 沙箱阻塞 D:\pyhon 写入导致训练挂死 → 训练/评估一律非沙箱运行
 
-### 批次 2 (待做)
+### 批次 2 (2026-10-03)
 
-- [ ] W2: 首包方差治理 (seed 采样抖动 3→5s); BERT 量化/蒸馏降 CPU 首包
-- [ ] W2: 2GB/核显实测 (directml 或 fp16 显存压到 <1GB)
-- [ ] W3: s2 LoRA 微调路线 → 4GB 显存可训 (C5 收尾)
-- [ ] DiffSinger 采样压缩 (27.3s/4s 音频 → 目标减半)
+- [x] **W1 首包方差治理** ✅: 根因二分 — 首次流式调用的 init_vits_weights 热换罚金 ~12s (head_seed 只是次因); 引擎 warmup 支持权重预热 + WebUI 预热传档案权重; head_seed 参数固化 (seeded 同文本极差 0.05s, 完全确定)
+- [x] **W2 2GB 档模拟实测** ✅ (`bench_vram_budget.py`, memory fraction 模拟): 峰值 1412MB < 2000MB 预算, RTF 1.35-1.5 — **2GB 显存推理档通过**
+- [x] **W2 CPU int8 量化结论** ✅: t2s+BERT 146+50 Linear 量化 RTF 无增益 (6.4/2.2 vs fp32 6.4/1.9) — CPU 提速留待批次 3 ONNX/OpenVINO; vits weight_norm 不兼容 dynamic quant (已从目标剔除)
+- [x] **D DiffSinger 采样压缩** ⚠️ 反直觉结论: speedup 40→240 时间不变 (~33s RTF≈8, 首调另有预热) — **瓶颈不在扩散步数**, 步数压缩无效; 需 profile 定位固定开销 (批次 3); 音频 4 档落盘 output/ds_speedup/ 供听感评审
+- [x] **W3 4GB 训练路线** ✅ (远超预期, C5 收尾): 显存诊断三部曲 —
+  1. 曲线定位: 训练步瞬跳 2GB→7.8GB, **激活值是大头** (非分配器缓存: expandable_segments 无差异 7902≈7892)
+  2. **补丁 #16**: v2 训练 forward 梯度检查点 (enc_q/flow; 官方只在 v3 实现, v2 的 grad_ckpt 一直被静默忽略) → 7892→7180
+  3. **补丁 #17**: 长 clip 截断 ADR_MAX_CLIP_SEC (ssl/spec/wav 同帧数截, 对齐不破坏) + bs 缩减
+  - **实测配方**: bs2+ckpt+cap10s = **训练自身 ~3.5GB** (整机 4793MB 含其他进程 1.3GB); bs1 = ~3.1GB — **4GB 显存训练达标**, 8GB 基线省一半; LoRA 判定为非杠杆 (只省优化器 ~300MB, 不省激活)
+  - `gsv_finetune.py --max-clip-sec 10 --batch-size 1` 即 4GB 配方 (配补丁); cap 对音质影响待批次 3 全程训练+门禁验证
+- 已知坑: 诊断管道 Tee+超时截断假失败 (训练其实完成); DataLoader worker 反复 spawn 待查 (性能侧, 不影响显存结论)

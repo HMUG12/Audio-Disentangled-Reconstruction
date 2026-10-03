@@ -49,29 +49,27 @@ def bench_engine(mode: str) -> list[dict]:
         import torch
         torch.cuda.reset_peak_memory_stats()
 
-    if mode == "cpu-int8":
+    if mode in ("cpu-int8", "cpu-int8-bert"):
         # t2s (GPT 语义) 是自回归采样主力, Linear 层 int8 动态量化
         import torch
-        from torch.nn.utils import skip_init  # noqa: F401
         tts_obj = eng._tts
-        cands = [n for n in dir(tts_obj) if "t2s" in n.lower()]
-        print(f"[cpu-int8] t2s 候选属性: {cands}")
-        quantized = False
-        for attr in cands:
-            m = getattr(tts_obj, attr)
-            if hasattr(m, "modules"):
-                n_lin = sum(1 for x in m.modules() if x.__class__.__name__ == "Linear")
-                if n_lin == 0:
-                    continue
-                t0 = time.perf_counter()
-                q = torch.ao.quantization.quantize_dynamic(
-                    m, {torch.nn.Linear}, dtype=torch.qint8)
-                setattr(tts_obj, attr, q)
-                print(f"[cpu-int8] {attr}: 量化 {n_lin} 个 Linear "
-                      f"({time.perf_counter() - t0:.1f}s)")
-                quantized = True
-        if not quantized:
-            print("[cpu-int8] 警告: 未找到可量化的 t2s Linear 层")
+        targets = ["t2s_model"] if mode == "cpu-int8" else \
+            ["t2s_model", "bert_model"]  # vits 有 weight_norm, 不兼容 dynamic quant
+        for attr in targets:
+            m = getattr(tts_obj, attr, None)
+            if m is None or not hasattr(m, "modules"):
+                print(f"[{mode}] {attr}: 不存在, 跳过")
+                continue
+            n_lin = sum(1 for x in m.modules() if x.__class__.__name__ == "Linear")
+            if n_lin == 0:
+                print(f"[{mode}] {attr}: 无 Linear 层, 跳过")
+                continue
+            t0 = time.perf_counter()
+            q = torch.ao.quantization.quantize_dynamic(
+                m, {torch.nn.Linear}, dtype=torch.qint8)
+            setattr(tts_obj, attr, q)
+            print(f"[{mode}] {attr}: 量化 {n_lin} 个 Linear "
+                  f"({time.perf_counter() - t0:.1f}s)")
 
     rows = []
     for text in PROBES:
@@ -97,7 +95,7 @@ def bench_engine(mode: str) -> list[dict]:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["gpu", "cpu", "cpu-int8"])
+    ap.add_argument("mode", choices=["gpu", "cpu", "cpu-int8", "cpu-int8-bert"])
     args = ap.parse_args()
 
     rows = bench_engine(args.mode)
