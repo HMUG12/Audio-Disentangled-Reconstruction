@@ -245,6 +245,50 @@ def build_ui(share: bool = False, inbrowser: bool = True) -> "gr.Blocks":
                 api_name="train",
             )
 
+            # ---- 声音克隆微调 (GPT-SoVITS · 说话音色, 4GB 配方) ----
+            gr.Markdown('<p class="adr-section">声音克隆微调 (GPT-SoVITS · 说话音色)</p>')
+            gr.Markdown(
+                "上传一段**说话**录音 (≥1 分钟, 越长越稳), 只微调 s2 音色层 (~7 分钟起)。"
+                "**4GB 低配** = bs1 + 10s 截断配方, 训练自身 ~3.1-3.5GB 显存;"
+                "质量门禁在 CPU 上并行打 5 句相似度均值, ≥0.80 自动早停 (不抢显存)。"
+            )
+            with gr.Row():
+                with gr.Column(scale=1):
+                    ft_audio = gr.Audio(label="原始录音 (mp3/wav)", type="filepath")
+                    ft_exp = gr.Textbox(label="音色名 (训练标识)", value="my_voice")
+                    ft_recipe = gr.Radio(
+                        choices=[
+                            ("4GB 低配 (bs1 + 10s 截断, 推荐)", "4gb"),
+                            ("8GB 标准 (bs4)", "8gb"),
+                        ],
+                        value="4gb",
+                        label="显存配方",
+                    )
+                    ft_epochs = gr.Slider(
+                        minimum=1, maximum=16, value=8, step=1,
+                        label="s2 训练轮数 (门禁达标会提前停)",
+                    )
+                    ft_gate = gr.Checkbox(
+                        label="质量门禁自动早停 (5 句均值 sim ≥ 0.80)", value=True,
+                    )
+                    ft_bind = gr.Dropdown(
+                        choices=_list_voices(),
+                        value=None,
+                        label="训完自动绑定到已有音色档案 (可选)",
+                        allow_custom_value=True,
+                    )
+                    ft_run = gr.Button("开始克隆微调", variant="primary")
+                with gr.Column(scale=1):
+                    ft_log = gr.Textbox(label="微调日志", lines=18, interactive=False)
+                    ft_metrics = gr.JSON(label="门禁曲线 / 指标")
+
+            ft_run.click(
+                _run_gsv_finetune,
+                inputs=[ft_audio, ft_exp, ft_recipe, ft_epochs, ft_gate, ft_bind],
+                outputs=[ft_log, ft_metrics],
+                api_name="clone_train",
+            )
+
         # ---- Tab 3: Clone ----
         with gr.Tab("Clone"):
             gr.Markdown('<p class="adr-section">文本转语音 (TTS)</p>')
@@ -670,6 +714,192 @@ def _run_train_cmd(
         "lora": use_lora, "qlora": use_qlora,
         "ckpt_dir": "examples/webui_train",
     }
+
+
+def _run_gsv_finetune(
+    audio_path: str,
+    exp_name: str,
+    recipe: str,
+    epochs: int,
+    gate_on: bool,
+    bind_voice: str,
+):
+    """声音克隆微调回调 — gsv_finetune.py 子进程 + 可选 train_gate.py 并行早停。
+
+    配方:
+      8gb: bs4 (8GB 显存实测峰值 ~7.8GB)
+      4gb: bs1 + 10s clip 截断 (实测训练自身 ~3.1-3.5GB, 补丁 #16/#17/#18)
+    门禁走 CPU (--cpu): 离线打分不与训练抢显存, 5 句均值 ≥0.80 发 STOP 早停。
+    """
+    import json
+    import subprocess
+    import sys
+    import time
+
+    log_buf = []
+    if not audio_path:
+        yield "[FAIL] 请先选择原始录音", _err("缺少音频文件", "上传一段 ≥1 分钟的说话录音")
+        return
+    audio_path = str(audio_path)
+    if not Path(audio_path).exists():
+        yield "[FAIL] 音频文件不存在", _err(f"找不到 {audio_path}")
+        return
+    exp = (exp_name or "my_voice").strip()
+    exp = "".join(c for c in exp if c not in '\\/:*?"<>|') or "my_voice"
+
+    script = REPO / "scripts" / "gsv_finetune.py"
+    cmd = [
+        sys.executable, "-u", str(script), audio_path,
+        "--exp", exp,
+        "--s2-epochs", str(epochs),
+        "--batch-size", "1" if recipe == "4gb" else "4",
+        "--skip-s1",  # s1 全量微调 ~50min 且降音色相似度 (实测结论)
+    ]
+    if recipe == "4gb":
+        cmd += ["--max-clip-sec", "10"]
+    if bind_voice:
+        cmd += ["--bind-voice", bind_voice]
+
+    # 质量门禁: 训练前启动, CPU 打分, 达标往 logs/<exp>/STOP 写信号让 s2 早停
+    gate_proc = None
+    gate_curve = REPO / "output" / f"train_gate_{exp}.jsonl"
+    if gate_on:
+        gate_log = REPO / "output" / f"train_gate_{exp}.log"
+        gate_log.parent.mkdir(exist_ok=True)
+        gate_cmd = [
+            sys.executable, "-u", str(REPO / "scripts" / "train_gate.py"),
+            "--exp", exp, "--ref", audio_path, "--target", "0.80", "--cpu",
+        ]
+        try:
+            gate_fh = open(gate_log, "a", encoding="utf-8", errors="replace")
+            gate_proc = subprocess.Popen(
+                gate_cmd, stdout=gate_fh, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace", cwd=str(REPO),
+            )
+            log_buf.append(f"[gate] 质量门禁已启动 (PID {gate_proc.pid}, CPU 打分, "
+                           f"曲线 {gate_curve.name})")
+        except Exception as e:
+            log_buf.append(f"[!] 门禁启动失败 (不影响训练): {e}")
+
+    log_buf.append(f"[CMD] {' '.join(cmd)}")
+    log_buf.append(f"[配置] exp={exp} 配方={recipe} (bs={'1' if recipe == '4gb' else '4'}"
+                   f"{', clip≤10s' if recipe == '4gb' else ''}) s2轮数={epochs} "
+                   f"门禁={'开' if gate_on else '关'}"
+                   + (f" 绑定档案={bind_voice}" if bind_voice else ""))
+    log_buf.append("=" * 50)
+    yield "\n".join(log_buf), {"status": "克隆微调启动中..."}
+
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace",
+            cwd=str(REPO), bufsize=1,
+        )
+    except Exception as e:
+        yield "\n".join(log_buf), _err(f"微调进程启动失败: {e}")
+        return
+
+    def _gate_tail(seen_n):
+        """读门禁曲线新增行, 转成日志行。返回 (新 seen_n, 日志行列表)。"""
+        out = []
+        try:
+            lines = gate_curve.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return seen_n, out
+        for ln in lines[seen_n:]:
+            try:
+                d = json.loads(ln)
+            except ValueError:
+                continue
+            ep = d.get("epoch", "?")
+            if d.get("kind") == "zero_shot":
+                out.append(f"[gate] 零样本基线 mean={d['sim']:.3f} (逐句 {d.get('sims')})")
+            else:
+                out.append(f"[gate] epoch {ep}: mean={d['sim']:.3f} (逐句 {d.get('sims')})")
+        return len(lines), out
+
+    lines: list[str] = []
+    t0 = time.time()
+    last_push = 0.0
+    gate_seen = 0
+    gate_lines: list[str] = []
+    timed_out = False
+
+    while True:
+        line = proc.stdout.readline()
+        if line:
+            lines.append(line.rstrip())
+            now = time.time()
+            if now - last_push >= 0.5:
+                last_push = now
+                gate_seen, new_gate = _gate_tail(gate_seen)
+                gate_lines.extend(new_gate)
+                yield "\n".join(log_buf + gate_lines + lines[-100:]), {"status": "微调中..."}
+        elif proc.poll() is not None:
+            break
+        else:
+            time.sleep(0.2)
+            if time.time() - t0 > _TRAIN_TIMEOUT:
+                proc.kill()
+                timed_out = True
+                break
+
+    rc = proc.wait()
+    tail = "\n".join(lines[-30:])
+    final_log = "\n".join(log_buf + gate_lines + lines[-100:])
+
+    # 门禁收尾: 训练结束 (含早停) 后门禁也该退场
+    if gate_proc and gate_proc.poll() is None:
+        gate_proc.terminate()
+        try:
+            gate_proc.wait(timeout=10)
+        except Exception:
+            gate_proc.kill()
+
+    if timed_out:
+        msg = f"微调超时 (>{_TRAIN_TIMEOUT // 3600}h), 已终止"
+        yield final_log + f"\n\n[FAIL] {msg}", _err(msg, "减少轮数 / 样本")
+        return
+
+    # 汇总门禁曲线为指标
+    metrics = {"exp": exp, "recipe": recipe, "exit_code": rc}
+    gate_entries = []
+    try:
+        for ln in gate_curve.read_text(encoding="utf-8").splitlines():
+            try:
+                gate_entries.append(json.loads(ln))
+            except ValueError:
+                pass
+    except OSError:
+        pass
+    if gate_entries:
+        scored = [g for g in gate_entries if g.get("kind") != "zero_shot"]
+        if scored:
+            best = max(scored, key=lambda g: g["sim"])
+            metrics["gate"] = {
+                "zero_shot": gate_entries[0].get("sim"),
+                "best_mean_sim": best.get("sim"),
+                "best_epoch": best.get("epoch"),
+                "best_weight": best.get("weight"),
+                "target_met": bool(best.get("sim", 0) >= 0.80),
+                "curve": [{"epoch": g.get("epoch"), "mean_sim": g.get("sim")}
+                          for g in scored],
+            }
+    stopped = "收到训练门禁早停信号" in tail or "收到训练门禁早停信号" in final_log
+    if stopped:
+        metrics["early_stop"] = "质量门禁触发 (sim ≥ 0.80)"
+
+    if rc != 0:
+        msg, hint = _classify_subprocess_error(tail)
+        yield final_log + f"\n\n[FAIL] {msg}" + (f"\n[建议] {hint}" if hint else ""), \
+            {**_err(msg, hint), **metrics}
+        return
+    ok_msg = "\n\n[OK] 克隆微调完成"
+    if metrics.get("gate", {}).get("target_met"):
+        ok_msg += (f" (门禁达标: best mean sim={metrics['gate']['best_mean_sim']:.3f} "
+                   f"@ epoch {metrics['gate']['best_epoch']}, "
+                   f"权重 {metrics['gate']['best_weight']})")
+    yield final_log + ok_msg, metrics
 
 
 def _prewarm_engines():

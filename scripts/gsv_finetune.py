@@ -138,6 +138,11 @@ def main():
     if start <= 5:
         # s2 (SoVITS/VITS 声学) 微调
         os.makedirs(logs / "logs_s2_v2", exist_ok=True)  # ckpt 保存需要
+        # 清残留 STOP: 上次门禁早停的信号文件若不删, 本次第 1 轮就会假早停
+        stale_stop = logs / "STOP"
+        if stale_stop.exists():
+            stale_stop.unlink()
+            print(f"[finetune] 已清除残留早停信号: {stale_stop}")
         cfg = json.loads(open(GSV / "GPT_SoVITS" / "configs" / "s2.json").read())
         cfg["train"]["batch_size"] = args.batch_size
         cfg["train"]["epochs"] = args.s2_epochs

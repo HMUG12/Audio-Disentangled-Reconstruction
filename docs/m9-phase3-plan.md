@@ -111,3 +111,13 @@
 - [x] **CPU 推理 profile** ✅ (`bench_cpu_profile.py`): conv1d/mkldnn 20% + SDPA 5% + conv_transpose 2.5%, 无单点 >20% 热点 — "千刀万剐"型, ONNX Runtime 预期 1.3-2x (批次 4); uniform_ 768ms 系 GPT 采样正当开销 (eval 模式已确认全关 dropout)
 - [x] **WebUI 流式端到端验收** ✅ (`bench_webui_stream_e2e.py`): 预热 (引擎+权重热换+流式形状) 68.7s 后台无感 → **首次点按钮 3.99s (原 17.5s) / 热机 2.19s** — 双双达标 (≤5s/≤3s); 修复: ① tts_infer.yaml 相对路径改绝对 (TTS_Config assert 间歇崩) ② prewarm 加流式路径形状预热 (首调 JIT 罚金 ~14s)
 - [x] **顺手修复**: tts_infer.yaml 断言间歇崩 (绝对路径化); 官方确认流式不支持并行推理 (自动降级, 无需改)
+
+### 批次 4 (2026-10-03)
+
+- [x] **门禁多句均值化** ✅ (`train_gate.py` 重写): 5 句探测集 (与 eval_heldout.py 同源, 长/中/短/混合/叙事) 逐句打分取均值; jsonl 记录逐句分; `--once` 重打分模式 / `--cpu` 打分走 CPU (训练占 GPU 时零争抢)
+- [x] **⚠️ 批次 3 结论修正 (测量污染)**: tts_infer.yaml custom 段被 GSV `init_vits_weights` 热换时**写回** (每次热换都持久化!), 旧门禁"零样本基线 0.841"实为漂移后的微调权重 → 单句 0.815/0.820 是**混合权重污染分**。诚实重测 (钉死预训练 s1): 真零样本 **0.762~0.776** (±0.014 采样方差), **user_h4gb_e2 = 0.744 (-0.018, 未达标!)** — 4GB 配方 e2 被**误早停**, 配方本身未失效但需更多 epoch (holdout e8 才 +0.028); **user_holdout_e8 = 0.804 (+0.028 真实泛化)**; 短句稳定弱项 (0.688~0.747)
+- [x] **yaml 漂移根治** ✅ (`gsv_engine._lazy_init`): 只取 yaml v2 原始段构造 dict 传入 TTS_Config (每次启动从干净预训练出发, 免疫 custom 段漂移) + 写回重定向到私有 scratch 文件 (共享 yaml 永不被改); 冒烟验证: 启动即加载预训练对, 共享 yaml custom 段自愈为预训练路径
+- [x] **残留 STOP 清理** ✅ (`gsv_finetune.py`): 上次门禁早停的 STOP 文件会让同 exp 下次训练第 1 轮假早停 — 启动前清除; `--once` 模式不发 STOP
+- [x] **4GB 配方接入 WebUI** ✅ (`webui.Train` 新区块): 声音克隆微调 UI (录音上传 / 音色名 / 配方 4gb[bs1+cap10s]·8gb[bs4] / 轮数 / 质量门禁开关[CPU 打分并行, 5 句均值 ≥0.80 自动早停] / 训完绑定档案); 回调流式日志 + 门禁曲线实时注入 + 门禁指标 JSON 汇总
+- [x] **torch.compile 验证** ✅ (`bench_diffsinger_compile.py`): **Windows 可行** (triton-windows 3.8.0 + torch 2.10+cu130, toy 模型先行验证); DiffSinger 主模型 mode=reduce-overhead: **32.31s → 6.72s (4.81x)** — ~20 万微算子 launch 开销被算子融合 + CUDA Graph 回放打掉, 批次 3 的 33s 之谜正式收口; 代价: 首发编译 560s (inductor 有持久缓存, 二次启动待测); 集成前置: 任意歌长 → 需 shape 分桶/动态形状策略, 否则每首新歌都触发重编译
+- [x] **CPU ONNX Runtime 实验** ✅ (`bench_bert_onnx.py`): BERT 特征面 (倒数第 3 层) 导出 ONNX + ORT_ENABLE_ALL, **1.36-1.43x 组件级提速** (L=64/128/256 → 163/257/427ms), 数值一致 (rel_err ≤7e-06); BERT 占 CPU ~1/4 → 端到端 ~10% (RTF 1.9→~1.7), 收益真实但温和; int8 量化在外部数据模型上失败 (跳过, 批次 2 已证无增益); t2s (AR 采样) / vits (flow+decoder) 完整 ONNX 化为后续更大工程, 暂不接入引擎
