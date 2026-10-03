@@ -121,3 +121,14 @@
 - [x] **4GB 配方接入 WebUI** ✅ (`webui.Train` 新区块): 声音克隆微调 UI (录音上传 / 音色名 / 配方 4gb[bs1+cap10s]·8gb[bs4] / 轮数 / 质量门禁开关[CPU 打分并行, 5 句均值 ≥0.80 自动早停] / 训完绑定档案); 回调流式日志 + 门禁曲线实时注入 + 门禁指标 JSON 汇总
 - [x] **torch.compile 验证** ✅ (`bench_diffsinger_compile.py`): **Windows 可行** (triton-windows 3.8.0 + torch 2.10+cu130, toy 模型先行验证); DiffSinger 主模型 mode=reduce-overhead: **32.31s → 6.72s (4.81x)** — ~20 万微算子 launch 开销被算子融合 + CUDA Graph 回放打掉, 批次 3 的 33s 之谜正式收口; 代价: 首发编译 560s (inductor 有持久缓存, 二次启动待测); 集成前置: 任意歌长 → 需 shape 分桶/动态形状策略, 否则每首新歌都触发重编译
 - [x] **CPU ONNX Runtime 实验** ✅ (`bench_bert_onnx.py`): BERT 特征面 (倒数第 3 层) 导出 ONNX + ORT_ENABLE_ALL, **1.36-1.43x 组件级提速** (L=64/128/256 → 163/257/427ms), 数值一致 (rel_err ≤7e-06); BERT 占 CPU ~1/4 → 端到端 ~10% (RTF 1.9→~1.7), 收益真实但温和; int8 量化在外部数据模型上失败 (跳过, 批次 2 已证无增益); t2s (AR 采样) / vits (flow+decoder) 完整 ONNX 化为后续更大工程, 暂不接入引擎
+
+### 批次 5 (2026-10-03): 框架层聚焦 (唱歌线暂缓, 用户定调)
+
+> 用户定调: 唱歌 (DiffSinger/RVC) 放下, 回归"低资源快训练 + 好质量"框架/架构; 不做"为练模型而练模型"; 未来可能换桌面端控制台 (仅记录, 暂不做)
+
+- [x] **一键链路闭环审计** ✅: 断点① gsv_finetune bind_voice 档案不存在时 `meta.json.read_text` **崩溃** (且崩在训练全部完成后!) → 修复: 不存在则用本次切片自动建档 (免 GPU); 断点② WebUI ft_bind 下拉冻结 → 加刷新按钮; CLI 的 `adr train` 是自研骨架训练器, GSV 微调入口 = 脚本/WebUI (够用)
+- [x] **补丁系统幂等性修复** ✅: #17 grad_ckpt 补丁的 marker「梯度检查点开关」不在 new 文本里 + old 串是 new 的前缀永存 → 每次重跑重复插入 (实测 3 份拷贝); 修复: marker 改真实子串 + `patch()` 加 `assert marker in new` 自检; s2_train.py 手工去重; 补丁 #19 新增: `ADR_S2_NUM_WORKERS` 覆盖 DataLoader worker 数
+- [x] **端到端计时审计** ✅ (`bench_pipeline_stages.py`, 10 切片/3 分钟音频): 数据准备 slice 37.6s / **ASR 322.3s** / text+BERT 115.2s / HuBERT 112.1s / semantic 77.8s ≈ **12.5 分钟** (一次性成本, 转写已缓存); s2 训练 bs1+cap10 105s/ep; **ASR 慢根因三层剥开**: ① ct2 无静默回退 (cpu+float16 直接 LOAD FAIL, cuda-fp16/cpu-int8 RTF 均 0.07 正常); ② **中文强制路由 FunASR** (fasterwhisper_asr.py 对 zh/yue 仅做语种检测, 实际转写走 Fun-ASR-Nano); ③ nano 确认上 GPU (显存 3716 MiB), 真实语音 RTF 0.49 为模型特性 (1.98B), **批量 generate 无加速** (batch5 28.06s vs loop5 28.19s), 短文件固定开销大 (3.9s 音频 3.65s, RTF 0.93) → **框架决策: 不深陷**, 322s 为一次性成本
+- [x] **训练启动开销 A/B** ✅: DataLoader 5 worker × Windows spawn 重导入 torch = 分钟级固定开销, 实测 workers=5 → 553.0s vs workers=0 → 235.0s (1 epoch, **-57.5%**) → 补丁 #19 默认改 `ADR_S2_NUM_WORKERS=0`, 大数据集可手动开回
+- [x] **短句质量实测定策略** ✅ (bench_short_sent.py, 4 短句 × 5 seeds × top_k{15,5} + 前导"."对照): top_k=5 非普适 (部分 s1 反跌 0.022), 前导"。"无害 (0.654≈0.644), 种子方差小 (std 0.01-0.02) → **短句低分系超短文本韵律自由度的模型特性, 不做自动收 top_k**, 记录特性
+- [x] **BERT ONNX 接入引擎** ✅: `_OnnxBertFeat` (ORT 惰性会话 + 自动导出缓存 + `bert_onnx=auto` 仅 CPU 启用) 冒烟 PASS; **同种子逐位等价** (HF vs ORT 合成 dur/rms/peak 完全一致 0.74s/0.0026/0.0091 = 零回归); CPU e2e 63.2s → 6.7s; 观察项: GSV CPU 合成近静音为官方既有行为 (bert off 同样, 与本改动无关)

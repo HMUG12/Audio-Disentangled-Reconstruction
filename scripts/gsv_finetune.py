@@ -168,19 +168,28 @@ def main():
         run(f'"{PY}" -s GPT_SoVITS/s2_train.py --config "{tmp_cfg}"',
             desc=f"6/7 SoVITS 微调 ({args.s2_epochs} epochs)")
 
-        # C3: 训完自动把最新 s2 权重绑定到音色档案
+        # C3: 训完自动把最新 s2 权重绑定到音色档案 (不存在则自动建档, 闭环断点修复)
         if args.bind_voice:
-            import re
             ws = list((GSV / "SoVITS_weights_v2").glob(f"{exp}_e*.pth"))
             ws.sort(key=lambda p: p.stat().st_mtime)  # 按时间取最新 (跨次训练轮次号会回卷)
             if ws:
-                from adr.models.voice_library import VOICES_DIR
+                from adr.models.voice_library import VOICES_DIR, save_voice
                 meta_p = VOICES_DIR / args.bind_voice / "meta.json"
-                meta = json.loads(meta_p.read_text(encoding="utf-8"))
-                meta["vits_weights"] = str(ws[-1].resolve())
-                meta_p.write_text(json.dumps(meta, ensure_ascii=False, indent=2),
-                                  encoding="utf-8")
-                print(f"[bind] 档案「{args.bind_voice}」已绑定最新权重: {ws[-1].name}")
+                if meta_p.exists():
+                    meta = json.loads(meta_p.read_text(encoding="utf-8"))
+                    meta["vits_weights"] = str(ws[-1].resolve())
+                    meta_p.write_text(json.dumps(meta, ensure_ascii=False, indent=2),
+                                      encoding="utf-8")
+                    print(f"[bind] 档案「{args.bind_voice}」已绑定最新权重: {ws[-1].name}")
+                else:
+                    # 首次训练用户无档案: 用本次切片的第一个干净切片当 ref 自动建档
+                    # (切片已静音修剪, 免 GPU 探测; t2s 留空 = 预训练 s1, 与 skip-s1 训练一致)
+                    slices = sorted((GSV / "output" / "slicer_opt" / exp).glob("*.wav"))
+                    ref = str(slices[0].resolve()) if slices else audio
+                    save_voice(args.bind_voice, ref, "",
+                               vits_weights=str(ws[-1].resolve()))
+                    print(f"[bind] 已新建档案「{args.bind_voice}」(ref={Path(ref).name}, "
+                          f"权重 {ws[-1].name}); Clone 页点「刷新音色列表」即可用")
 
     if start <= 6 and not args.skip_s1:
         # s1 (GPT 语义) 微调
