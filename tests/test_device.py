@@ -29,11 +29,20 @@ def test_force_preset_8gb():
 
 
 def test_device_summary_format():
-    """设备摘要格式正确。"""
+    """设备摘要格式正确 (含能力分级)。"""
     cfg = DeviceConfig(device="cpu", gpu_name="Test", gpu_vram_gb=8.0)
     summary = cfg.summary()
     assert "cpu" in summary
     assert "8.0 GB" in summary
+    assert "受限" in summary          # 无 NVIDIA → CPU 推理可用/训练不支持
+    assert "训练不支持" in cfg.capability
+
+
+def test_device_capability_levels():
+    """能力分级: cuda 全功能 / cpu 受限。"""
+    assert "全功能" in DeviceConfig(device="cuda").capability
+    assert "训练 + GPU 推理" in DeviceConfig(device="cuda").capability
+    assert "训练不支持" in DeviceConfig(device="cpu").capability
 
 
 def test_vram_presets_keys():

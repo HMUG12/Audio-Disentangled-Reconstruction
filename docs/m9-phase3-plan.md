@@ -132,3 +132,9 @@
 - [x] **训练启动开销 A/B** ✅: DataLoader 5 worker × Windows spawn 重导入 torch = 分钟级固定开销, 实测 workers=5 → 553.0s vs workers=0 → 235.0s (1 epoch, **-57.5%**) → 补丁 #19 默认改 `ADR_S2_NUM_WORKERS=0`, 大数据集可手动开回
 - [x] **短句质量实测定策略** ✅ (bench_short_sent.py, 4 短句 × 5 seeds × top_k{15,5} + 前导"."对照): top_k=5 非普适 (部分 s1 反跌 0.022), 前导"。"无害 (0.654≈0.644), 种子方差小 (std 0.01-0.02) → **短句低分系超短文本韵律自由度的模型特性, 不做自动收 top_k**, 记录特性
 - [x] **BERT ONNX 接入引擎** ✅: `_OnnxBertFeat` (ORT 惰性会话 + 自动导出缓存 + `bert_onnx=auto` 仅 CPU 启用) 冒烟 PASS; **同种子逐位等价** (HF vs ORT 合成 dur/rms/peak 完全一致 0.74s/0.0026/0.0091 = 零回归); CPU e2e 63.2s → 6.7s; 观察项: GSV CPU 合成近静音为官方既有行为 (bert off 同样, 与本改动无关)
+
+### 批次 6 (2026-10-03): 兼容性闭环 + 听感验收
+
+- [x] **AMD/Intel 兼容审计 + 修复** ✅: 全仓 CUDA 依赖点扫描 → 三处真问题修复: ① `gsv_finetune.py` ASR 精度硬编码 float16 (CPU 上 ct2 无静默回退直接 LOAD FAIL) → 动态 float16/int8; ② `is_half:"True"` 硬编码 (CPU BERT half 崩) → 动态; ③ 训练步无 GPU 时友好 abort + `--skip-to s2` 断点提示 (数据准备产物已缓存); `DeviceConfig.capability` 能力分级 (全功能/受限) + `adr check` 输出; 审计确认 FunASR 自动降级 / load_cudnn 有保护 / ERes2Net 纯 CPU / GSV CPU 推理已实证 → 兼容矩阵落盘 `docs/gpu-compat.md` (DirectML/IPEX 评估: 版本滞后+op 覆盖不全, 不集成为承诺)
+- [x] **听感验收工具** ✅ (`scripts/mos_ab_test.py`): MOS A/B 盲测 — 每句 × {zero-shot 官方预训练, fine-tuned 档案} 合成, A/B 随机混淆 (seed 可复现), 客观 ERes2Net 分随 answer_key 存档; `--score` 汇总分系统 MOS + 揭晓映射 + 主客观对照; **关键坑修复: 引擎权重传 None=保持当前状态**, 两系统必须每句显式传权重否则 AB 混同; 待用户实际听测填分
+- 观察项: AMD/Intel 真机未实测 (本机 NVIDIA), 结论来自代码路径审计 + CPU 路径实测等价覆盖

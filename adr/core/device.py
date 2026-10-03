@@ -101,12 +101,22 @@ class DeviceConfig:
             return f"{self.gpu_vram_gb:.1f} GB"
         return "N/A (CPU)"
 
+    @property
+    def capability(self) -> str:
+        """功能分级 (AMD/Intel/MPS 用户的明确预期)。"""
+        if self.is_cuda:
+            return "全功能 (NVIDIA CUDA: 训练 + GPU 推理)"
+        if self.is_mps:
+            return "实验性 (Apple MPS: 推理未验证, 训练不支持)"
+        return "受限 (无 NVIDIA GPU: CPU 推理+声纹门禁可用, 训练不支持)"
+
     def summary(self) -> str:
         """人类可读的设备摘要。"""
         lines = [
             f"  Device      : {self.device}",
             f"  GPU         : {self.gpu_name or 'N/A'}",
             f"  VRAM        : {self.vram_str}",
+            f"  Capability  : {self.capability}",
             f"  Preset      : {self.vram_preset}",
             f"  Precision   : {self.precision}",
             f"  Batch size  : {self.batch_size}",
