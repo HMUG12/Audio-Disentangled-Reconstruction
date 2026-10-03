@@ -78,11 +78,23 @@ class GSVEngine:
             device = self.config.device
             if device == "auto":
                 device = "cuda" if torch.cuda.is_available() else "cpu"
-            cfg = TTS_Config(str(self.config.gsv_dir / "GPT_SoVITS" / "configs" / "tts_infer.yaml"))
+            # 批次4 yaml 漂移修复: GSV 的 init_vits_weights 会把热换权重写回
+            # tts_infer.yaml 的 custom 段 (实测两次进程启动基线 0.812→0.759 漂移,
+            # 任何引擎重启都会静默换权重)。对策: 只取 yaml 的 v2 原始段 (预训练
+            # 权重) 构造 dict 传入 — 每次进程启动都从干净状态出发; 并把写回
+            # 路径重定向到私有 scratch 文件, 共享 yaml 永不被改。
+            import yaml as _yaml
+            _cfgp = self.config.gsv_dir / "GPT_SoVITS" / "configs" / "tts_infer.yaml"
+            _raw = _yaml.safe_load(_cfgp.read_text(encoding="utf-8"))
+            cfg = TTS_Config({"v2": _raw["v2"]})
             cfg.device = device
             cfg.is_half = self.config.half and device == "cuda"
             cfg.version = self.config.version
             self._tts = TTS(cfg)
+            # 热换权重触发的 save_configs 写到私有文件, 不再污染共享配置
+            _scratch = self.config.gsv_dir / "TEMP" / "tts_infer_adr_scratch.yaml"
+            _scratch.parent.mkdir(exist_ok=True)
+            self._tts.configs.configs_path = str(_scratch)
 
             # 兼容补丁: 新版 torchaudio.load 依赖 torchcodec (无 Windows 轮子),
             # 用 soundfile shim 替换 (返回 (C,T) float tensor, 与原版一致)
