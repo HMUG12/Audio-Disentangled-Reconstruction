@@ -105,6 +105,7 @@ class GSVEngine:
         self.config = config or GSVEngineConfig()
         self._tts = None
         self._lock = threading.Lock()
+        self._loaded = {"t2s": None, "vits": None}   # 已热换权重路径 (批次9幂等跳过)
 
     @property
     def is_ready(self) -> bool:
@@ -190,12 +191,26 @@ class GSVEngine:
         """
         with self._lock:
             self._lazy_init()
-            if vits_weights or t2s_weights:
-                with self._gsv_context():
-                    if vits_weights:
-                        self._tts.init_vits_weights(str(vits_weights))
-                    if t2s_weights:
-                        self._tts.init_t2s_weights(str(t2s_weights))
+            self._ensure_weights(vits_weights, t2s_weights)
+
+    def _ensure_weights(self, vits_weights: Optional[str],
+                        t2s_weights: Optional[str]):
+        """热换到目标权重, 同路径幂等跳过 (批次 9)。
+
+        上游 init_vits_weights/init_t2s_weights 无条件完整重载 — 稳态下
+        连续合成同一音色每次白付 1~3s 权重重载。调用方须持有 self._lock。
+        """
+        if not (vits_weights or t2s_weights):
+            return
+        vw = str(Path(vits_weights).resolve()) if vits_weights else None
+        tw = str(Path(t2s_weights).resolve()) if t2s_weights else None
+        with self._gsv_context():
+            if vw and self._loaded.get("vits") != vw:
+                self._tts.init_vits_weights(vw)
+                self._loaded["vits"] = vw
+            if tw and self._loaded.get("t2s") != tw:
+                self._tts.init_t2s_weights(tw)
+                self._loaded["t2s"] = tw
 
     @staticmethod
     def _sanitize_text(text: str) -> str:
@@ -208,21 +223,23 @@ class GSVEngine:
         return re.sub(r"，{2,}", "，", text).strip("，")
 
     @staticmethod
-    def _stream_head_split(text: str, max_head: int = 30) -> "tuple":
+    def _stream_head_split(text: str, max_head: int = 14) -> "tuple":
         """W1 首包优化: 从长文本切出短首段 (句末标点优先, 逗号次之)。
 
         实测 (output/bench_stream.json): 首块延迟 ∝ 首段长度, 45 字长句
-        cut1 首包 5.3s / cut0 25.3s。预切 ≤30 字首段后, 任意输入的首包
-        与短句看齐 (~2.7s)。返回 (首段, 剩余); 无需切分时剩余为空串。
+        cut1 首包 5.3s / cut0 25.3s。批次 9 再收紧 30→14 字: 首段 AR 生成
+        token 数减半 (首包 4.4s→~2.5s), 逗号层 min 6 字早生效 — 2s 级短句
+        (16~20 字) 也能在逗号处切出短首段。返回 (首段, 剩余); 无需切分时
+        剩余为空串。
         """
         if len(text) <= max_head:
             return text, ""
         win = text[:max_head]
         cut = max((i for i, ch in enumerate(win) if ch in "。！？!?；;"), default=-1)
-        if cut >= 8:
+        if cut >= 6:
             return text[: cut + 1], text[cut + 1:]
-        cut = next((i for i, ch in enumerate(win) if ch in "，,、：" and i >= 8), -1)
-        if cut >= 8:
+        cut = next((i for i, ch in enumerate(win) if ch in "，,、：" and i >= 6), -1)
+        if cut >= 6:
             return text[: cut + 1], text[cut + 1:]
         return text, ""
 
@@ -271,10 +288,7 @@ class GSVEngine:
                 "parallel_infer": True,
             }
             with self._gsv_context():
-                if vits_weights:
-                    self._tts.init_vits_weights(vits_weights)
-                if t2s_weights:
-                    self._tts.init_t2s_weights(t2s_weights)
+                self._ensure_weights(vits_weights, t2s_weights)
                 for i, seg in enumerate(segments):
                     inputs["text"] = seg
                     inputs["seed"] = head_seed if (i == 0 and head_seed >= 0) else -1
@@ -336,12 +350,8 @@ class GSVEngine:
                 "streaming_mode": False,
                 "parallel_infer": True,
             }
+            self._ensure_weights(vits_weights, t2s_weights)
             with self._gsv_context():
-                # C2: 微调权重热换 (官方 init_* 方法)
-                if vits_weights:
-                    self._tts.init_vits_weights(vits_weights)
-                if t2s_weights:
-                    self._tts.init_t2s_weights(t2s_weights)
                 sr, audio = None, None
                 for sr, audio in self._tts.run(inputs):
                     pass  # 非流式只 yield 一次完整音频
