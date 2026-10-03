@@ -42,6 +42,11 @@ def check() -> None:
 
     log.info("Running installation check...")
 
+    # 设备能力分级 (AMD/Intel 用户明确预期)
+    from adr.core.device import detect_device
+    dev = detect_device()
+    log.info(f"  [DEV] {dev.device} ({dev.gpu_name or 'CPU'}) — {dev.capability}")
+
     # 加载所有 4 档配置
     for preset in ["default", "vram_4gb", "vram_6gb", "vram_8gb"]:
         try:

@@ -96,19 +96,30 @@ def main():
     steps = ["slice", "asr", "text", "hubert", "semantic", "s2", "s1"]
     start = steps.index(args.skip_to)
 
+    # 设备能力分级: 数据准备 (slice/asr/特征) CPU 可跑; s2/s1 训练必须 NVIDIA CUDA
+    import torch
+    has_cuda = torch.cuda.is_available()
+    if has_cuda:
+        print(f"[device] NVIDIA CUDA: {torch.cuda.get_device_name(0)} — 全功能 (训练+推理)")
+    else:
+        print("[device] 未检测到 NVIDIA GPU — 本轮仅允许数据准备; "
+              "训练 (s2/s1) 需要 NVIDIA GPU (AMD/Intel 显卡暂不支持训练, 可用 CPU 推理+门禁)")
+    asr_prec = "float16" if has_cuda else "int8"   # ct2 无静默回退: CPU+float16 直接 LOAD FAIL
+    is_half = "True" if has_cuda else "False"      # BERT/HuBERT half 精度 CPU 不支持
+
     if start <= 0:
         run(f'"{PY}" -s tools/slice_audio.py "{audio}" "{sliced}" -34 4000 300 10 500 0.9 0.25 0 1',
             desc="1/7 静音切片")
     if start <= 1:
         # ASR: 中文自动转 FunASR (modelscope 下载 paraformer, 一次性的)
-        run(f'"{PY}" -s tools/asr/fasterwhisper_asr.py -i "{sliced}" -o "{asr_out}" -s medium -l zh -p float16',
-            desc="2/7 ASR 转录 (中文走 FunASR)")
+        run(f'"{PY}" -s tools/asr/fasterwhisper_asr.py -i "{sliced}" -o "{asr_out}" -s medium -l zh -p {asr_prec}',
+            desc=f"2/7 ASR 转录 (中文走 FunASR, 精度 {asr_prec})")
         list_file = asr_out / f"{sliced.name}.list"
 
     common_env = {
         "inp_text": list_file, "inp_wav_dir": sliced, "exp_name": exp,
         "i_part": 0, "all_parts": 1, "opt_dir": logs,
-        "is_half": "True", "version": "v2",
+        "is_half": is_half, "version": "v2",
     }
     if start <= 2:
         run(f'"{PY}" -s GPT_SoVITS/prepare_datasets/1-get-text.py',
@@ -136,6 +147,12 @@ def main():
             print(f"[merge] {src.name} -> {dst.name}")
 
     if start <= 5:
+        # s2/s1 训练必须 CUDA (torch 原生训练无 AMD/Intel Windows 可靠路径)
+        if not has_cuda:
+            raise SystemExit(
+                "[abort] 训练步骤需要 NVIDIA GPU (CUDA)。当前无 NVIDIA 环境。\n"
+                "  已完成的切片/ASR/特征产物已缓存, 换 NVIDIA 环境后 "
+                f"--skip-to s2 可直接续跑训练。")
         # s2 (SoVITS/VITS 声学) 微调
         os.makedirs(logs / "logs_s2_v2", exist_ok=True)  # ckpt 保存需要
         # 清残留 STOP: 上次门禁早停的信号文件若不删, 本次第 1 轮就会假早停
