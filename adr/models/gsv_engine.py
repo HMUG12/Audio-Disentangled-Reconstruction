@@ -33,6 +33,69 @@ class GSVEngineConfig:
     version: str = "v2"           # v1/v2 权重已下载; v3/v4 需另下
     device: str = "auto"
     half: bool = True             # 8GB 卡半精度
+    bert_onnx: str = "auto"       # auto=仅 CPU 设备启用 / on / off
+
+
+class _OnnxBertFeat:
+    """批次5: ORT 版 BERT 特征提取 (纯 CPU 档 ~1.4x, 实测 bench_bert_onnx.py)。
+
+    模仿 BertForMaskedLM 调用面: res = model(**inputs, output_hidden_states=True)
+    GSV 消费面只有 res["hidden_states"][-3] (倒数第 3 层, TextPreprocessor
+    get_bert_feature)。其余层不导出 — 一次前向只算一层。
+    惰性: 首次调用建 ORT 会话; onnx 模型不存在时自动导出并缓存。
+    """
+
+    def __init__(self, bert_dir: str, cache_path: Path):
+        self.bert_dir = str(bert_dir)
+        self.cache_path = Path(cache_path)
+        self._sess = None
+
+    def _ensure_session(self):
+        if self._sess is not None:
+            return
+        import torch
+        from transformers import AutoModel
+        if not self.cache_path.exists():
+            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+            m = AutoModel.from_pretrained(self.bert_dir).eval()
+
+            class _Feat(torch.nn.Module):
+                def __init__(self, mm):
+                    super().__init__()
+                    self.m = mm
+
+                def forward(self, input_ids, attention_mask, token_type_ids):
+                    out = self.m(input_ids, attention_mask=attention_mask,
+                                 token_type_ids=token_type_ids,
+                                 output_hidden_states=True)
+                    return out.hidden_states[-3]
+
+            dummy = torch.ones(1, 8, dtype=torch.long)
+            torch.onnx.export(
+                _Feat(m), (dummy, dummy, dummy), str(self.cache_path),
+                input_names=["input_ids", "attention_mask", "token_type_ids"],
+                output_names=["feat"],
+                dynamic_axes={n: {0: "b", 1: "s"} for n in
+                              ["input_ids", "attention_mask", "token_type_ids",
+                               "feat"]},
+                opset_version=17, do_constant_folding=True)
+        from onnxruntime import InferenceSession, SessionOptions, GraphOptimizationLevel
+        opts = SessionOptions()
+        opts.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_ALL
+        self._sess = InferenceSession(str(self.cache_path), opts,
+                                      providers=["CPUExecutionProvider"])
+
+    def __call__(self, *, input_ids=None, attention_mask=None,
+                 token_type_ids=None, **_kw):
+        import torch
+        self._ensure_session()
+        feed = {"input_ids": input_ids.cpu().numpy(),
+                "attention_mask": attention_mask.cpu().numpy(),
+                "token_type_ids": token_type_ids.cpu().numpy()}
+        feat = self._sess.run(["feat"], feed)[0]
+        # 模仿 hidden_states 元组: GSV 取 [-3:-2] (倒数第 3 层), 3 元素列表
+        # 的首位即 [-3]; 其余占位 (只有这一层被消费)
+        return {"hidden_states": [torch.from_numpy(feat), None, None]}
 
 
 class GSVEngine:
@@ -95,6 +158,16 @@ class GSVEngine:
             _scratch = self.config.gsv_dir / "TEMP" / "tts_infer_adr_scratch.yaml"
             _scratch.parent.mkdir(exist_ok=True)
             self._tts.configs.configs_path = str(_scratch)
+
+            # 批次5: 纯 CPU 档用 ORT 版 BERT (组件级 ~1.4x, 端到端 ~10%)
+            if ((device == "cpu" and self.config.bert_onnx == "auto")
+                    or self.config.bert_onnx == "on"):
+                try:
+                    self._tts.bert_model = _OnnxBertFeat(
+                        self._tts.bert_model.config._name_or_path,
+                        self.config.gsv_dir / "TEMP" / "bert_feat_cpu.onnx")
+                except Exception:  # onnxruntime/onnx 缺失等 → 保持 torch 版
+                    pass
 
             # 兼容补丁: 新版 torchaudio.load 依赖 torchcodec (无 Windows 轮子),
             # 用 soundfile shim 替换 (返回 (C,T) float tensor, 与原版一致)
@@ -223,6 +296,9 @@ class GSVEngine:
         t2s_weights: Optional[str] = None,   # C2: 微调后的 s1 ckpt
         vits_weights: Optional[str] = None,  # C2: 微调后的 s2 pth
         split_method: str = "cut1",          # 切句方式, 见 synthesize_stream
+        top_k: int = 15,
+        top_p: float = 1.0,
+        temperature: float = 1.0,
     ) -> "tuple":
         """零样本克隆朗读: (text, 参考音频) → (wav, sr)。
 
@@ -233,6 +309,7 @@ class GSVEngine:
             text_lang / prompt_lang: zh/en/ja/ko/yue 等
             speed_factor: 语速 (1.0 原速)
             seed: -1 随机
+            top_k / top_p / temperature: GPT 采样参数 (短句可收 top_k 降跑偏)
         """
         import numpy as np
 
@@ -249,9 +326,9 @@ class GSVEngine:
                 "ref_audio_path": str(ref_audio),
                 "prompt_text": prompt_text,
                 "prompt_lang": prompt_lang,
-                "top_k": 15,
-                "top_p": 1.0,
-                "temperature": 1.0,
+                "top_k": top_k,
+                "top_p": top_p,
+                "temperature": temperature,
                 "speed_factor": speed_factor,
                 "seed": seed,
                 "text_split_method": split_method,

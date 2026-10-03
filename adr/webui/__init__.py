@@ -274,9 +274,10 @@ def build_ui(share: bool = False, inbrowser: bool = True) -> "gr.Blocks":
                     ft_bind = gr.Dropdown(
                         choices=_list_voices(),
                         value=None,
-                        label="训完自动绑定到已有音色档案 (可选)",
+                        label="训完自动绑定到已有音色档案 (可选, 不存在则自动新建)",
                         allow_custom_value=True,
                     )
+                    ft_bind_refresh = gr.Button("刷新档案列表")
                     ft_run = gr.Button("开始克隆微调", variant="primary")
                 with gr.Column(scale=1):
                     ft_log = gr.Textbox(label="微调日志", lines=18, interactive=False)
@@ -287,6 +288,10 @@ def build_ui(share: bool = False, inbrowser: bool = True) -> "gr.Blocks":
                 inputs=[ft_audio, ft_exp, ft_recipe, ft_epochs, ft_gate, ft_bind],
                 outputs=[ft_log, ft_metrics],
                 api_name="clone_train",
+            )
+            ft_bind_refresh.click(
+                lambda: gr.update(choices=_list_voices()),
+                outputs=[ft_bind],
             )
 
         # ---- Tab 3: Clone ----

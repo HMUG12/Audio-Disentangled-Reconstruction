@@ -18,6 +18,9 @@ PATCHES = []
 
 
 def patch(rel, marker, old, new):
+    # 自检: marker 必须是 new 文本的真实子串, 否则幂等检查失效,
+    # 重跑脚本会重复插入 (实测 #17 三连插的根因)
+    assert marker in new, f"补丁 marker 不在 new 文本里 (幂等会失效): {rel} / {marker}"
     PATCHES.append((rel, marker, old, new))
 
 
@@ -158,7 +161,7 @@ patch(
 )
 patch(
     GSV_S2,
-    "梯度检查点开关",
+    "把 train.grad_ckpt 透传给 v2 SynthesizerTrn",
     '''    else:
         net_g = net_g.to(device)
         net_d = net_d.to(device)''',
@@ -190,6 +193,42 @@ patch(
                     spec = spec[:, :_max_frames]
                     wav = wav[:, : _max_frames * self.hop_length]
                     ssl = ssl[..., :_max_frames]''',
+)
+
+# 批次5 启动开销补丁: DataLoader worker 数可覆盖 (ADR_S2_NUM_WORKERS)
+# Windows spawn × 5 worker 各自重导入 torch ≈ 分钟级固定开销; 小数据集
+# (百级切片, 特征已预计算) 数据加载毫秒级, worker 纯浪费。
+# 实测 (10 切片/3min 音频, 1 epoch 全程): workers=5 = 553.0s, workers=0 = 235.0s
+# → 默认 0 省 318s (-57.5%); 大数据集可 ADR_S2_NUM_WORKERS=5 手动开回
+# 注意 persistent_workers/prefetch_factor 必须联动 (workers=0 时二者非法)
+patch(
+    "gpt_sovits/GPT_SoVITS/s2_train.py",
+    "ADR 启动开销补丁: ADR_S2_NUM_WORKERS 覆盖 worker 数",
+    '''    train_loader = DataLoader(
+        train_dataset,
+        num_workers=5,
+        shuffle=False,
+        pin_memory=True,
+        collate_fn=collate_fn,
+        batch_sampler=train_sampler,
+        persistent_workers=True,
+        prefetch_factor=3,
+    )''',
+    '''    # ADR 启动开销补丁: ADR_S2_NUM_WORKERS 覆盖 worker 数
+    # (小数据集默认 0: Windows spawn 重导入 torch 的固定开销 >> 数据加载收益,
+    #  实测 1ep 全程 553s→235s; 大数据集可设 5 开回 worker;
+    #  persistent_workers/prefetch_factor 随 workers=0 联动关闭, 否则 DataLoader 报错)
+    _adr_workers = int(os.environ.get("ADR_S2_NUM_WORKERS", "0"))
+    train_loader = DataLoader(
+        train_dataset,
+        num_workers=_adr_workers,
+        shuffle=False,
+        pin_memory=True,
+        collate_fn=collate_fn,
+        batch_sampler=train_sampler,
+        persistent_workers=_adr_workers > 0,
+        prefetch_factor=3 if _adr_workers > 0 else None,
+    )''',
 )
 
 # ---------- DiffSinger / RVC ----------
