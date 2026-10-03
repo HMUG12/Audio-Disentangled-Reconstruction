@@ -70,6 +70,43 @@ _PROBE_TEXT = "你好,这是我的声音克隆测试,希望听起来像我。"
 _PROBE_LEN_S = 7.0     # 参考段长度
 _SWEEP_COUNT = 6       # 扫段数
 
+# 节奏过滤阈值: 静音占比过高 / 长停顿过多 / 尾音塌陷的段不进克隆打分
+_RHYTHM_MAX_SILENCE = 0.35   # 帧级静音占比上限
+_RHYTHM_MAX_PAUSES = 2       # ≥200ms 停顿次数上限
+_RHYTHM_MIN_TAIL_DB = -10.0  # 尾部 400ms 相对全段均值的最小 dB
+
+
+def _seg_rhythm(seg, sr: int) -> dict:
+    """段级节奏特征 (纯 numpy, 毫秒级): 静音占比 / 长停顿数 / 尾音相对能量。
+
+    选段加节奏过滤的依据: 参考段若本身破碎 (多次停顿) 或尾音塌陷,
+    克隆输出会逐句模仿该节奏 — 用户听感"顿挫"的根源之一。
+    """
+    import numpy as np
+    frame = int(0.025 * sr)
+    n = len(seg) // frame
+    if n < 10:
+        return {"silence_ratio": 1.0, "pauses": 99, "tail_db": -99.0}
+    frames = seg[: n * frame].reshape(n, frame)
+    db = 20 * np.log10(np.sqrt((frames ** 2).mean(axis=1)) + 1e-8)
+    sil = db < -40.0
+    min_pause = max(1, int(0.2 / 0.025))
+    pauses = run = 0
+    for s in sil:
+        run = run + 1 if s else 0
+        if run == min_pause:
+            pauses += 1
+    tail_n = min(n, max(1, int(0.4 / 0.025)))
+    tail_db = float(db[-tail_n:].mean() - db.mean())
+    return {"silence_ratio": round(float(sil.mean()), 3),
+            "pauses": pauses, "tail_db": round(tail_db, 1)}
+
+
+def _rhythm_ok(r: dict) -> bool:
+    return (r["silence_ratio"] <= _RHYTHM_MAX_SILENCE
+            and r["pauses"] <= _RHYTHM_MAX_PAUSES
+            and r["tail_db"] >= _RHYTHM_MIN_TAIL_DB)
+
 
 def save_voice_auto(
     name: str,
@@ -112,18 +149,28 @@ def save_voice_auto(
     tmp_dir = VOICES_DIR / "_sweep_tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
     best = (-1.0, None)
+    best_any = (-1.0, None)   # 全部被节奏过滤时的兜底
     for i, st in enumerate(starts):
         seg = wav[int(st * sr):int((st + _PROBE_LEN_S) * sr)]
+        rhythm = _seg_rhythm(seg, sr)
         seg_path = tmp_dir / f"seg_{i}.wav"
         sf.write(str(seg_path), seg, sr)
         clone, osr = eng.synthesize(_PROBE_TEXT, str(seg_path))
         clone_path = tmp_dir / f"seg_{i}_clone.wav"
         sf.write(str(clone_path), clone, osr)
         sim = similarity(str(seg_path), str(clone_path))
-        _log(f"段{i + 1}/{_SWEEP_COUNT} @{st:.0f}s: 相似度 {sim:.3f}")
-        if sim > best[0]:
+        if sim > best_any[0]:
+            best_any = (sim, seg_path)
+        ok = _rhythm_ok(rhythm)
+        _log(f"段{i + 1}/{_SWEEP_COUNT} @{st:.0f}s: 相似度 {sim:.3f} "
+             f"(静音{rhythm['silence_ratio']:.0%} 停顿{rhythm['pauses']} "
+             f"尾音{rhythm['tail_db']:+.0f}dB {'✓' if ok else '✗节奏'})")
+        if ok and sim > best[0]:
             best = (sim, seg_path)
 
+    if best[1] is None:
+        best = best_any
+        _log("所有段未过节奏过滤, 取相似度最高段兜底")
     sim, best_seg = best
     vdir = save_voice(name, str(best_seg), prompt_text, t2s_weights, vits_weights)
     for f in tmp_dir.glob("*"):
