@@ -338,6 +338,11 @@ def build_ui(share: bool = False, inbrowser: bool = True) -> "gr.Blocks":
                         placeholder="你好,这是 ADR 框架的演示。",
                         lines=3,
                     )
+                    clone_style = gr.Textbox(
+                        label="说话风格/人设 (可选, 影响韵律感受)",
+                        placeholder="例: 冷淡 果断 无感情 绝对理性 (MOSS 式) / 温柔治愈 / 新闻播报",
+                        lines=1,
+                    )
                     with gr.Row():
                         clone_split = gr.Dropdown(
                             choices=[
@@ -383,7 +388,8 @@ def build_ui(share: bool = False, inbrowser: bool = True) -> "gr.Blocks":
             clone_run.click(
                 _run_clone_cmd,
                 inputs=[clone_ref, clone_text, clone_ckpt, clone_engine,
-                        clone_prompt, clone_voice, clone_split, clone_speed],
+                        clone_prompt, clone_voice, clone_split, clone_speed,
+                        clone_style],
                 outputs=[clone_output, clone_info],
                 api_name="clone",
             )
@@ -1021,9 +1027,13 @@ def _stream_clone_cmd(ref_path, text, prompt_text, voice_name, split_method="cut
 def _run_clone_cmd(ref_path: Optional[str], text: str, ckpt_value: str,
                    engine: str = "gsv", prompt_text: str = "",
                    voice_name: str = "", split_method: str = "cut1",
-                   speed_factor: float = 1.0):
+                   speed_factor: float = 1.0, style_desc: str = ""):
     """TTS 回调。engine='gsv' 走 GPT-SoVITS 保底 (进程内), 'adr2' 走自研子进程。
-    voice_name 命中已存音色时, 参考音频/参考文本/微调权重全部来自档案。"""
+    voice_name 命中已存音色时, 参考音频/参考文本/微调权重全部来自档案。
+    style_desc 人设描述 → 风格预设覆盖 temperature/top_k, speed 相乘 (批次 7)。"""
+    from adr.models.style_presets import resolve_style
+
+    style, style_hit = resolve_style(style_desc)
     t2s_w = vits_w = None
     if voice_name and voice_name.strip():
         try:
@@ -1060,7 +1070,8 @@ def _run_clone_cmd(ref_path: Optional[str], text: str, ckpt_value: str,
                 text, ref_path, prompt_text=(prompt_text or "").strip(),
                 t2s_weights=t2s_w, vits_weights=vits_w,
                 split_method=split_method or "cut1",
-                speed_factor=speed_factor or 1.0)
+                temperature=style.temperature, top_k=style.top_k,
+                speed_factor=(speed_factor or 1.0) * style.speed)
             out_dir = Path("output/webui_clone")
             out_dir.mkdir(parents=True, exist_ok=True)
             out_path = out_dir / f"clone_{int(t0)}.wav"
@@ -1069,6 +1080,7 @@ def _run_clone_cmd(ref_path: Optional[str], text: str, ckpt_value: str,
                 "engine": "GPT-SoVITS v2 (official pretrained)"
                           + (" + 微调" if t2s_w else ""),
                 "voice": voice_name or "(临时参考)",
+                "style": f"{style.name}" + ("" if style_hit else " (未命中, 回退自然)"),
                 "duration_s": round(len(wav) / sr, 2),
                 "elapsed_s": round(time.time() - t0, 1),
                 "sample_rate": sr,
