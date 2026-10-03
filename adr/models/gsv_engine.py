@@ -78,7 +78,7 @@ class GSVEngine:
             device = self.config.device
             if device == "auto":
                 device = "cuda" if torch.cuda.is_available() else "cpu"
-            cfg = TTS_Config("GPT_SoVITS/configs/tts_infer.yaml")
+            cfg = TTS_Config(str(self.config.gsv_dir / "GPT_SoVITS" / "configs" / "tts_infer.yaml"))
             cfg.device = device
             cfg.is_half = self.config.half and device == "cuda"
             cfg.version = self.config.version
