@@ -27,6 +27,7 @@ def save_voice(
     vits_weights: Optional[str] = None,
     rvc_weights: Optional[str] = None,   # D1: RVC 转换模型 (.pth 文件名)
     rvc_index: Optional[str] = None,     # D1: faiss 索引路径
+    style: str = "",                     # 批次7: 默认说话风格/人设描述
 ) -> Path:
     """保存音色档案, 返回档案目录。"""
     name = name.strip().replace("/", "_").replace("\\", "_")
@@ -43,6 +44,7 @@ def save_voice(
         "vits_weights": vits_weights,
         "rvc_weights": rvc_weights,
         "rvc_index": rvc_index,
+        "style": style,
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     (vdir / "meta.json").write_text(
@@ -115,6 +117,7 @@ def save_voice_auto(
     t2s_weights: Optional[str] = None,
     vits_weights: Optional[str] = None,
     progress=None,
+    style: str = "",
 ):
     """A2: 长音频自动选段建档。
 
@@ -138,7 +141,8 @@ def save_voice_auto(
 
     if dur <= 15:
         _log(f"音频 {dur:.1f}s ≤15s, 直接整段建档")
-        vdir = save_voice(name, audio_path, prompt_text, t2s_weights, vits_weights)
+        vdir = save_voice(name, audio_path, prompt_text, t2s_weights, vits_weights,
+                          style=style)
         return vdir, {"mode": "whole", "duration_s": round(dur, 1)}
 
     from adr.eval.speaker_sim import similarity
@@ -172,7 +176,8 @@ def save_voice_auto(
         best = best_any
         _log("所有段未过节奏过滤, 取相似度最高段兜底")
     sim, best_seg = best
-    vdir = save_voice(name, str(best_seg), prompt_text, t2s_weights, vits_weights)
+    vdir = save_voice(name, str(best_seg), prompt_text, t2s_weights, vits_weights,
+                      style=style)
     for f in tmp_dir.glob("*"):
         f.unlink(missing_ok=True)
     _log(f"建档完成, 最优段相似度 {sim:.3f}")

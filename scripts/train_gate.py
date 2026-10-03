@@ -35,15 +35,18 @@ PRE_S2G = str(GSV / "GPT_SoVITS" / "pretrained_models" / "gsv-v2final-pretrained
               / "s2G2333k.pth")
 
 
-def _score_probes(eng, ref: str, vits: str = PRE_S2G, t2s: str = PRE_T2S):
+def _score_probes(eng, ref: str, vits: str = PRE_S2G, t2s: str = PRE_T2S,
+                  sents=None):
     """5 句探测逐句克隆打分, 返回 (均值, 逐句分列表)。
 
     s1 固定用官方预训练 (与 --skip-s1 训练条件一致), s2 传被测权重 —
     不传任何权重时即真零样本基线。
+    sents: 自定义句集 (批次 8, 人设定制门禁) — 基线与训练后必须同句集,
+    否则分数不可比。
     """
     from adr.eval.speaker_sim import similarity
     sims = []
-    for text in PROBES:
+    for text in (sents or PROBES):
         wav, sr = eng.synthesize(text, ref, t2s_weights=t2s, vits_weights=vits)
         sims.append(similarity(ref, str(_save_tmp(wav, sr))))
     return sum(sims) / len(sims), sims
@@ -59,7 +62,17 @@ def main():
                     help="对当前已有权重各打一轮分后退出 (重打分/验证用, 不轮询)")
     ap.add_argument("--cpu", action="store_true",
                     help="打分引擎走 CPU (训练占 GPU 时避免争抢显存; 离线门禁慢点无妨)")
+    ap.add_argument("--texts", default=None,
+                    help="自定义门禁句集文件 (每行一句) — 人设定制: 用目标场景的句子测, "
+                         "如 MOSS 人设用系统播报腔句子; 基线与训练后自动同句集")
     args = ap.parse_args()
+
+    sents = None
+    if args.texts:
+        sents = [ln.strip() for ln in Path(args.texts).read_text(
+            encoding="utf-8-sig").splitlines() if ln.strip()]
+        assert len(sents) >= 3, f"自定义句集至少 3 句, 当前 {len(sents)}"
+        print(f"[gate] 自定义门禁句集 {len(sents)} 句 (来自 {args.texts})")
 
     weights_dir = GSV / "SoVITS_weights_v2"
     stop_file = GSV / "logs" / args.exp / "STOP"
@@ -72,7 +85,7 @@ def main():
         eng = get_gsv_engine()
 
     # 基线: 真零样本 (官方预训练 s1+s2), 不受 tts_infer.yaml custom 段漂移影响
-    base, base_sims = _score_probes(eng, args.ref)
+    base, base_sims = _score_probes(eng, args.ref, sents=sents)
     print(f"[gate] 零样本基线 mean={base:.3f} 逐句={['%.3f' % s for s in base_sims]}, "
           f"目标 {args.target}", flush=True)
     with open(curve_path, "a", encoding="utf-8") as f:
@@ -87,7 +100,7 @@ def main():
             seen.add(w.name)
             time.sleep(5)  # 等写盘完
             try:
-                mean, sims = _score_probes(eng, args.ref, vits=str(w))
+                mean, sims = _score_probes(eng, args.ref, vits=str(w), sents=sents)
                 ep = w.name.split("_e")[1].split("_")[0]
                 print(f"[gate] {w.name}: mean={mean:.3f} 逐句={['%.3f' % s for s in sims]}", flush=True)
                 with open(curve_path, "a", encoding="utf-8") as f:

@@ -147,3 +147,15 @@
 - [x] **端到端验证** ✅: "冷淡 果断 无感情 绝对理性" → 理性 AI (MOSS 式) 命中, 档案微调权重加载, 相似度 0.816 (音色未丢)
 - [x] **测试** ✅: 5 新增 (预设完整性/MOSS 路由/其他人设/回退/指引文案)
 - 收敛决策: CLI 不加 `--style` (自研引擎无采样参数, 硬塞无意义; GSV 主入口 = WebUI/脚本); 档案绑定风格降级不做 (MVP 每次合成时选, 避免多余状态)
+
+### 批次 8 (2026-10-03): 风格档案化 + 架构检查
+
+- [x] **档案绑定风格** ✅: `save_voice/save_voice_auto` 加 `style` 字段; WebUI 保存档案时一并存人设描述; 合成回调风格框为空时回退档案默认人设 (info 标注"档案默认"); 存量档案「我的声音V2」已补绑 MOSS 人设 (立即生效)
+- [x] **门禁句集人设定制** ✅: `train_gate.py --texts` 自定义句集 (每行一句, ≥3 句) — 用目标场景句子测门禁 (如 MOSS 人设用系统播报腔); 基线与训练后自动同句集保证可比
+- [x] **架构检查** ✅ (Explore agent 盘点 + 人工汇总):
+  - **分层健康**: 依赖单向 core←data/utils←models←training←webui, 无循环依赖; `gsv_engine.py` 是 GSV 推理唯一门面 (webui 全程经 `get_gsv_engine()`, 无越层 import TTS_infer_pack)
+  - **参数无漂移**: 采样参数集中在 style_presets.py 与 gsv_engine.py 默认值, 无重复硬编码
+  - **可接受边界**: scripts/gsv_finetune.py 直接 PYTHONPATH 上游跑训练管线 (设计即胶水层); eval/speaker_sim.py 注入上游 eres2net 路径 (模型在上游目录, 与门面模式不完全一致, 记录不修)
+  - **发现并修复**: ① tests/ 两个 _debug 临时文件已删 ② `voice_library` 零单测 (核心资产) → 补 3 测试 (往返含 style/空名拒绝/绑定链路) ③ 超大文件 webui 1072 行 / callbacks 1035 行 — 记录观察, 无拆分必要 (职责单一)
+  - **测试缺口 (记录不排期)**: gsv_engine (需真权重, 靠 e2e 脚本覆盖), speaker_sim (需 ERes2Net 权重), webui 回调 (UI 层靠 e2e)
+- [x] **测试** ✅: 3 新增, 回归 210 passed

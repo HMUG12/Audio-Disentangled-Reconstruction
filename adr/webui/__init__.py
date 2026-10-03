@@ -382,7 +382,7 @@ def build_ui(share: bool = False, inbrowser: bool = True) -> "gr.Blocks":
             )
             clone_save_btn.click(
                 _save_voice_cmd,
-                inputs=[clone_save_name, clone_ref, clone_prompt],
+                inputs=[clone_save_name, clone_ref, clone_prompt, clone_style],
                 outputs=[clone_info],
             )
             clone_run.click(
@@ -963,8 +963,8 @@ def _list_voices() -> list[str]:
     return list_voices()
 
 
-def _save_voice_cmd(name, ref_path, prompt_text):
-    """保存音色档案回调 (A2: 长音频自动扫段选最优)。"""
+def _save_voice_cmd(name, ref_path, prompt_text, style_desc=""):
+    """保存音色档案回调 (A2: 长音频自动扫段选最优)。style_desc 一并存为默认人设。"""
     if err := _validate_audio(ref_path):
         yield err
         return
@@ -981,7 +981,7 @@ def _save_voice_cmd(name, ref_path, prompt_text):
         yield {"status": "建档中, 长音频将自动扫段选最优 (~1-2 分钟)…"}
         vdir, info = save_voice_auto(
             name.strip(), ref_path, (prompt_text or "").strip(),
-            progress=_progress)
+            progress=_progress, style=(style_desc or "").strip())
         yield {"saved": name.strip(), "path": str(vdir), **info,
                "sweep_log": logs,
                "hint": "以后在「已存音色」里直接选用"}
@@ -1034,6 +1034,7 @@ def _run_clone_cmd(ref_path: Optional[str], text: str, ckpt_value: str,
     from adr.models.style_presets import resolve_style
 
     style, style_hit = resolve_style(style_desc)
+    style_bound = ""   # 档案默认人设 (voice 命中且风格框为空时生效)
     t2s_w = vits_w = None
     if voice_name and voice_name.strip():
         try:
@@ -1043,6 +1044,9 @@ def _run_clone_cmd(ref_path: Optional[str], text: str, ckpt_value: str,
             prompt_text = prompt_text or prof.get("prompt_text") or ""
             t2s_w = prof.get("t2s_weights")
             vits_w = prof.get("vits_weights")
+            if not style_desc.strip() and prof.get("style"):
+                style, style_hit = resolve_style(prof["style"])
+                style_bound = " (档案默认)"
         except Exception as e:
             yield None, _err(f"音色档案加载失败: {e}")
             return
@@ -1080,7 +1084,7 @@ def _run_clone_cmd(ref_path: Optional[str], text: str, ckpt_value: str,
                 "engine": "GPT-SoVITS v2 (official pretrained)"
                           + (" + 微调" if t2s_w else ""),
                 "voice": voice_name or "(临时参考)",
-                "style": f"{style.name}" + ("" if style_hit else " (未命中, 回退自然)"),
+                "style": f"{style.name}{style_bound}" + ("" if style_hit else " (未命中, 回退自然)"),
                 "duration_s": round(len(wav) / sr, 2),
                 "elapsed_s": round(time.time() - t0, 1),
                 "sample_rate": sr,
