@@ -684,7 +684,15 @@ def _prewarm_engines():
         log = logging.getLogger("adr.webui.prewarm")
         try:
             from adr.models.gsv_engine import get_gsv_engine
-            get_gsv_engine().warmup()
+            from adr.models.voice_library import list_voices, load_voice
+            kw = {}
+            voices = list_voices()
+            if voices:
+                prof = load_voice(voices[0])
+                kw = {"vits_weights": prof.get("vits_weights"),
+                      "t2s_weights": prof.get("t2s_weights")}
+                log.info("[prewarm] 用音色档案「%s」的权重预热", voices[0])
+            get_gsv_engine().warmup(**kw)
             log.info("[prewarm] GPT-SoVITS 引擎就绪")
         except Exception as e:
             log.warning("[prewarm] GSV 预热失败 (首次合成时将现场加载): %s", e)

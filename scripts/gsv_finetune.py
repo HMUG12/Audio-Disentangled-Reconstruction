@@ -40,6 +40,9 @@ def main():
     ap.add_argument("--s2-epochs", type=int, default=8)
     ap.add_argument("--s1-epochs", type=int, default=8)
     ap.add_argument("--batch-size", type=int, default=4, help="8GB 显存安全值")
+    ap.add_argument("--max-clip-sec", type=float, default=None,
+                    help="W3: 长 clip 截断秒数 (4GB 显存训练用 10, 配 --batch-size 1~2; 不传=不截)"
+                         " 需 s2 训练补丁 (apply_compat_patches.py #16/#17) 配合生效")
     ap.add_argument("--skip-to", default="slice",
                     choices=["slice", "asr", "text", "hubert", "semantic", "s2", "s1"])
     ap.add_argument("--skip-s1", action="store_true",
@@ -52,6 +55,8 @@ def main():
     args = ap.parse_args()
 
     exp = args.exp
+    if args.max_clip_sec:
+        os.environ["ADR_MAX_CLIP_SEC"] = str(args.max_clip_sec)
 
     # C3: 从音色档案续练 — 读档案的 s2 微调权重作为初始化
     resume_s2g = None

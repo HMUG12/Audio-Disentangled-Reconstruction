@@ -134,6 +134,64 @@ patch(
     print("training done")''',
 )
 
+# W3 显存补丁: v2 训练 forward 梯度检查点 (enc_q/flow 全 clip 激活 ~5.6GB,
+# 实测 1 epoch 显存曲线 2GB→7.8GB 瞬跳; v3 有 use_grad_ckpt, v2 从未实现)
+patch(
+    "gpt_sovits/GPT_SoVITS/module/models.py",
+    "ADR 显存补丁",
+    '''        x, m_p, logs_p, y_mask, _, _ = self.enc_p(quantized, y_lengths, text, text_lengths, ge512 if self.is_v2pro else ge)
+        z, m_q, logs_q, y_mask = self.enc_q(y, y_lengths, g=ge)
+        z_p = self.flow(z, y_mask, g=ge)''',
+    '''        x, m_p, logs_p, y_mask, _, _ = self.enc_p(quantized, y_lengths, text, text_lengths, ge512 if self.is_v2pro else ge)
+        # ADR 显存补丁: use_grad_ckpt=True 时对全 clip 的 enc_q/flow 做梯度检查点
+        if getattr(self, "use_grad_ckpt", False) and torch.is_grad_enabled():
+            from torch.utils.checkpoint import checkpoint
+            z, m_q, logs_q, y_mask = checkpoint(
+                lambda _y, _yl, _g: self.enc_q(_y, _yl, g=_g),
+                y, y_lengths, ge, use_reentrant=False)
+            z_p = checkpoint(
+                lambda _z, _m, _g: self.flow(_z, _m, g=_g),
+                z, y_mask, ge, use_reentrant=False)
+        else:
+            z, m_q, logs_q, y_mask = self.enc_q(y, y_lengths, g=ge)
+            z_p = self.flow(z, y_mask, g=ge)''',
+)
+patch(
+    GSV_S2,
+    "梯度检查点开关",
+    '''    else:
+        net_g = net_g.to(device)
+        net_d = net_d.to(device)''',
+    '''    else:
+        net_g = net_g.to(device)
+        net_d = net_d.to(device)
+    # ADR 显存补丁: 把 train.grad_ckpt 透传给 v2 SynthesizerTrn (官方只接 v3)
+    getattr(net_g, "module", net_g).use_grad_ckpt = bool(
+        getattr(hps.train, "grad_ckpt", False))''',
+)
+
+# W3 显存补丁 2: 长 clip 截断 (t=0 起 ssl/spec/wav 同步截断, 对齐不破坏)
+# bs1 实测 4832MB, 大头=最长 clip (16s) 的 enc_q/flow/判别器激活; ADR_MAX_CLIP_SEC 环境变量控制
+patch(
+    "gpt_sovits/GPT_SoVITS/module/data_utils.py",
+    "ADR 显存补丁",
+    '''                ssl = torch.load("%s/%s.pt" % (self.path4, audiopath), map_location="cpu")
+                if ssl.shape[-1] != spec.shape[-1]:
+                    typee = ssl.dtype
+                    ssl = F.pad(ssl.float(), (0, 1), mode="replicate").to(typee)''',
+    '''                ssl = torch.load("%s/%s.pt" % (self.path4, audiopath), map_location="cpu")
+                if ssl.shape[-1] != spec.shape[-1]:
+                    typee = ssl.dtype
+                    ssl = F.pad(ssl.float(), (0, 1), mode="replicate").to(typee)
+                # ADR 显存补丁: ADR_MAX_CLIP_SEC>0 时长 clip 从 t=0 截断 (ssl/spec/wav 同帧数截)
+                _max_sec = float(os.environ.get("ADR_MAX_CLIP_SEC", "0") or 0)
+                _max_frames = int(_max_sec * self.sampling_rate / self.hop_length)
+                if _max_frames > 0 and spec.shape[-1] > _max_frames:
+                    spec = spec[:, :_max_frames]
+                    wav = wav[:, : _max_frames * self.hop_length]
+                    ssl = ssl[..., :_max_frames]''',
+)
+
 # ---------- DiffSinger / RVC ----------
 # 均无需文件补丁: DiffSinger 直接可跑; RVC 新版用 -m 模块调用 +
 # 环境变量 (weight_root/rmvpe_root/index_root, 见 rvc_engine.py/_rvc_context)
