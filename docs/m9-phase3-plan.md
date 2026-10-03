@@ -138,3 +138,12 @@
 - [x] **AMD/Intel 兼容审计 + 修复** ✅: 全仓 CUDA 依赖点扫描 → 三处真问题修复: ① `gsv_finetune.py` ASR 精度硬编码 float16 (CPU 上 ct2 无静默回退直接 LOAD FAIL) → 动态 float16/int8; ② `is_half:"True"` 硬编码 (CPU BERT half 崩) → 动态; ③ 训练步无 GPU 时友好 abort + `--skip-to s2` 断点提示 (数据准备产物已缓存); `DeviceConfig.capability` 能力分级 (全功能/受限) + `adr check` 输出; 审计确认 FunASR 自动降级 / load_cudnn 有保护 / ERes2Net 纯 CPU / GSV CPU 推理已实证 → 兼容矩阵落盘 `docs/gpu-compat.md` (DirectML/IPEX 评估: 版本滞后+op 覆盖不全, 不集成为承诺)
 - [x] **听感验收工具** ✅ (`scripts/mos_ab_test.py`): MOS A/B 盲测 — 每句 × {zero-shot 官方预训练, fine-tuned 档案} 合成, A/B 随机混淆 (seed 可复现), 客观 ERes2Net 分随 answer_key 存档; `--score` 汇总分系统 MOS + 揭晓映射 + 主客观对照; **关键坑修复: 引擎权重传 None=保持当前状态**, 两系统必须每句显式传权重否则 AB 混同; 待用户实际听测填分
 - 观察项: AMD/Intel 真机未实测 (本机 NVIDIA), 结论来自代码路径审计 + CPU 路径实测等价覆盖
+- [x] **批次 6 补充 — 用户听测反馈** ✅: 短句仍看运气 (与客观一致); 新需求: 音色人设偏离 (期望 MOSS 式冷淡理性, 实际带真人情绪起伏) → 根因: GSV 韵律主要来自 ref 音频, 微调锁音色不锁"性格" → 引出批次 7
+
+### 批次 7 (2026-10-03): 风格人设条件化 (persona conditioning)
+
+- [x] **风格预设库** ✅ (`adr/models/style_presets.py`): 6 内置预设 (自然/理性AI-MOSS/新闻播报/温柔陪伴/沉稳低语/活力元气), 每预设 = {temperature, top_k, speed} + **录制指引文案** + 关键词表; `resolve_style()` 自由文本描述 → 关键词计数匹配 (零依赖, 不做模型语义理解 — MVP 足够); 设计原则: 韵律人设主杠杆是 ref 录制方式 (指引内置于预设), 参数是辅助杠杆
+- [x] **WebUI 接入** ✅: 克隆页新增"说话风格/人设"输入框 (placeholder 给 MOSS 例子); 回调 `_run_clone_cmd` 加 `style_desc` → 命中预设覆盖 temperature/top_k, speed 与滑条**相乘**; info 显示命中风格 (未命中回退自然并标注)
+- [x] **端到端验证** ✅: "冷淡 果断 无感情 绝对理性" → 理性 AI (MOSS 式) 命中, 档案微调权重加载, 相似度 0.816 (音色未丢)
+- [x] **测试** ✅: 5 新增 (预设完整性/MOSS 路由/其他人设/回退/指引文案)
+- 收敛决策: CLI 不加 `--style` (自研引擎无采样参数, 硬塞无意义; GSV 主入口 = WebUI/脚本); 档案绑定风格降级不做 (MVP 每次合成时选, 避免多余状态)
