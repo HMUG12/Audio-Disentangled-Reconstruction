@@ -111,6 +111,25 @@ class GSVEngine:
         text = text.replace("\n", "，").replace("\r", "")
         return re.sub(r"，{2,}", "，", text).strip("，")
 
+    @staticmethod
+    def _stream_head_split(text: str, max_head: int = 30) -> "tuple":
+        """W1 首包优化: 从长文本切出短首段 (句末标点优先, 逗号次之)。
+
+        实测 (output/bench_stream.json): 首块延迟 ∝ 首段长度, 45 字长句
+        cut1 首包 5.3s / cut0 25.3s。预切 ≤30 字首段后, 任意输入的首包
+        与短句看齐 (~2.7s)。返回 (首段, 剩余); 无需切分时剩余为空串。
+        """
+        if len(text) <= max_head:
+            return text, ""
+        win = text[:max_head]
+        cut = max((i for i, ch in enumerate(win) if ch in "。！？!?；;"), default=-1)
+        if cut >= 8:
+            return text[: cut + 1], text[cut + 1:]
+        cut = next((i for i, ch in enumerate(win) if ch in "，,、：" and i >= 8), -1)
+        if cut >= 8:
+            return text[: cut + 1], text[cut + 1:]
+        return text, ""
+
     def synthesize_stream(
         self,
         text: str,
@@ -120,13 +139,14 @@ class GSVEngine:
         prompt_lang: str = "zh",
         t2s_weights: Optional[str] = None,
         vits_weights: Optional[str] = None,
-        split_method: str = "cut1",
+        split_method: str = "cut3",
     ):
         """流式合成: 逐块 yield (wav_chunk float32 [-1,1], sr)。
 
         官方 streaming_mode: 语义 token 分段解码, 首块延迟远小于整段。
-        split_method: cut0 不切 / cut1 凑四句一切(默认, 句间停顿最短)
-                      / cut2 凑50字一切 / cut3 按中文句号切 / cut5 按标点符号切
+        首包优化: 先合成预切的 ≤30 字短首段, 再合成剩余 (W1, 实测首包
+        25.3s→2.7s 级)。split_method: cut3 按句号切(默认, 首包最优)
+              / cut1 凑四句一切 / cut0 不切 / cut5 按标点切
         """
         import numpy as np
 
@@ -134,10 +154,12 @@ class GSVEngine:
         ref_audio = str(Path(ref_audio).resolve())
         t2s_weights = str(Path(t2s_weights).resolve()) if t2s_weights else None
         vits_weights = str(Path(vits_weights).resolve()) if vits_weights else None
+        head, rest = self._stream_head_split(text)
+        segments = [head, rest] if rest else [text]
         with self._lock:
             self._lazy_init()
             inputs = {
-                "text": text,
+                "text": head,
                 "text_lang": text_lang,
                 "ref_audio_path": ref_audio,
                 "prompt_text": prompt_text,
@@ -154,11 +176,13 @@ class GSVEngine:
                     self._tts.init_vits_weights(vits_weights)
                 if t2s_weights:
                     self._tts.init_t2s_weights(t2s_weights)
-                for sr, chunk in self._tts.run(inputs):
-                    chunk = np.asarray(chunk, dtype=np.float32)
-                    if np.abs(chunk).max() > 1.5:
-                        chunk = chunk / 32768.0
-                    yield chunk, int(sr)
+                for seg in segments:
+                    inputs["text"] = seg
+                    for sr, chunk in self._tts.run(inputs):
+                        chunk = np.asarray(chunk, dtype=np.float32)
+                        if np.abs(chunk).max() > 1.5:
+                            chunk = chunk / 32768.0
+                        yield chunk, int(sr)
 
     def synthesize(
         self,

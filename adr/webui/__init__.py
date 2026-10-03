@@ -292,13 +292,13 @@ def build_ui(share: bool = False, inbrowser: bool = True) -> "gr.Blocks":
                     with gr.Row():
                         clone_split = gr.Dropdown(
                             choices=[
-                                ("凑四句一切 (推荐, 句间停顿最短)", "cut1"),
+                                ("按中文句号切 (推荐, 流式首包最快)", "cut3"),
+                                ("凑四句一切", "cut1"),
                                 ("不切 (整段一口气)", "cut0"),
                                 ("凑50字一切", "cut2"),
-                                ("按中文句号切", "cut3"),
                                 ("按标点符号切 (每标点一顿)", "cut5"),
                             ],
-                            value="cut1",
+                            value="cut3",
                             label="切句方式",
                         )
                         clone_speed = gr.Slider(
@@ -729,7 +729,7 @@ def _save_voice_cmd(name, ref_path, prompt_text):
         yield _err(f"保存失败: {e}")
 
 
-def _stream_clone_cmd(ref_path, text, prompt_text, voice_name, split_method="cut1"):
+def _stream_clone_cmd(ref_path, text, prompt_text, voice_name, split_method="cut3"):
     """A3: 流式克隆回调 — 逐块 yield (sr, int16) 给 streaming Audio。
 
     voice_name 命中档案时用档案参考/微调权重。
@@ -757,7 +757,7 @@ def _stream_clone_cmd(ref_path, text, prompt_text, voice_name, split_method="cut
         for chunk, sr in eng.synthesize_stream(
                 text, ref_path, prompt_text=(prompt_text or "").strip(),
                 t2s_weights=t2s_w, vits_weights=vits_w,
-                split_method=split_method or "cut1"):
+                split_method=split_method or "cut3"):
             pcm = np.clip(chunk, -1.0, 1.0)
             yield sr, (pcm * 32767).astype(np.int16)
     except Exception:
