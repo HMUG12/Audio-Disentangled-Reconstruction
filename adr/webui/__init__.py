@@ -694,6 +694,17 @@ def _prewarm_engines():
                 log.info("[prewarm] 用音色档案「%s」的权重预热", voices[0])
             get_gsv_engine().warmup(**kw)
             log.info("[prewarm] GPT-SoVITS 引擎就绪")
+            # 流式路径形状预热: 否则首次点"流式合成"要多付 ~14s kernel JIT
+            try:
+                if voices:
+                    for _ in get_gsv_engine().synthesize_stream(
+                            "你好。", prof["ref_audio"],
+                            vits_weights=prof.get("vits_weights"),
+                            split_method="cut3"):
+                        break  # 只取首块
+                log.info("[prewarm] 流式路径预热完成")
+            except Exception as e:
+                log.warning("[prewarm] 流式预热失败 (不影响功能): %s", e)
         except Exception as e:
             log.warning("[prewarm] GSV 预热失败 (首次合成时将现场加载): %s", e)
         try:

@@ -103,3 +103,11 @@
   - **实测配方**: bs2+ckpt+cap10s = **训练自身 ~3.5GB** (整机 4793MB 含其他进程 1.3GB); bs1 = ~3.1GB — **4GB 显存训练达标**, 8GB 基线省一半; LoRA 判定为非杠杆 (只省优化器 ~300MB, 不省激活)
   - `gsv_finetune.py --max-clip-sec 10 --batch-size 1` 即 4GB 配方 (配补丁); cap 对音质影响待批次 3 全程训练+门禁验证
 - 已知坑: 诊断管道 Tee+超时截断假失败 (训练其实完成); DataLoader worker 反复 spawn 待查 (性能侧, 不影响显存结论)
+
+### 批次 3 (2026-10-03)
+
+- [x] **4GB 配方全程训练 + 门禁验证** ✅: `user_h4gb` (bs1+cap10+ckpt) 8ep 配方, 门禁曲线 零样本 0.841 → e1 0.777 → **e2 0.815 ≥0.80 早停** — cap 截断音质疑虑收口; 曲线持久化 `output/train_gate_user_h4gb.jsonl`; 已知局限: 门禁单句探测方差大 (基线 0.84 系本句偏热), 批次 4 改多句均值
+- [x] **DiffSinger profile** ✅ (`bench_diffsinger_profile.py`): Self CPU 43s vs Self CUDA 10s, ~20 万次微算子 (add 6.2万/sigmoid 2万/tanh 2.1万) — **瓶颈=kernel launch 开销与步数无关**; 杠杆=torch.compile 算子融合 (Windows 支持待验证, 批次 4), 60GB 张量流量可由融合压缩
+- [x] **CPU 推理 profile** ✅ (`bench_cpu_profile.py`): conv1d/mkldnn 20% + SDPA 5% + conv_transpose 2.5%, 无单点 >20% 热点 — "千刀万剐"型, ONNX Runtime 预期 1.3-2x (批次 4); uniform_ 768ms 系 GPT 采样正当开销 (eval 模式已确认全关 dropout)
+- [x] **WebUI 流式端到端验收** ✅ (`bench_webui_stream_e2e.py`): 预热 (引擎+权重热换+流式形状) 68.7s 后台无感 → **首次点按钮 3.99s (原 17.5s) / 热机 2.19s** — 双双达标 (≤5s/≤3s); 修复: ① tts_infer.yaml 相对路径改绝对 (TTS_Config assert 间歇崩) ② prewarm 加流式路径形状预热 (首调 JIT 罚金 ~14s)
+- [x] **顺手修复**: tts_infer.yaml 断言间歇崩 (绝对路径化); 官方确认流式不支持并行推理 (自动降级, 无需改)
