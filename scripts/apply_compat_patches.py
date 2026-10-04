@@ -231,6 +231,28 @@ patch(
     )''',
 )
 
+# 批次10 t2s CUDA Graph 桥挂钩 (AR 3.77x): ADR_T2S_CUDAGRAPH=1 时把
+# infer_panel 换成官方 CUDAGraphRunner 桥 (桥逻辑在 adr/models/adr_t2s_bridge.py,
+# 不在 fork 里 — 本补丁只挂一行钩子)。官方 webui 有同款能力, 引擎路径没有。
+patch(
+    "gpt_sovits/GPT_SoVITS/TTS_infer_pack/TTS.py",
+    "t2s CUDA Graph 桥挂钩",
+    '''        else:
+            print(i18n("朴素推理模式已开启"))
+            self.t2s_model.model.infer_panel = self.t2s_model.model.infer_panel_naive_batched
+''',
+    '''        else:
+            print(i18n("朴素推理模式已开启"))
+            self.t2s_model.model.infer_panel = self.t2s_model.model.infer_panel_naive_batched
+
+        # ADR 兼容补丁: t2s CUDA Graph 桥挂钩 (AR 3.77x, ADR_T2S_CUDAGRAPH=1 启用)
+        if os.environ.get("ADR_T2S_CUDAGRAPH") == "1":
+            from adr.models.adr_t2s_bridge import install_cudagraph_infer_panel
+            self.t2s_model.model.infer_panel = install_cudagraph_infer_panel(
+                self.t2s_model.model, self)
+''',
+)
+
 # ---------- DiffSinger / RVC ----------
 # 均无需文件补丁: DiffSinger 直接可跑; RVC 新版用 -m 模块调用 +
 # 环境变量 (weight_root/rmvpe_root/index_root, 见 rvc_engine.py/_rvc_context)
