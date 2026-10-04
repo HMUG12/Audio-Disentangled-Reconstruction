@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "主窗口默认能力 (前端不调用 Tauri IPC, 仅保留核心默认集)",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
