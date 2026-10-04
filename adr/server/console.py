@@ -363,6 +363,74 @@ async def train_upload(file: UploadFile = File(...)):
 
 
 # ---------------------------------------------------------------------------
+# 音色档案建档 (save_voice_auto 后台线程: 长音频扫段需引擎, 约 1-3 分钟)
+# ---------------------------------------------------------------------------
+
+_profile_lock = threading.Lock()
+_profile_job: dict = {"state": "idle", "name": "", "message": "", "info": None,
+                      "started_at": 0.0}
+
+
+class ProfileCreateReq(BaseModel):
+    name: str
+    audio_path: str
+    prompt_text: str = ""
+    style: str = ""
+
+
+def _profile_worker(name: str, audio_path: str, prompt_text: str, style: str) -> None:
+    from adr.models import voice_library
+
+    def _prog(msg: str) -> None:
+        with _profile_lock:
+            _profile_job["message"] = msg
+
+    try:
+        vdir, info = voice_library.save_voice_auto(
+            name, audio_path, prompt_text, progress=_prog, style=style)
+        with _profile_lock:
+            _profile_job.update(state="done", info={**info, "path": str(vdir)},
+                                message=f"建档完成: {name}")
+    except Exception as e:
+        with _profile_lock:
+            _profile_job.update(state="failed", message=str(e))
+
+
+@router.post("/profiles/create", summary="从录音新建音色档案 (后台扫段选优)")
+async def profile_create(body: ProfileCreateReq):
+    from adr.models import voice_library
+    audio = Path(body.audio_path)
+    if not audio.exists():
+        raise HTTPException(400, f"音频不存在: {body.audio_path}")
+    name = (body.name or "我的声音").strip()
+    name = "".join(c for c in name if c not in '\\/:*?"<>|') or "我的声音"
+    if name in voice_library.list_voices():
+        raise HTTPException(409, f"已存在同名声音「{name}」, 请换一个名字")
+    with _profile_lock:
+        if _profile_job["state"] == "working":
+            raise HTTPException(409, "已有建档任务在进行, 请稍候")
+        _profile_job.update(state="working", name=name, message="准备中…",
+                            info=None, started_at=time.time())
+    threading.Thread(target=_profile_worker,
+                     args=(name, str(audio), body.prompt_text.strip(),
+                           body.style.strip()), daemon=True).start()
+    return {"state": "working", "name": name}
+
+
+@router.get("/profiles/create/status", summary="建档进度")
+async def profile_create_status():
+    with _profile_lock:
+        return {
+            "state": _profile_job["state"],
+            "name": _profile_job["name"],
+            "message": _profile_job["message"],
+            "info": _profile_job["info"],
+            "elapsed_sec": (round(time.time() - _profile_job["started_at"], 1)
+                            if _profile_job["state"] == "working" else None),
+        }
+
+
+# ---------------------------------------------------------------------------
 # 预训练模型管理 (adr.models.hub + adr.cli model download 子进程)
 # ---------------------------------------------------------------------------
 

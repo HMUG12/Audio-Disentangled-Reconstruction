@@ -3,67 +3,584 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ADR Studio · 新手控制台</title>
+<title>ADR · 我的语音小助手</title>
 <style>
-  :root { color-scheme: dark; }
+  :root {
+    color-scheme: light;
+    --bg: #f6f7fb; --card: #ffffff; --line: #e5e9f2;
+    --txt: #1f2937; --sub: #6b7280; --dim: #9ca3af;
+    --green: #10b981; --green-d: #059669; --blue: #3b82f6;
+    --red: #ef4444; --amber: #f59e0b;
+  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
-    background: #0a0d14; color: #e8ecf4; min-height: 100vh; padding: 32px 40px;
+    background:
+      radial-gradient(700px 400px at 90% -5%, #d1fae5aa, transparent 60%),
+      radial-gradient(600px 380px at -5% 105%, #dbeafeaa, transparent 60%),
+      var(--bg);
+    color: var(--txt); min-height: 100vh; font-size: 16px;
   }
-  header { display: flex; align-items: center; gap: 14px; margin-bottom: 28px; }
-  h1 { font-size: 20px; font-weight: 700; }
-  h1 em { font-style: normal; color: #34d399; }
-  .badge { font-size: 11px; color: #f0b429; border: 1px solid #f0b42955;
-    border-radius: 999px; padding: 3px 10px; }
+  header { display: flex; align-items: center; gap: 12px; padding: 18px 26px; }
+  .logo { font-size: 20px; font-weight: 800; color: var(--green-d); letter-spacing: .3px; }
+  .logo small { font-weight: 500; color: var(--sub); font-size: 13px; margin-left: 8px; }
   #back {
-    margin-left: auto; background: #161d2e; color: #aebad0; border: 1px solid #263149;
-    border-radius: 8px; padding: 8px 16px; font-size: 13px; cursor: pointer;
+    margin-left: auto; background: #fff; color: var(--sub); border: 1.5px solid var(--line);
+    border-radius: 999px; padding: 8px 18px; font-size: 13.5px; cursor: pointer;
+    font-family: inherit; transition: .15s;
   }
-  #back:hover { border-color: #34d39966; color: #e8ecf4; }
-  .panel { background: #121724; border: 1px solid #1f2740; border-radius: 14px;
-    padding: 22px 24px; }
-  .panel h2 { font-size: 14px; color: #8fa1c0; margin-bottom: 14px; font-weight: 600; }
-  #status { font-size: 15px; color: #a7f3d0; }
-  #err { color: #f87171; font-size: 13px; margin-top: 14px; min-height: 18px; }
+  #back:hover { border-color: var(--green); color: var(--txt); }
+
+  .wrap { max-width: 680px; margin: 0 auto; padding: 8px 20px 70px; }
+
+  /* 步骤指示 */
+  .steps { display: flex; align-items: center; justify-content: center; gap: 0; margin: 14px 0 30px; }
+  .stp { display: flex; flex-direction: column; align-items: center; gap: 7px; width: 120px; }
+  .stp .dot {
+    width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center;
+    justify-content: center; font-size: 18px; font-weight: 700;
+    background: #fff; color: var(--dim); border: 2.5px solid var(--line); transition: .25s;
+  }
+  .stp .lb { font-size: 13px; color: var(--dim); font-weight: 600; }
+  .stp.on .dot { border-color: var(--green); color: var(--green-d);
+    box-shadow: 0 0 0 6px #10b98118; }
+  .stp.on .lb { color: var(--green-d); }
+  .stp.ok .dot { background: var(--green); border-color: var(--green); color: #fff; }
+  .stp.ok .lb { color: var(--sub); }
+  .ln { width: 54px; height: 3px; border-radius: 2px; background: var(--line);
+    margin-bottom: 24px; transition: .3s; }
+  .ln.ok { background: var(--green); }
+
+  .card {
+    background: var(--card); border: 1.5px solid var(--line); border-radius: 22px;
+    padding: 30px 30px 34px; box-shadow: 0 8px 30px #1f293710;
+    animation: pop .28s ease;
+  }
+  @keyframes pop { from { opacity: 0; transform: translateY(10px) scale(.99); } to { opacity: 1; } }
+  .card h1 { font-size: 23px; font-weight: 800; margin-bottom: 6px; }
+  .card .desc { color: var(--sub); font-size: 14.5px; line-height: 1.65; margin-bottom: 22px; }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+    border: none; border-radius: 16px; cursor: pointer; font-family: inherit;
+    font-size: 17.5px; font-weight: 700; padding: 15px 30px; transition: .18s;
+  }
+  .btn.big { width: 100%; font-size: 19px; padding: 17px; }
+  .btn.g { background: linear-gradient(135deg, #10b981, #059669); color: #fff;
+    box-shadow: 0 6px 18px #10b98140; }
+  .btn.g:hover:not(:disabled) { filter: brightness(1.07); transform: translateY(-1px); }
+  .btn.w { background: #fff; color: var(--txt); border: 2px solid var(--line); font-weight: 600; }
+  .btn.w:hover:not(:disabled) { border-color: var(--green); }
+  .btn.sm { font-size: 14px; padding: 9px 18px; border-radius: 12px; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+
+  /* 声音卡片 */
+  .voices { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 480px) { .voices { grid-template-columns: 1fr; } }
+  .vc {
+    border: 2.5px solid var(--line); border-radius: 18px; padding: 20px 16px;
+    text-align: center; cursor: pointer; transition: .15s; background: #fbfcfe;
+  }
+  .vc:hover { border-color: #a7f3d0; transform: translateY(-2px); }
+  .vc.sel { border-color: var(--green); background: #ecfdf5;
+    box-shadow: 0 4px 16px #10b98126; }
+  .vc .ic { width: 52px; height: 52px; border-radius: 50%; margin: 0 auto 10px;
+    display: flex; align-items: center; justify-content: center;
+    background: #eef2f7; }
+  .vc.sel .ic { background: #d1fae5; }
+  .vc .nm { font-weight: 700; font-size: 16.5px; }
+  .vc .tag { font-size: 12px; color: var(--sub); margin-top: 4px; }
+  .vc.add { border-style: dashed; color: var(--sub); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; min-height: 128px; gap: 8px; }
+  .vc.add .plus { font-size: 30px; color: var(--green); font-weight: 300; line-height: 1; }
+  .vc.add b { font-size: 15.5px; }
+
+  /* 上传区 */
+  .up {
+    border: 2.5px dashed #c7d2e0; border-radius: 18px; padding: 34px 20px;
+    text-align: center; color: var(--sub); cursor: pointer; transition: .15s;
+    position: relative; font-size: 15px; line-height: 1.7;
+  }
+  .up:hover, .up.drag { border-color: var(--green); background: #ecfdf5; }
+  .up input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+  .up .big { font-size: 17px; font-weight: 700; color: var(--txt); }
+  .up.done { border-style: solid; border-color: var(--green); background: #ecfdf5; }
+
+  input[type=text] {
+    width: 100%; border: 2px solid var(--line); border-radius: 14px;
+    padding: 14px 16px; font-size: 17px; font-family: inherit; outline: none;
+    transition: border-color .15s; background: #fbfcfe;
+  }
+  input[type=text]:focus { border-color: var(--green); }
+  textarea {
+    width: 100%; border: 2px solid var(--line); border-radius: 16px;
+    padding: 16px 18px; font-size: 17.5px; line-height: 1.75; font-family: inherit;
+    outline: none; resize: vertical; min-height: 150px; background: #fbfcfe;
+    transition: border-color .15s;
+  }
+  textarea:focus { border-color: var(--green); }
+  .lbl { font-size: 15px; font-weight: 700; margin: 18px 0 9px; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .chip {
+    background: #eef2f7; border: none; border-radius: 999px; padding: 8px 15px;
+    font-size: 13.5px; color: var(--sub); cursor: pointer; font-family: inherit;
+    transition: .15s;
+  }
+  .chip:hover { background: #d1fae5; color: var(--green-d); }
+
+  .voicebar {
+    display: flex; align-items: center; gap: 10px; background: #ecfdf5;
+    border: 1.5px solid #a7f3d0; border-radius: 14px; padding: 11px 16px;
+    margin-bottom: 18px; font-weight: 700;
+  }
+  .voicebar button {
+    margin-left: auto; background: none; border: none; color: var(--blue);
+    font-size: 13.5px; cursor: pointer; font-family: inherit; font-weight: 600;
+  }
+
+  /* 进度 */
+  .loading { text-align: center; padding: 30px 0 10px; }
+  .spin {
+    width: 58px; height: 58px; border-radius: 50%; margin: 0 auto 18px;
+    border: 5px solid #d1fae5; border-top-color: var(--green);
+    animation: rot 1s linear infinite;
+  }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  .loading .t1 { font-size: 19px; font-weight: 800; }
+  .loading .t2 { color: var(--sub); font-size: 14px; margin-top: 8px; min-height: 40px;
+    line-height: 1.6; }
+  .pbar { height: 12px; background: #eef2f7; border-radius: 7px; overflow: hidden; margin: 20px 0 8px; }
+  .pbar > i { display: block; height: 100%; width: 0; border-radius: 7px;
+    background: linear-gradient(90deg, #34d399, #10b981); transition: width .6s ease; }
+  .ptxt { font-size: 13.5px; color: var(--sub); }
+
+  .result { text-align: center; }
+  .rball {
+    width: 110px; height: 110px; border-radius: 50%; margin: 6px auto 18px;
+    background: radial-gradient(circle at 34% 30%, #6ee7b7, #10b981 58%, #047857);
+    box-shadow: 0 10px 30px #10b98145; display: flex; align-items: center;
+    justify-content: center; cursor: pointer; transition: .18s; border: none;
+  }
+  .rball:hover { transform: scale(1.05); }
+  .rball svg { width: 44px; height: 44px; fill: #fff; margin-left: 5px; }
+  audio { width: 100%; margin: 18px 0 6px; }
+  .brow { display: flex; gap: 12px; margin-top: 20px; flex-wrap: wrap; }
+  .brow .btn { flex: 1; min-width: 140px; }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%) translateY(16px);
+    background: #1f2937; color: #fff; padding: 12px 22px; border-radius: 14px;
+    font-size: 14.5px; opacity: 0; pointer-events: none; transition: .25s; z-index: 99;
+    max-width: 80vw;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .hidden { display: none !important; }
+  .mini { font-size: 12.5px; color: var(--dim); text-align: center; margin-top: 18px; }
+  .mini a { color: var(--blue); cursor: pointer; text-decoration: none; font-weight: 600; }
 </style>
 </head>
 <body>
-  <header>
-    <h1>ADR <em>Studio</em> · 新手控制台</h1>
-    <span class="badge">预览版</span>
-    <button id="back">← 返回启动器</button>
-  </header>
 
-  <div class="panel">
-    <h2>连接自检</h2>
-    <div id="status">正在连接本地引擎…</div>
-    <div id="err"></div>
+<header>
+  <div class="logo">🎙 ADR 语音小助手<small>三步就能让文字开口说话</small></div>
+  <button id="back">← 返回</button>
+</header>
+
+<div class="wrap">
+
+  <div class="steps">
+    <div class="stp on" id="s1"><div class="dot">1</div><div class="lb">选声音</div></div>
+    <div class="ln" id="l1"></div>
+    <div class="stp" id="s2"><div class="dot">2</div><div class="lb">打字</div></div>
+    <div class="ln" id="l2"></div>
+    <div class="stp" id="s3"><div class="dot">3</div><div class="lb">听效果</div></div>
   </div>
 
+  <!-- ============ 第 1 步: 选声音 ============ -->
+  <div class="card" id="step1">
+    <!-- 声音列表视图 -->
+    <div id="vList">
+      <h1>先选一个声音 🎙</h1>
+      <div class="desc">点一下想用的声音。第一次用？点下面的 <b>创建新声音</b>，一分钟就好。</div>
+      <div class="voices" id="vGrid"></div>
+      <div style="margin-top:24px">
+        <button class="btn g big" id="goStep2" disabled>下一步：打字 →</button>
+      </div>
+    </div>
+
+    <!-- 创建新声音视图 -->
+    <div id="vCreate" class="hidden">
+      <h1>创建你的新声音 ✨</h1>
+      <div class="desc">准备一段 <b>说话录音</b>（一分钟以上、环境安静、只录一个人说话，效果最好）。</div>
+      <div class="up" id="upZone">
+        <input type="file" id="upFile" accept=".wav,.mp3,.flac,.m4a,.ogg">
+        <div class="big" id="upTxt">📱 点这里选择录音文件</div>
+        <div>也可以把文件拖进来 · 支持 wav / mp3 / flac / m4a / ogg</div>
+      </div>
+      <div class="lbl">给这个声音起个名字</div>
+      <input type="text" id="vName" value="我的声音" maxlength="20">
+      <div style="margin-top:26px;display:flex;gap:12px">
+        <button class="btn w" id="cBack">← 上一步</button>
+        <button class="btn g" id="cGo" style="flex:1" disabled>开始学习这个声音</button>
+      </div>
+    </div>
+
+    <!-- 学习中视图 -->
+    <div id="vWork" class="hidden">
+      <div class="loading">
+        <div class="spin"></div>
+        <div class="t1" id="wTitle">正在学习你的声音…</div>
+        <div class="pbar"><i id="wBar"></i></div>
+        <div class="ptxt" id="wPct">0%</div>
+        <div class="t2" id="wMsg">正在准备，请稍等…<br>第一次需要一点点时间，之后就会很快。</div>
+        <button class="btn w sm hidden" id="wTrain" style="margin-top:16px">
+          💪 进阶：继续练习，让声音更像（可选）
+        </button>
+        <button class="btn g big hidden" id="wNext" style="margin-top:18px">好了，去打字 →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 第 2 步: 打字 ============ -->
+  <div class="card hidden" id="step2">
+    <h1>想让它说什么？⌨️</h1>
+    <div class="desc">把文字打在下面，点绿色大按钮就行。</div>
+    <div class="voicebar">🎙 <span id="curVoice">—</span>
+      <button id="changeVoice">换个声音</button></div>
+    <textarea id="txt" placeholder="在这里打字，比如：大家好，很高兴认识你！"></textarea>
+    <div class="chips">
+      <button class="chip">大家好，很高兴认识你！</button>
+      <button class="chip">今天天气真好，我们一起去公园散步吧。</button>
+      <button class="chip">感谢大家的收听，我们下期再见。</button>
+    </div>
+    <div style="margin-top:24px;display:flex;gap:12px">
+      <button class="btn w" id="tBack">← 上一步</button>
+      <button class="btn g" id="tGo" style="flex:1">✨ 生成语音</button>
+    </div>
+    <div class="mini" id="tHint">第一次生成要等一会儿（约 1-2 分钟），之后就快了。</div>
+  </div>
+
+  <!-- ============ 第 3 步: 听效果 ============ -->
+  <div class="card hidden" id="step3">
+    <div class="result">
+      <h1>好啦，听听看 🎧</h1>
+      <div class="desc">不满意？改改文字再生成一次。</div>
+      <button class="rball" id="playBtn" title="播放">
+        <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+      </button>
+      <audio id="player" controls class="hidden"></audio>
+      <div class="brow">
+        <button class="btn w" id="rSave">⤓ 保存</button>
+        <button class="btn w" id="rEdit">✏️ 改文字</button>
+        <button class="btn g" id="rVoice">🎙 换声音</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+<div class="toast" id="toast"></div>
+
 <script>
-/* ---- 共用: API key 透传 ---- */
+"use strict";
+/* ---- 基础设施: api_key 透传 / 请求 / toast ---- */
 const KEY = new URLSearchParams(location.search).get("api_key");
 const api = p => p + (KEY ? (p.includes("?") ? "&" : "?") + "api_key=" + encodeURIComponent(KEY) : "");
+const $ = id => document.getElementById(id);
+let toastT = null;
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.className = "toast show";
+  clearTimeout(toastT);
+  toastT = setTimeout(() => t.className = "toast", 3400);
+}
+async function jf(url, opts) {
+  const r = await fetch(api(url), opts);
+  if (!r.ok) {
+    let m = "服务开小差了 (" + r.status + ")";
+    try { const j = await r.json(); if (j.detail || j.message) m = j.detail || j.message; } catch {}
+    throw new Error(m);
+  }
+  return r.json();
+}
+/* 把后端报错翻译成人话 */
+function human(e) {
+  const s = String(e.message || e);
+  if (s.includes("Failed to fetch")) return "连不上语音服务，请稍后再试";
+  if (s.includes("同名声音")) return "这个名字已经用过啦，换一个名字试试";
+  if (s.includes("已有")) return "上一件事还没做完，稍等一下哦";
+  return s;
+}
 
-/* ---- 返回启动器 ---- */
-const back = document.getElementById("back");
+const back = $("back");
 if (!window.__TAURI__) back.style.display = "none";
 back.onclick = () => window.__TAURI__ && window.__TAURI__.core.invoke("back_to_launcher");
 
-/* ---- 连接自检 ---- */
-(async function check() {
-  const el = document.getElementById("status");
+/* ---- 步骤切换 ---- */
+let step = 1;
+function showStep(n) {
+  step = n;
+  [1, 2, 3].forEach(i => $("step" + i).classList.toggle("hidden", i !== n));
+  $("s1").className = "stp" + (n === 1 ? " on" : " ok");
+  $("s2").className = "stp" + (n === 2 ? " on" : n > 2 ? " ok" : "");
+  $("s3").className = "stp" + (n === 3 ? " on" : "");
+  $("l1").className = "ln" + (n > 1 ? " ok" : "");
+  $("l2").className = "ln" + (n > 2 ? " ok" : "");
+  if (n === 1) loadVoices();
+}
+
+/* ================================================================
+ * 第 1 步: 声音
+ * ================================================================ */
+let voices = [], selected = "";
+
+async function loadVoices() {
   try {
-    const r = await fetch(api("/api/adr/v1/health"));
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    const d = await r.json();
-    el.textContent = "✓ 本地引擎已就绪，3 步出声向导即将开放（完整版开发中）";
-  } catch (e) {
-    el.textContent = "";
-    document.getElementById("err").textContent = "引擎连接失败: " + e.message;
+    const d = await jf("/api/adr/v1/profiles");
+    voices = d.profiles;
+    renderVoices();
+  } catch (e) { toast(human(e)); }
+}
+function renderVoices() {
+  const g = $("vGrid");
+  g.innerHTML = voices.map(p => `
+    <div class="vc${p.name === selected ? " sel" : ""}" data-n="${encodeURIComponent(p.name)}">
+      <div class="ic">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="#10b981">
+          <path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/>
+        </svg>
+      </div>
+      <div class="nm">${p.name.replace(/</g, "&lt;")}</div>
+      <div class="tag">${p.style ? p.style.replace(/</g, "&lt;") : "点我选它"}</div>
+    </div>`).join("") + `
+    <div class="vc add" id="addCard">
+      <div class="plus">＋</div><b>创建新声音</b>
+      <div style="font-size:12.5px">用一段录音，一分钟就好</div>
+    </div>`;
+  g.querySelectorAll(".vc[data-n]").forEach(el => el.onclick = () => {
+    selected = decodeURIComponent(el.dataset.n);
+    renderVoices();
+    $("goStep2").disabled = false;
+  });
+  $("addCard").onclick = () => {
+    $("vList").classList.add("hidden");
+    $("vCreate").classList.remove("hidden");
+  };
+  if (selected) $("goStep2").disabled = false;
+}
+
+/* 上传 + 起名 + 开始学习 */
+let audioPath = "";
+const upZone = $("upZone");
+upZone.ondragover = e => { e.preventDefault(); upZone.classList.add("drag"); };
+upZone.ondragleave = () => upZone.classList.remove("drag");
+upZone.ondrop = e => {
+  e.preventDefault(); upZone.classList.remove("drag");
+  if (e.dataTransfer.files[0]) pick(e.dataTransfer.files[0]);
+};
+$("upFile").onchange = e => e.target.files[0] && pick(e.target.files[0]);
+function pick(f) {
+  audioPath = "";
+  $("upTxt").textContent = "正在上传… " + f.name;
+  const fd = new FormData();
+  fd.append("file", f);
+  fetch(api("/api/adr/v1/train/upload"), { method: "POST", body: fd })
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(d => {
+      audioPath = d.path;
+      upZone.classList.add("done");
+      $("upTxt").textContent = "✓ 收到！这段录音可以用了";
+      $("cGo").disabled = false;
+    })
+    .catch(() => {
+      $("upTxt").textContent = "上传失败，再试一次吧";
+      toast("上传失败了，检查一下网络再试试");
+    });
+}
+$("vName").oninput = e => { $("cGo").disabled = !audioPath || !e.target.value.trim(); };
+$("cBack").onclick = () => {
+  $("vCreate").classList.add("hidden");
+  $("vList").classList.remove("hidden");
+};
+$("cGo").onclick = async () => {
+  try {
+    await jf("/api/adr/v1/profiles/create", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: $("vName").value.trim(), audio_path: audioPath })
+    });
+    startWork("profile");
+  } catch (e) { toast(human(e)); }
+};
+
+/* 学习进度 (建档 profile / 训练 train 两种模式共用) */
+let workMode = "", workTimer = null;
+function startWork(mode) {
+  workMode = mode;
+  $("vCreate").classList.add("hidden");
+  $("vWork").classList.remove("hidden");
+  $("wNext").classList.add("hidden");
+  $("wTrain").classList.add("hidden");
+  $("wBar").style.width = "0%";
+  $("wPct").textContent = "0%";
+  if (mode === "profile") {
+    $("wTitle").textContent = "正在学习你的声音…";
+    $("wMsg").innerHTML = "正在仔细听你的录音，挑出最好听的一段。<br>第一次要 1-3 分钟，去倒杯水吧 ☕";
+  } else {
+    $("wTitle").textContent = "正在加练，让声音更像…";
+    $("wMsg").innerHTML = "声音正在反复练习你录音里的每个字。<br>这一步比较久（可能 20-60 分钟），可以先去干别的，回来再看。";
   }
-})();
+  pollWork();
+}
+function pollWork() {
+  clearTimeout(workTimer);
+  const url = workMode === "profile" ? "/api/adr/v1/profiles/create/status" : "/api/adr/v1/train/status";
+  jf(url).then(d => {
+    if (workMode === "profile") {
+      const pct = d.state === "done" ? 100 : d.state === "working" ? Math.min(90, 8 + (d.elapsed_sec || 0) / 1.8) : 0;
+      $("wBar").style.width = pct + "%";
+      $("wPct").textContent = Math.round(pct) + "%";
+      if (d.message) $("wMsg").textContent = d.message;
+      if (d.state === "done") {
+        selected = d.name;
+        $("wTitle").textContent = "🎉 学会了！你的声音准备好啦";
+        $("wMsg").textContent = "现在就能用它说话。想让它更像你？可以再加练一会儿（可选）。";
+        $("wNext").classList.remove("hidden");
+        $("wTrain").classList.remove("hidden");
+      } else if (d.state === "failed") {
+        $("wTitle").textContent = "😔 这次没学会";
+        $("wMsg").textContent = "出了点小问题: " + (d.message || "未知原因") + "。换个录音试试？";
+        addRetryBtn();
+      } else {
+        workTimer = setTimeout(pollWork, 2000);
+      }
+    } else {
+      const done = d.gate_curve ? d.gate_curve.length : 0;
+      const total = Math.max(d.epochs || 8, 1);
+      const pct = d.state === "done" ? 100 : d.state === "running" ? Math.min(95, done / total * 100) : 0;
+      $("wBar").style.width = pct + "%";
+      $("wPct").textContent = Math.round(pct) + "%";
+      $("wMsg").textContent = d.state === "running"
+        ? `正在练习第 ${done + 1} 轮 / 共 ${total} 轮… 练完这轮就会更像啦`
+        : d.state === "done" ? "练习完成！" : d.message || "…";
+      if (d.state === "done" || d.state === "stopped") {
+        $("wTitle").textContent = d.early_stop ? "🎉 提前出师！声音已经很棒了" : "🎉 练习完成！";
+        $("wMsg").textContent = d.best_sim ? `这次练习的相似度得分: ${d.best_sim.toFixed(2)}（满分 1 分）` : "声音已经准备好啦";
+        $("wNext").classList.remove("hidden");
+      } else if (d.state === "failed") {
+        $("wTitle").textContent = "😔 练习中断了";
+        $("wMsg").textContent = "别担心，刚才学到的还能用。可以重新试一次。";
+        addRetryBtn();
+      } else {
+        workTimer = setTimeout(pollWork, 3000);
+      }
+    }
+  }).catch(() => { workTimer = setTimeout(pollWork, 4000); });
+}
+function addRetryBtn() {
+  const b = $("wNext");
+  b.textContent = "↻ 重试";
+  b.classList.remove("hidden");
+  b.onclick = retryWork;
+}
+function retryWork() {
+  const b = $("wNext");
+  b.textContent = "好了，去打字 →";
+  b.onclick = workNext;
+  $("vWork").classList.add("hidden");
+  $("vCreate").classList.remove("hidden");
+  $("cGo").disabled = !audioPath;
+}
+function workNext() {
+  $("vWork").classList.add("hidden");
+  $("vList").classList.remove("hidden");
+  showStep(2);
+}
+$("wNext").onclick = workNext;
+
+/* 可选加练: 显存够用 8gb 配方, 否则 4gb */
+$("wTrain").onclick = async () => {
+  let recipe = "4gb";
+  try {
+    const st = await jf("/api/adr/v1/system/stats");
+    if (st.gpu && st.gpu.total_gb >= 7) recipe = "8gb";
+  } catch {}
+  try {
+    await jf("/api/adr/v1/train/start", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        audio_path: audioPath, exp_name: "easy_" + Date.now() % 100000,
+        epochs: 8, recipe, gate_on: true, bind_voice: selected
+      })
+    });
+    startWork("train");
+  } catch (e) { toast(human(e)); }
+};
+
+$("goStep2").onclick = () => showStep(2);
+
+/* ================================================================
+ * 第 2 步: 打字 → 生成
+ * ================================================================ */
+document.querySelectorAll(".chip").forEach(c => c.onclick = () => {
+  $("txt").value = c.textContent;
+});
+$("changeVoice").onclick = () => showStep(1);
+$("tBack").onclick = () => showStep(1);
+
+$("tGo").onclick = async () => {
+  const text = $("txt").value.trim();
+  if (!selected) { toast("先回上一步选个声音哦"); return showStep(1); }
+  if (!text) { toast("先打几个字吧～"); return; }
+  const btn = $("tGo");
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = "⏳ 正在生成，请稍等…";
+  $("tHint").textContent = "正在让声音练习说这句话…";
+  const t0 = performance.now();
+  try {
+    const ctrl = new AbortController();
+    const kill = setTimeout(() => ctrl.abort(), 600000);
+    const r = await fetch(api("/api/adr/v1/tts"), {
+      method: "POST", signal: ctrl.signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, profile: selected, media_type: "wav" })
+    });
+    clearTimeout(kill);
+    if (!r.ok) {
+      let m = r.status;
+      try { const j = await r.json(); if (j.message || j.detail) m = j.message || j.detail; } catch {}
+      throw new Error(m);
+    }
+    const blob = await r.blob();
+    if (window.__lastUrl) URL.revokeObjectURL(window.__lastUrl);
+    window.__lastUrl = URL.createObjectURL(blob);
+    $("player").src = window.__lastUrl;
+    $("player").classList.remove("hidden");
+    $("rSave").onclick = () => {
+      const a = document.createElement("a");
+      a.href = window.__lastUrl;
+      a.download = "我的语音_" + new Date().toISOString().slice(0, 16).replace(/[T:]/g, "-") + ".wav";
+      a.click();
+    };
+    showStep(3);
+    $("player").play().catch(() => {});
+  } catch (e) {
+    toast("生成失败: " + human(e));
+    $("tHint").textContent = "第一次生成要等一会儿（约 1-2 分钟），之后就快了。";
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+};
+
+/* 第 3 步按钮 */
+$("playBtn").onclick = () => $("player").play().catch(() => {});
+$("rEdit").onclick = () => showStep(2);
+$("rVoice").onclick = () => showStep(1);
+
+/* 启动 */
+showStep(1);
 </script>
 </body>
 </html>
