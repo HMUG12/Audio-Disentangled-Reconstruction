@@ -6,6 +6,7 @@
 规则:
 - api_keys 为空列表 → 完全放行 (默认关闭, N.E.K.O 零改造兼容)
 - 豁免路径: /api/adr/v1/health (监控探活不带凭据)
+  + /, /pro, /easy (控制台静态页, 页面 JS 会把 URL 上的 api_key 透传给后续请求)
 - 凭据三选一: ``Authorization: Bearer <key>`` / ``X-API-Key: <key>``
   / 查询参数 ``?api_key=<key>``
 - key 精确匹配 (大小写敏感); 未通过统一 ``401 {"message": "unauthorized"}``
@@ -16,7 +17,8 @@ import json
 from urllib.parse import unquote
 
 # 监控探活豁免 (无敏感数据, 供 N.E.K.O / 负载均衡探活)
-EXEMPT_PATHS = {"/api/adr/v1/health"}
+# 控制台静态页豁免: 页面本身无数据, 启用 API key 时页面才能加载
+EXEMPT_PATHS = {"/api/adr/v1/health", "/", "/pro", "/easy"}
 
 
 class APIKeyMiddleware:

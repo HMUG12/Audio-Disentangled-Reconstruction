@@ -16,7 +16,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from adr.server import native, v2_compat
+from adr.server import console, native, v2_compat
 from adr.server.auth import APIKeyMiddleware
 
 
@@ -41,4 +41,6 @@ def create_app(engine=None) -> FastAPI:
     app.state.default_profile = os.environ.get("ADR_TTS_DEFAULT_PROFILE") or None
     app.include_router(v2_compat.router)
     app.include_router(native.router)
+    app.include_router(console.router)  # 批次14: 控制台 API (状态/训练/模型)
+    console.register_pages(app)         # 批次14: 静态控制台页 (/, /pro, /easy)
     return app

@@ -22,6 +22,12 @@
   h1 { font-size: 20px; font-weight: 600; margin: 0 0 8px; letter-spacing: .5px; }
   #status { font-size: 13px; color: #94a3b8; min-height: 18px; }
   .hint { font-size: 12px; color: #475569; margin-top: 28px; }
+  #back {
+    display: none; margin: 22px auto 0; background: #16202f; color: #aebad0;
+    border: 1px solid #2b3a55; border-radius: 8px; padding: 8px 18px;
+    font-size: 13px; cursor: pointer;
+  }
+  #back:hover { border-color: #2dd4bf66; color: #e8ecf4; }
   @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
@@ -30,13 +36,20 @@
     <div class="ring"></div>
     <h1>ADR Studio</h1>
     <div id="status">正在初始化…</div>
+    <button id="back" onclick="goLauncher()">← 返回启动器</button>
     <div class="hint">本地低资源语音克隆训练框架</div>
   </div>
 <script>
   // 壳通过 eval 调用此函数更新启动状态
   window.__adrStatus = function (text) {
     document.getElementById("status").textContent = text;
+    // 出现失败/超时字样时亮出返回按钮, 避免卡死在加载页
+    if (/失败|超时/.test(text)) document.getElementById("back").style.display = "block";
   };
+  function goLauncher() {
+    if (window.__TAURI__) window.__TAURI__.core.invoke("back_to_launcher");
+    else location.replace("launcher.html");
+  }
 </script>
 </body>
 </html>

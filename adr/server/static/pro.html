@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADR Studio · 专业控制台</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    background: #0a0d14; color: #e8ecf4; min-height: 100vh; padding: 32px 40px;
+  }
+  header { display: flex; align-items: center; gap: 14px; margin-bottom: 28px; }
+  h1 { font-size: 20px; font-weight: 700; }
+  h1 em { font-style: normal; color: #2dd4bf; }
+  .badge { font-size: 11px; color: #f0b429; border: 1px solid #f0b42955;
+    border-radius: 999px; padding: 3px 10px; }
+  #back {
+    margin-left: auto; background: #161d2e; color: #aebad0; border: 1px solid #263149;
+    border-radius: 8px; padding: 8px 16px; font-size: 13px; cursor: pointer;
+  }
+  #back:hover { border-color: #2dd4bf66; color: #e8ecf4; }
+  .panel { background: #121724; border: 1px solid #1f2740; border-radius: 14px;
+    padding: 22px 24px; }
+  .panel h2 { font-size: 14px; color: #8fa1c0; margin-bottom: 14px; font-weight: 600; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .stat { flex: 1; min-width: 180px; background: #0e1320; border: 1px solid #1c2438;
+    border-radius: 10px; padding: 14px 16px; }
+  .stat .k { font-size: 12px; color: #667795; }
+  .stat .v { font-size: 18px; font-weight: 600; margin-top: 6px; }
+  .stat .v small { font-size: 12px; color: #667795; font-weight: 400; }
+  #err { color: #f87171; font-size: 13px; margin-top: 14px; min-height: 18px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>ADR <em>Studio</em> · 专业控制台</h1>
+    <span class="badge">预览版</span>
+    <button id="back">← 返回启动器</button>
+  </header>
+
+  <div class="panel">
+    <h2>系统总览（链路自检）</h2>
+    <div class="row" id="stats"></div>
+    <div id="err"></div>
+  </div>
+
+<script>
+/* ---- 共用: API key 透传 (启用鉴权时, 页面从 URL 取 key 附给后续请求) ---- */
+const KEY = new URLSearchParams(location.search).get("api_key");
+const api = p => p + (KEY ? (p.includes("?") ? "&" : "?") + "api_key=" + encodeURIComponent(KEY) : "");
+
+/* ---- 返回启动器 (仅桌面壳内可用) ---- */
+const back = document.getElementById("back");
+if (!window.__TAURI__) back.style.display = "none";
+back.onclick = () => window.__TAURI__ && window.__TAURI__.core.invoke("back_to_launcher");
+
+/* ---- 总览数据 ---- */
+function card(k, v) {
+  return `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`;
+}
+async function load() {
+  try {
+    const r = await fetch(api("/api/adr/v1/system/stats"));
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const d = await r.json();
+    const gpu = d.gpu ? `${d.gpu.used_gb} / ${d.gpu.total_gb} GB` : "无 CUDA";
+    const ram = d.ram ? `${d.ram.used_gb} / ${d.ram.total_gb} GB (${d.ram.percent}%)` : "未知";
+    const disk = d.disk ? `剩余 ${d.disk.free_gb} / ${d.disk.total_gb} GB` : "未知";
+    document.getElementById("stats").innerHTML =
+      card("GPU 显存", gpu) + card("内存", ram) + card("磁盘", disk) +
+      card("GPU 型号", d.gpu ? d.gpu.name : "—") +
+      card("引擎状态", d.engine_loaded ? "已加载" : "未加载 (首次合成时惰性加载)") +
+      card("音色档案", d.profiles + " 个") +
+      card("预训练模型", `${d.models.cached} / ${d.models.total} 已缓存`) +
+      card("训练状态", d.train.state);
+    document.getElementById("err").textContent = "";
+  } catch (e) {
+    document.getElementById("err").textContent = "API 连接失败: " + e.message;
+  }
+}
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>

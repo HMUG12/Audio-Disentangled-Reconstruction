@@ -1,12 +1,14 @@
 //! ADR Studio 桌面壳 (Tauri 2)。
 //!
 //! 职责:
-//! 1. sidecar 托管: 启动 ``python -m adr.cli webui --host 127.0.0.1 --port <随机空闲端口> --no-browser``
-//!    (Gradio Web 控制台, 与命令行 ``adr webui`` 同一入口)
-//! 2. 健康探活: 轮询 ``GET /`` 通过后把窗口导航到本地 Web 控制台
-//! 3. 进程守护: 服务意外退出自动重启 (稳定运行 60s 后重置失败计数)
-//! 4. 托盘: 显示窗口 / 浏览器打开 / 退出 (退出时 taskkill /T 杀整棵服务进程树)
-//! 5. 关窗 = 隐藏到托盘, 真正退出只走托盘菜单
+//! 1. 启动器: 窗口先展示 launcher.html, 三种控制台按需拉起
+//!    - legacy: ``python -m adr.cli webui`` (Gradio 经典控制台)
+//!    - pro/easy: ``python -m adr.server`` (FastAPI, 静态控制台页 /pro /easy)
+//! 2. 健康探活: legacy 探 ``GET /``; pro/easy 探 ``GET /api/adr/v1/health``
+//! 3. 服务互斥: 同一时间只跑一个 sidecar, 切换控制台 / 返回启动器时杀旧进程 (省显存)
+//! 4. 进程守护: 服务意外退出按同 mode 自动重启 (稳定 60s 重置失败计数, 上限 4 次)
+//! 5. 托盘: 显示窗口 / 返回启动器 / 浏览器打开 / 退出 (退出时 taskkill /T 杀整棵进程树)
+//! 6. 关窗 = 隐藏到托盘, 真正退出只走托盘菜单
 //!
 //! Python 解释器解析优先级:
 //! 1. 便携模式: ``<exe目录>/runtime/python/python.exe`` (打包后的绿色运行时)
@@ -19,7 +21,7 @@
 
 use std::net::TcpListener;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
@@ -40,13 +42,24 @@ const HEALTH_TIMEOUT: Duration = Duration::from_secs(180);
 /// 稳定运行超过该时长后重置失败计数
 const STABLE_UPTIME: Duration = Duration::from_secs(60);
 
-/// 共享状态: sidecar PID (0 = 未运行) 与就绪后的服务地址。
+/// WebView2 前端资源 origin (Windows)。
+/// 导航一律用绝对地址: 当前页面可能停在远端控制台 (http://127.0.0.1:P),
+/// 相对路径会指到远端 origin 上导致 404。
+#[cfg(windows)]
+const TAURI_ORIGIN: &str = "http://tauri.localhost";
+#[cfg(not(windows))]
+const TAURI_ORIGIN: &str = "tauri://localhost";
+
+/// 共享状态: sidecar PID (0 = 未运行)、就绪后的服务地址、当前控制台模式。
 struct ServerState {
     pid: AtomicU32,
     base_url: Mutex<Option<String>>,
+    /// "" (启动器) | legacy | pro | easy
+    mode: Mutex<String>,
 }
 
-/// 退出标记: 托盘退出 / RunEvent::Exit 时置位, supervisor 轮询后收尾
+/// 退出标记: 托盘退出 / RunEvent::Exit 时置位, supervise 轮询后收尾。
+/// 重启场景 (launch_console 切换模式) 只杀 sidecar, 不动该标记。
 static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 
 #[cfg(windows)]
@@ -58,22 +71,33 @@ pub fn run() {
             app.manage(ServerState {
                 pid: AtomicU32::new(0),
                 base_url: Mutex::new(None),
+                mode: Mutex::new(String::new()),
             });
 
             // 系统托盘
             let show_i = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+            let home_i = MenuItem::with_id(app, "home", "返回启动器", true, None::<&str>)?;
             let web_i = MenuItem::with_id(app, "web", "在浏览器打开控制台", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_i, &web_i, &quit_i])?;
+            let menu = Menu::with_items(app, &[&show_i, &home_i, &web_i, &quit_i])?;
             let mut tray = TrayIconBuilder::with_id("adr-tray")
                 .menu(&menu)
-                .tooltip("ADR Studio 启动中…")
+                .tooltip("ADR Studio — 就绪")
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
                         if let Some(w) = app.get_webview_window("main") {
                             let _ = w.show();
                             let _ = w.set_focus();
                         }
+                    }
+                    "home" => {
+                        let state: State<ServerState> = app.state();
+                        kill_current(&state);
+                        if let Some(t) = app.tray_by_id("adr-tray") {
+                            let _ = t.set_tooltip(Some("ADR Studio — 引擎已停止"));
+                        }
+                        let window = app.get_webview_window("main");
+                        navigate(&window, &format!("{TAURI_ORIGIN}/launcher.html"));
                     }
                     "web" => {
                         let state: State<ServerState> = app.state();
@@ -93,12 +117,10 @@ pub fn run() {
             }
             tray.build(app)?;
 
-            // sidecar 监管线 (后台线程, 不阻塞 UI)
-            let handle = app.handle().clone();
-            std::thread::spawn(move || supervisor(handle));
-
+            // 启动即展示 launcher.html, 服务按需拉起 (launch_console command)
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![launch_console, back_to_launcher])
         .on_window_event(|window, event| {
             // 关窗 = 隐藏到托盘; 真正退出走托盘菜单 (保证 sidecar 被清理)
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -115,17 +137,217 @@ pub fn run() {
         });
 }
 
-/// 停掉 sidecar 进程树 (幂等)。
-fn shutdown_server(app: &AppHandle) {
-    SHUTTING_DOWN.store(true, Ordering::Relaxed);
+// ---------------------------------------------------------------------------
+// Tauri commands (前端通过 window.__TAURI__.core.invoke 调用)
+// ---------------------------------------------------------------------------
+
+/// 启动指定控制台 (阻塞到探活通过并完成导航, 前端转 loading 态)。
+#[tauri::command]
+async fn launch_console(app: AppHandle, mode: String) -> Result<String, String> {
+    if !matches!(mode.as_str(), "legacy" | "pro" | "easy") {
+        return Err(format!("未知控制台模式: {mode}"));
+    }
+    // 探活最长 180s, 放到阻塞线程池, 避免卡住 async runtime
+    tauri::async_runtime::spawn_blocking(move || launch_blocking(app, mode))
+        .await
+        .map_err(|e| format!("内部任务失败: {e}"))?
+}
+
+/// 停掉 sidecar 并回到启动器 (静态页的 ← 按钮与托盘"返回启动器"共用)。
+#[tauri::command]
+fn back_to_launcher(app: AppHandle) {
     let state: State<ServerState> = app.state();
-    let pid = state.pid.swap(0, Ordering::Relaxed);
-    if pid != 0 {
-        kill_tree(pid);
+    kill_current(&state);
+    if let Some(t) = app.tray_by_id("adr-tray") {
+        let _ = t.set_tooltip(Some("ADR Studio — 引擎已停止"));
+    }
+    let window = app.get_webview_window("main");
+    navigate(&window, &format!("{TAURI_ORIGIN}/launcher.html"));
+}
+
+// ---------------------------------------------------------------------------
+// 启动与守护
+// ---------------------------------------------------------------------------
+
+/// launch_console 的阻塞实现: 杀旧 → 置模式 → 启动+探活+导航 → 交给守护线程。
+fn launch_blocking(app: AppHandle, mode: String) -> Result<String, String> {
+    let window = app.get_webview_window("main");
+    let state: State<ServerState> = app.state();
+
+    // 服务互斥: 切换前杀旧 sidecar, 等端口释放
+    kill_current(&state);
+    *state.mode.lock().unwrap() = mode.clone();
+    std::thread::sleep(Duration::from_millis(600));
+
+    navigate(&window, &format!("{TAURI_ORIGIN}/loading.html"));
+    update_status(&window, "正在启动本地引擎…");
+    if let Some(t) = app.tray_by_id("adr-tray") {
+        let _ = t.set_tooltip(Some("ADR Studio 启动中…"));
+    }
+
+    let Some((child, target, started)) = start_and_wait(&app, &mode, &window, &state) else {
+        if let Some(t) = app.tray_by_id("adr-tray") {
+            let _ = t.set_tooltip(Some("ADR Studio 引擎启动失败"));
+        }
+        return Err("引擎启动失败或超时 (探活 180s), 请检查 Python 环境后重试".into());
+    };
+
+    // 守护线程: 崩溃后按同 mode 自动重启
+    let h = app.clone();
+    std::thread::spawn(move || supervise(h, mode, child, started));
+    Ok(target)
+}
+
+/// 按模式启动 sidecar 并探活; 成功后写 base_url/托盘并导航到目标页。
+/// 返回 (子进程, 目标 URL, 启动时刻); 失败返回 None (状态已就地更新)。
+fn start_and_wait(
+    app: &AppHandle,
+    mode: &str,
+    window: &Option<WebviewWindow>,
+    state: &State<ServerState>,
+) -> Option<(Child, String, Instant)> {
+    let Some(port) = free_tcp_port() else {
+        update_status(window, "端口分配失败, 正在重试…");
+        return None;
+    };
+    let (python, cwd, pythonpath) = resolve_runtime();
+    let base = format!("http://127.0.0.1:{port}");
+
+    let mut cmd = Command::new(&python);
+    match mode {
+        "legacy" => {
+            cmd.args([
+                "-m", "adr.cli", "webui",
+                "--host", "127.0.0.1",
+                "--port", &port.to_string(),
+                "--no-browser",
+            ]);
+        }
+        // pro / easy: 同一个 FastAPI 服务, 静态控制台页由 server 提供
+        _ => {
+            cmd.args([
+                "-m", "adr.server",
+                "--addr", "127.0.0.1",
+                "--port", &port.to_string(),
+            ]);
+        }
+    }
+    cmd.current_dir(&cwd);
+    if let Some(pp) = &pythonpath {
+        cmd.env("PYTHONPATH", pp);
+    }
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            update_status(window, &format!("启动失败: {e}"));
+            return None;
+        }
+    };
+    state.pid.store(child.id(), Ordering::Relaxed);
+
+    let health_path = if mode == "legacy" { "/" } else { "/api/adr/v1/health" };
+    update_status(window, "引擎加载中… 首次启动导入 torch/CUDA 较慢");
+    if !wait_healthy(&base, health_path, window) {
+        kill_tree(child.id());
+        let _ = child.wait();
+        state.pid.store(0, Ordering::Relaxed);
+        update_status(window, "启动超时, 请检查 Python 环境 (180s 探活超时)");
+        return None;
+    }
+
+    *state.base_url.lock().unwrap() = Some(base.clone());
+    let target = match mode {
+        "legacy" => format!("{base}/"),
+        "pro" => format!("{base}/pro"),
+        _ => format!("{base}/easy"),
+    };
+    if let Some(t) = app.tray_by_id("adr-tray") {
+        let _ = t.set_tooltip(Some(format!("ADR Studio — {target}")));
+    }
+    navigate(window, &target);
+    Some((child, target, Instant::now()))
+}
+
+/// 守护线程: 监控 child, 意外退出按同 mode 自动重启。
+/// 所有权规则: state.pid != 本线程 child 的 pid → 已被新 launch_console 接管, 让位退出。
+fn supervise(app: AppHandle, mode: String, mut child: Child, mut started: Instant) {
+    let window = app.get_webview_window("main");
+    let state: State<ServerState> = app.state();
+    let mut my_pid = child.id();
+    let mut failures = 0u32;
+
+    loop {
+        // 轮询而非阻塞 wait, 保证退出路径畅通
+        while !SHUTTING_DOWN.load(Ordering::Relaxed) {
+            match child.try_wait() {
+                Ok(None) => std::thread::sleep(Duration::from_millis(500)),
+                Ok(Some(_)) => break, // 服务进程意外退出
+                Err(_) => break,
+            }
+        }
+        if SHUTTING_DOWN.load(Ordering::Relaxed) {
+            let _ = child.kill(); // 兜底 (正常退出路径 taskkill 已处理)
+            return;
+        }
+
+        // 所有权丢失 (被新 launch_console / back_to_launcher 接管) → 让位
+        if state.pid.load(Ordering::Relaxed) != my_pid {
+            return;
+        }
+        let _ = child.kill();
+        state.pid.store(0, Ordering::Relaxed);
+        *state.base_url.lock().unwrap() = None;
+
+        // 稳定运行够久 → 视为一次成功, 重置失败计数
+        if started.elapsed() >= STABLE_UPTIME {
+            failures = 0;
+        }
+        failures += 1;
+        if failures > MAX_FAILURES {
+            if let Some(t) = app.tray_by_id("adr-tray") {
+                let _ = t.set_tooltip(Some("ADR Studio 引擎启动失败"));
+            }
+            update_status(&window, "多次启动失败, 请返回启动器重试。");
+            return;
+        }
+
+        update_status(&window, "服务断开, 正在自动重启…");
+        navigate(&window, &format!("{TAURI_ORIGIN}/loading.html"));
+        if let Some(t) = app.tray_by_id("adr-tray") {
+            let _ = t.set_tooltip(Some("ADR Studio 引擎重启中…"));
+        }
+        std::thread::sleep(Duration::from_secs(2));
+        match start_and_wait(&app, &mode, &window, &state) {
+            Some((c, _, t0)) => {
+                child = c;
+                my_pid = child.id();
+                started = t0;
+            }
+            None => return, // 重启失败: 状态已就地更新, 用户可回启动器重试
+        }
     }
 }
 
-/// Windows 下杀整棵进程树 (uvicorn 可能带子进程)。
+/// 停掉当前 sidecar (幂等, 不动退出标记 — 重启场景靠它区分真退出)。
+fn kill_current(state: &State<ServerState>) {
+    let pid = state.pid.swap(0, Ordering::Relaxed);
+    if pid != 0 {
+        kill_tree(pid);
+        *state.base_url.lock().unwrap() = None;
+    }
+}
+
+/// 真退出路径: 置退出标记 + 杀 sidecar 进程树 (幂等)。
+fn shutdown_server(app: &AppHandle) {
+    SHUTTING_DOWN.store(true, Ordering::Relaxed);
+    let state: State<ServerState> = app.state();
+    kill_current(&state);
+}
+
+/// Windows 下杀整棵进程树 (uvicorn/gradio 可能带子进程)。
 fn kill_tree(pid: u32) {
     let mut cmd = Command::new("taskkill");
     cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
@@ -134,94 +356,9 @@ fn kill_tree(pid: u32) {
     let _ = cmd.output();
 }
 
-/// sidecar 监管线: 启动 → 探活 → 导航 → 监控 → 崩溃重启。
-fn supervisor(app: AppHandle) {
-    let window = app.get_webview_window("main");
-    let state: State<ServerState> = app.state();
-    let mut failures = 0u32;
-
-    while failures <= MAX_FAILURES && !SHUTTING_DOWN.load(Ordering::Relaxed) {
-        update_status(&window, "正在启动本地引擎…");
-        let Some(port) = free_tcp_port() else {
-            std::thread::sleep(Duration::from_secs(2));
-            failures += 1;
-            continue;
-        };
-        let (python, cwd, pythonpath) = resolve_runtime();
-        let url = format!("http://127.0.0.1:{port}");
-
-        let mut cmd = Command::new(&python);
-        cmd.args([
-            "-m", "adr.cli", "webui",
-            "--host", "127.0.0.1",
-            "--port", &port.to_string(),
-            "--no-browser",
-        ])
-        .current_dir(&cwd);
-        if let Some(pp) = &pythonpath {
-            cmd.env("PYTHONPATH", pp);
-        }
-        #[cfg(windows)]
-        cmd.creation_flags(CREATE_NO_WINDOW);
-
-        match cmd.spawn() {
-            Ok(mut child) => {
-                state.pid.store(child.id(), Ordering::Relaxed);
-                if wait_healthy(&url, &window) {
-                    let started = Instant::now();
-                    *state.base_url.lock().unwrap() = Some(url.clone());
-                    if let Some(t) = app.tray_by_id("adr-tray") {
-                        let _ = t.set_tooltip(Some(format!("ADR Studio — {url}")));
-                    }
-                    navigate(&window, &url);
-
-                    // 监控运行 (轮询而非阻塞 wait, 保证退出路径畅通)
-                    while !SHUTTING_DOWN.load(Ordering::Relaxed) {
-                        match child.try_wait() {
-                            Ok(None) => std::thread::sleep(Duration::from_millis(500)),
-                            Ok(Some(_)) => break, // 服务进程意外退出 → 重启
-                            Err(_) => break,
-                        }
-                    }
-                    let _ = child.kill(); // 兜底 (正常退出路径 taskkill 已处理)
-                    state.pid.store(0, Ordering::Relaxed);
-                    *state.base_url.lock().unwrap() = None;
-                    if let Some(t) = app.tray_by_id("adr-tray") {
-                        let _ = t.set_tooltip(Some("ADR Studio 引擎重启中…"));
-                    }
-                    // 稳定运行够久 → 视为一次成功, 重置失败计数
-                    if started.elapsed() >= STABLE_UPTIME {
-                        failures = 0;
-                    }
-                } else {
-                    // 探活超时: 杀掉重试
-                    kill_tree(child.id());
-                    let _ = child.wait();
-                    state.pid.store(0, Ordering::Relaxed);
-                    update_status(&window, "启动超时, 正在重试…");
-                }
-                failures += 1;
-                std::thread::sleep(Duration::from_secs(2));
-            }
-            Err(e) => {
-                update_status(&window, &format!("启动失败: {e}"));
-                failures += 1;
-                std::thread::sleep(Duration::from_secs(3));
-            }
-        }
-    }
-
-    if !SHUTTING_DOWN.load(Ordering::Relaxed) {
-        if let Some(t) = app.tray_by_id("adr-tray") {
-            let _ = t.set_tooltip(Some("ADR Studio 引擎启动失败"));
-        }
-        update_status(&window, "多次启动失败, 请检查 Python 环境后重启应用。");
-    }
-}
-
-/// 轮询 Web 控制台首页 (/) 直到 200 或超时 (Gradio 就绪即全站可用)。
-fn wait_healthy(base: &str, window: &Option<WebviewWindow>) -> bool {
-    let url = format!("{base}/");
+/// 轮询健康端点直到 200 或超时 (legacy: Gradio 首页; pro/easy: FastAPI health)。
+fn wait_healthy(base: &str, path: &str, window: &Option<WebviewWindow>) -> bool {
+    let url = format!("{base}{path}");
     let deadline = Instant::now() + HEALTH_TIMEOUT;
     let mut note = Instant::now();
     while Instant::now() < deadline {
@@ -314,7 +451,7 @@ fn update_status(window: &Option<WebviewWindow>, text: &str) {
     }
 }
 
-/// 把窗口导航到就绪后的本地控制台。
+/// 把窗口导航到目标页 (必须是绝对 URL, 见 TAURI_ORIGIN 注释)。
 fn navigate(window: &Option<WebviewWindow>, url: &str) {
     if let Some(w) = window {
         let _ = w.eval(&format!("location.replace({});", js_quote(url)));
