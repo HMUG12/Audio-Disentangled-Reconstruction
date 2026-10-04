@@ -1,11 +1,12 @@
 //! ADR Studio 桌面壳 (Tauri 2)。
 //!
 //! 职责:
-//! 1. 启动器: 窗口先展示 launcher.html, 三种控制台按需拉起
-//!    - legacy: ``python -m adr.cli webui`` (Gradio 经典控制台)
-//!    - pro/easy: ``python -m adr.server`` (FastAPI, 静态控制台页 /pro /easy)
-//! 2. 健康探活: legacy 探 ``GET /``; pro/easy 探 ``GET /api/adr/v1/health``
-//! 3. 服务互斥: 同一时间只跑一个 sidecar, 切换控制台 / 返回启动器时杀旧进程 (省显存)
+//! 1. 启动即预热: 窗口先展示 prewarm.html, setup 后台拉起 FastAPI 服务并轮询
+//!    引擎预热阶段 (torch 导入 → 权重加载 → kernel 预热), 就绪后才放行进 launcher
+//! 2. 启动器: launcher.html 三种控制台
+//!    - legacy: ``python -m adr.cli webui`` (Gradio 经典控制台, 按需拉起)
+//!    - pro/easy: 复用常驻 FastAPI 服务秒进 (引擎已预热, 不再杀进程)
+//! 3. 健康探活: legacy 探 ``GET /``; pro/easy 探 ``GET /api/adr/v1/health``
 //! 4. 进程守护: 服务意外退出按同 mode 自动重启 (稳定 60s 重置失败计数, 上限 4 次)
 //! 5. 托盘: 显示窗口 / 返回启动器 / 浏览器打开 / 退出 (退出时 taskkill /T 杀整棵进程树)
 //! 6. 关窗 = 隐藏到托盘, 真正退出只走托盘菜单
@@ -41,6 +42,8 @@ const MAX_FAILURES: u32 = 4;
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(180);
 /// 稳定运行超过该时长后重置失败计数
 const STABLE_UPTIME: Duration = Duration::from_secs(60);
+/// 启动预热总超时: 超时放行进启动器 (引擎继续后台加载, 控制台页有三态显示)
+const PREWARM_TIMEOUT: Duration = Duration::from_secs(240);
 
 /// WebView2 前端资源 origin (Windows)。
 /// 导航一律用绝对地址: 当前页面可能停在远端控制台 (http://127.0.0.1:P),
@@ -58,6 +61,8 @@ struct ServerState {
     mode: Mutex<String>,
     /// 调用模式: true = 服务监听 0.0.0.0 (局域网可调用 API), false = 仅 127.0.0.1
     expose: AtomicBool,
+    /// 引擎已就绪 (预热完成或用户强制放行): launcher 的 pro/easy 走秒进通道
+    prewarm_done: AtomicBool,
 }
 
 /// 退出标记: 托盘退出 / RunEvent::Exit 时置位, supervise 轮询后收尾。
@@ -75,6 +80,7 @@ pub fn run() {
                 base_url: Mutex::new(None),
                 mode: Mutex::new(String::new()),
                 expose: AtomicBool::new(false),
+                prewarm_done: AtomicBool::new(false),
             });
 
             // 系统托盘
@@ -120,10 +126,21 @@ pub fn run() {
             }
             tray.build(app)?;
 
-            // 启动即展示 launcher.html, 服务按需拉起 (launch_console command)
+            // 启动即预热: 后台拉服务 + 轮询引擎阶段, 就绪后自动导航进 launcher
+            {
+                let h = app.handle().clone();
+                std::thread::spawn(move || prewarm_flow(h));
+            }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![launch_console, on_launcher_ready])
+        .invoke_handler(tauri::generate_handler![
+            launch_console,
+            enter_console,
+            on_launcher_ready,
+            engine_status,
+            skip_prewarm,
+            retry_prewarm
+        ])
         .on_window_event(|window, event| {
             // 关窗 = 隐藏到托盘; 真正退出走托盘菜单 (保证 sidecar 被清理)
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -148,7 +165,7 @@ pub fn run() {
 /// expose = 调用模式: 服务监听 0.0.0.0 供局域网调用 (默认仅 127.0.0.1)。
 #[tauri::command]
 async fn launch_console(app: AppHandle, mode: String, expose: Option<bool>) -> Result<String, String> {
-    if !matches!(mode.as_str(), "legacy" | "pro" | "easy") {
+    if !matches!(mode.as_str(), "legacy" | "pro" | "easy" | "call") {
         return Err(format!("未知控制台模式: {mode}"));
     }
     // 探活最长 180s, 放到阻塞线程池, 避免卡住 async runtime
@@ -157,16 +174,91 @@ async fn launch_console(app: AppHandle, mode: String, expose: Option<bool>) -> R
         .map_err(|e| format!("内部任务失败: {e}"))?
 }
 
-/// launcher.html 每次加载时调用 (含从控制台返回): 收尾上一个控制台的 sidecar。
+/// 进入控制台: pro/easy 优先走热通道 (服务常驻且 expose 一致 → 直接导航, 秒进);
+/// 服务不可用 / legacy / expose 切换 → 回落 launch_console 冷启动。
+#[tauri::command]
+async fn enter_console(app: AppHandle, mode: String, expose: Option<bool>) -> Result<String, String> {
+    let expose = expose.unwrap_or(false);
+    if mode == "legacy" {
+        return launch_console(app, mode, Some(expose)).await;
+    }
+    let state: State<ServerState> = app.state();
+    let base = state.base_url.lock().unwrap().clone();
+    if let Some(base) = base {
+        // 热通道前提: 服务进程还活着且监听模式与请求一致
+        let alive = ureq::get(&format!("{base}/api/adr/v1/health"))
+            .timeout(Duration::from_secs(2))
+            .call()
+            .map(|r| r.status() == 200)
+            .unwrap_or(false);
+        if alive && state.expose.load(Ordering::Relaxed) == expose {
+            let target = match mode.as_str() {
+                "pro" => format!("{base}/pro?desktop=1"),
+                "easy" => format!("{base}/easy?desktop=1"),
+                _ => format!("{base}/call?desktop=1"),
+            };
+            let window = app.get_webview_window("main");
+            navigate(&window, &target);
+            return Ok(target);
+        }
+    }
+    launch_console(app, mode, Some(expose)).await
+}
+
+/// launcher.html 每次加载时调用 (含从控制台返回): 更新托盘态。
+/// 服务常驻预热 (启动即拉起), 不再杀进程 — pro/easy 返回启动器后可秒进。
 /// 远程控制台页 (http://127.0.0.1:P) 不在 capability 授权范围内, 无法走 IPC,
 /// 其返回按钮是纯 location 导航回本页, 因此统一由本页 (本地 origin) 收尾。
 #[tauri::command]
 fn on_launcher_ready(app: AppHandle) {
     let state: State<ServerState> = app.state();
-    kill_current(&state);
+    let tip = if state.prewarm_done.load(Ordering::Relaxed) {
+        "ADR Studio — 引擎已预热 (启动器)"
+    } else {
+        "ADR Studio — 引擎加载中 (启动器)"
+    };
     if let Some(t) = app.tray_by_id("adr-tray") {
-        let _ = t.set_tooltip(Some("ADR Studio — 引擎已停止"));
+        let _ = t.set_tooltip(Some(tip));
     }
+}
+
+/// 引擎当前状态 (launcher 顶栏显示): 未启动 / 加载中 / 已预热。
+#[tauri::command]
+fn engine_status(app: AppHandle) -> serde_json::Value {
+    let state: State<ServerState> = app.state();
+    let running = state.pid.load(Ordering::Relaxed) != 0;
+    let ready = state.prewarm_done.load(Ordering::Relaxed);
+    let phase = match (running, ready) {
+        (false, _) => "stopped",
+        (true, true) => "ready",
+        (true, false) => "loading",
+    };
+    serde_json::json!({ "phase": phase })
+}
+
+/// 用户强制放行 (预热页失败/超时的「仍要进入」): 跳启动器, 引擎继续后台加载。
+#[tauri::command]
+fn skip_prewarm(app: AppHandle) {
+    let state: State<ServerState> = app.state();
+    state.prewarm_done.store(true, Ordering::Relaxed);
+    let window = app.get_webview_window("main");
+    navigate(&window, &format!("{TAURI_ORIGIN}/launcher.html"));
+}
+
+/// 预热页「重试」: 杀现服务重新走完整预热流程。
+#[tauri::command]
+async fn retry_prewarm(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state: State<ServerState> = app.state();
+        state.prewarm_done.store(false, Ordering::Relaxed);
+        kill_current(&state);
+        let window = app.get_webview_window("main");
+        navigate(&window, &format!("{TAURI_ORIGIN}/prewarm.html"));
+        std::thread::sleep(Duration::from_millis(600));
+        prewarm_flow(app);
+    })
+    .await
+    .map_err(|e| format!("内部任务失败: {e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -182,6 +274,7 @@ fn launch_blocking(app: AppHandle, mode: String, expose: bool) -> Result<String,
     kill_current(&state);
     *state.mode.lock().unwrap() = mode.clone();
     state.expose.store(expose, Ordering::Relaxed);
+    state.prewarm_done.store(false, Ordering::Relaxed); // 冷启动, 引擎待重新预热
     std::thread::sleep(Duration::from_millis(600));
 
     navigate(&window, &format!("{TAURI_ORIGIN}/loading.html"));
@@ -211,6 +304,30 @@ fn start_and_wait(
     window: &Option<WebviewWindow>,
     state: &State<ServerState>,
 ) -> Option<(Child, String, Instant)> {
+    let (child, started) = start_server(mode, window, state)?;
+    let base = state.base_url.lock().unwrap().clone().unwrap_or_default();
+    // ?desktop=1: 控制台页据此显示"返回启动器" (壳内标记; 浏览器直开不带)
+    let target = match mode {
+        "legacy" => format!("{base}/"),
+        "pro" => format!("{base}/pro?desktop=1"),
+        "easy" => format!("{base}/easy?desktop=1"),
+        _ => format!("{base}/call?desktop=1"),
+    };
+    let expose_tip = if state.expose.load(Ordering::Relaxed) { " (对外服务)" } else { "" };
+    if let Some(t) = app.tray_by_id("adr-tray") {
+        let _ = t.set_tooltip(Some(format!("ADR Studio — {target}{expose_tip}")));
+    }
+    navigate(window, &target);
+    Some((child, target, started))
+}
+
+/// 启动 sidecar 并探活 (不导航, 预热流程与 launch_console 共用)。
+/// 成功后写 pid/base_url; 返回 (子进程, 启动时刻); 失败返回 None。
+fn start_server(
+    mode: &str,
+    window: &Option<WebviewWindow>,
+    state: &State<ServerState>,
+) -> Option<(Child, Instant)> {
     let Some(port) = free_tcp_port() else {
         update_status(window, "端口分配失败, 正在重试…");
         return None;
@@ -254,6 +371,7 @@ fn start_and_wait(
         }
     };
     state.pid.store(child.id(), Ordering::Relaxed);
+    *state.base_url.lock().unwrap() = Some(base.clone());
 
     let health_path = if mode == "legacy" { "/" } else { "/api/adr/v1/health" };
     update_status(window, "引擎加载中… 首次启动导入 torch/CUDA 较慢");
@@ -261,23 +379,105 @@ fn start_and_wait(
         kill_tree(child.id());
         let _ = child.wait();
         state.pid.store(0, Ordering::Relaxed);
+        *state.base_url.lock().unwrap() = None;
         update_status(window, "启动超时, 请检查 Python 环境 (180s 探活超时)");
         return None;
     }
+    Some((child, Instant::now()))
+}
 
-    *state.base_url.lock().unwrap() = Some(base.clone());
-    // ?desktop=1: 控制台页据此显示"返回启动器" (壳内标记; 浏览器直开不带)
-    let target = match mode {
-        "legacy" => format!("{base}/"),
-        "pro" => format!("{base}/pro?desktop=1"),
-        _ => format!("{base}/easy?desktop=1"),
-    };
-    let expose_tip = if state.expose.load(Ordering::Relaxed) { " (对外服务)" } else { "" };
-    if let Some(t) = app.tray_by_id("adr-tray") {
-        let _ = t.set_tooltip(Some(format!("ADR Studio — {target}{expose_tip}")));
+// ---------------------------------------------------------------------------
+// 启动预热流程 (setup 后台拉起, 就绪前窗口停在 prewarm.html)
+// ---------------------------------------------------------------------------
+
+/// 驱动 prewarm.html 更新阶段 (页面挂 window.__adrPrewarm 钩子)。
+fn eval_prewarm(window: &Option<WebviewWindow>, stage: &str, text: &str) {
+    if let Some(w) = window {
+        let _ = w.eval(&format!(
+            "window.__adrPrewarm && window.__adrPrewarm({}, {});",
+            js_quote(stage),
+            js_quote(text)
+        ));
     }
-    navigate(window, &target);
-    Some((child, target, Instant::now()))
+}
+
+/// 从 stats 拉引擎预热阶段 (后端 gsv_engine.stage(), 不触发加载)。
+fn fetch_engine_stage(base: &str) -> Option<String> {
+    let url = format!("{base}/api/adr/v1/system/stats");
+    let body = ureq::get(&url)
+        .timeout(Duration::from_secs(2))
+        .call()
+        .ok()?
+        .into_string()
+        .ok()?;
+    serde_json::from_str::<serde_json::Value>(&body)
+        .ok()?
+        .get("engine_stage")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// 启动预热主流程: 拉服务 → 轮询引擎阶段 → ready 后自动放行进启动器。
+/// 失败停在预热页 (「重试/仍要进入」按钮); 超时自动放行 (引擎继续后台加载)。
+fn prewarm_flow(app: AppHandle) {
+    let window = app.get_webview_window("main");
+    let state: State<ServerState> = app.state();
+
+    eval_prewarm(&window, "starting", "正在启动本地服务…");
+    let Some((child, started)) = start_server("pro", &window, &state) else {
+        eval_prewarm(&window, "failed", "服务启动失败, 请检查 Python 环境后重试");
+        return;
+    };
+    let base = state.base_url.lock().unwrap().clone().unwrap_or_default();
+
+    // 守护线程: 服务常驻, launcher 的 pro/easy 走秒进通道
+    let h = app.clone();
+    std::thread::spawn(move || supervise(h, "pro".to_string(), child, started));
+
+    // 轮询引擎预热阶段 (queued → importing → loading → kernel → ready)
+    let deadline = Instant::now() + PREWARM_TIMEOUT;
+    let mut last = String::new();
+    loop {
+        if SHUTTING_DOWN.load(Ordering::Relaxed) {
+            return;
+        }
+        // 服务被接管 (用户重试/另起控制台) → 本流程让位
+        if state.base_url.lock().unwrap().as_deref() != Some(base.as_str()) {
+            return;
+        }
+        match fetch_engine_stage(&base) {
+            Some(st) if st == "ready" => break,
+            Some(st) if st == "failed" => {
+                eval_prewarm(&window, "failed", "引擎预热失败, 请查看日志或重试");
+                return;
+            }
+            Some(st) if !st.is_empty() && st != last => {
+                last = st.clone();
+                let text = match st.as_str() {
+                    "queued" => "预热排队中, 等待服务初始化…",
+                    "importing" => "加载框架 (torch / CUDA, 首次较慢)…",
+                    "loading" => "加载模型权重…",
+                    "kernel" => "预热推理内核 (首句提速)…",
+                    _ => "预热中…",
+                };
+                eval_prewarm(&window, &st, text);
+            }
+            _ => {}
+        }
+        if Instant::now() >= deadline {
+            // 超时放行: 引擎继续后台加载, 控制台页有三态显示兜底
+            eval_prewarm(&window, "timeout", "预热超时, 先进启动器 (引擎后台继续加载)");
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+
+    // 就绪: 放行进启动器
+    state.prewarm_done.store(true, Ordering::Relaxed);
+    if let Some(t) = app.tray_by_id("adr-tray") {
+        let _ = t.set_tooltip(Some("ADR Studio — 引擎已预热 (启动器)"));
+    }
+    navigate(&window, &format!("{TAURI_ORIGIN}/launcher.html"));
 }
 
 /// 守护线程: 监控 child, 意外退出按同 mode 自动重启。

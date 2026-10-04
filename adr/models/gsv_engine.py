@@ -369,6 +369,25 @@ class GSVEngine:
 
 
 _ENGINE: Optional[GSVEngine] = None
+_LOADING = False   # 后台预热进行中 (服务启动期, 供控制台显示引擎三态)
+_STAGE = ""        # 预热细分阶段: queued/importing/loading/kernel/failed (供前端实时显示)
+
+
+def is_loading() -> bool:
+    """引擎后台预热是否进行中 (进程级, 不触发加载)。"""
+    return _LOADING
+
+
+def is_ready() -> bool:
+    """引擎是否已就绪可合成 (_tts 权重已加载, 不触发加载)。"""
+    return _ENGINE is not None and _ENGINE._tts is not None
+
+
+def stage() -> str:
+    """预热细分阶段 (人读字符串, 不触发加载): ready 优先, 其余见 _STAGE。"""
+    if is_ready():
+        return "ready"
+    return _STAGE
 
 
 def get_gsv_engine() -> GSVEngine:

@@ -44,8 +44,11 @@ router = APIRouter(prefix="/api/adr/v1", tags=["adr-console"])
 # ---------------------------------------------------------------------------
 
 def _gpu_stats() -> dict | None:
-    """显存占用 (首次调用会触发 torch 导入, 之后走模块缓存)。"""
+    """显存占用 (torch 已在进程内才查, 否则返回 None)。"""
     try:
+        import sys
+        if "torch" not in sys.modules:
+            return None  # 预热导入 torch 期间不并发 import (抢锁阻塞线程池)
         import torch
         if not torch.cuda.is_available():
             return None
@@ -115,15 +118,6 @@ def _disk_stats() -> dict | None:
         return None
 
 
-def _engine_loaded() -> bool:
-    """GSV 引擎是否已加载 (只看单例标记, 不触发加载)。"""
-    try:
-        from adr.models import gsv_engine
-        return gsv_engine._ENGINE is not None
-    except Exception:
-        return False
-
-
 def _profile_count() -> int:
     try:
         from adr.models import voice_library
@@ -145,15 +139,24 @@ def _model_stats() -> dict:
 
 
 @router.get("/system/stats", summary="控制台总览: 硬件 + 引擎 + 业务状态")
-async def system_stats():
+def system_stats():
+    # 普通 def (非 async): FastAPI 自动丢线程池执行 — GPU 查询/文件 IO
+    # 慢时只占工作线程, 不再卡死事件循环 (曾导致全接口僵死, 实测踩坑)
+    from adr.models import gsv_engine
     return {
         "gpu": _gpu_stats(),
         "ram": _ram_stats(),
         "disk": _disk_stats(),
-        "engine_loaded": _engine_loaded(),
+        # 引擎三态: loading=后台预热中 / ready=_tts 就绪可合成
+        "engine_loading": gsv_engine.is_loading(),
+        "engine_ready": gsv_engine.is_ready(),
+        # 预热细分阶段: queued/importing/loading/kernel/ready/failed/""
+        "engine_stage": gsv_engine.stage(),
         "profiles": _profile_count(),
         "models": _model_stats(),
-        "train": train_status(),
+        # 注意: train_status 是 async, 直接调用返回 coroutine 会被
+        # jsonable_encoder 拒绝 → 整个 stats 500 (实测踩坑), 必须用同步快照
+        "train": _train_snapshot(),
         "uptime_sec": round(time.time() - _BOOT_T0, 1),
         "python": sys.version.split()[0],
     }
@@ -524,7 +527,7 @@ async def models_download_status():
 # ---------------------------------------------------------------------------
 
 def register_pages(app) -> None:
-    """把静态控制台页挂到服务根: / → index, /pro, /easy。"""
+    """把静态控制台页挂到服务根: / → index, /pro, /easy, /call。"""
 
     @app.get("/", include_in_schema=False)
     async def _index():
@@ -537,3 +540,7 @@ def register_pages(app) -> None:
     @app.get("/easy", include_in_schema=False)
     async def _easy():
         return FileResponse(STATIC_DIR / "easy.html", media_type="text/html")
+
+    @app.get("/call", include_in_schema=False)
+    async def _call():
+        return FileResponse(STATIC_DIR / "call.html", media_type="text/html")

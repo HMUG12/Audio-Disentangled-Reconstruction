@@ -213,7 +213,7 @@
     <h2>引擎与业务状态</h2>
     <div class="grid g4">
       <div class="card"><div class="k">GSV 引擎</div><div class="v" id="cEng">—</div>
-        <div class="k" style="margin-top:6px">首次合成时惰性加载</div></div>
+        <div class="k" style="margin-top:6px" id="cEngSub">服务启动即后台预热</div></div>
       <div class="card"><div class="k">音色档案</div><div class="v acc" id="cProf">—</div></div>
       <div class="card"><div class="k">预训练模型</div><div class="v" id="cModel">—</div></div>
       <div class="card"><div class="k">训练任务</div><div class="v" id="cTrain">—</div></div>
@@ -322,11 +322,63 @@
         </div>
       </div>
 
+      <details style="margin-top:14px" id="sAdv">
+        <summary style="cursor:pointer;color:#667795;font-size:12.5px;user-select:none">高级参数（采样 / 切句 / 语言）</summary>
+        <div class="grid g3" style="gap:14px;margin-top:12px">
+          <div>
+            <label class="f">文本语言</label>
+            <select id="sLang">
+              <option value="zh" selected>中文 zh</option>
+              <option value="en">英文 en</option>
+              <option value="ja">日文 ja</option>
+              <option value="ko">韩文 ko</option>
+              <option value="yue">粤语 yue</option>
+            </select>
+          </div>
+          <div>
+            <label class="f">参考音频语言</label>
+            <select id="sPromptLang">
+              <option value="zh" selected>中文 zh</option>
+              <option value="en">英文 en</option>
+              <option value="ja">日文 ja</option>
+              <option value="ko">韩文 ko</option>
+              <option value="yue">粤语 yue</option>
+            </select>
+          </div>
+          <div>
+            <label class="f">切句方式</label>
+            <select id="sCut">
+              <option value="cut1" selected>凑四句一切 (稳)</option>
+              <option value="cut0">不切 (整段)</option>
+              <option value="cut3">按句号切 (快出声)</option>
+              <option value="cut5">按标点切</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid g3" style="gap:14px;margin-top:12px">
+          <div>
+            <label class="f">top_k <span style="color:#667795">(候选收窄, 短句防跑偏)</span></label>
+            <input type="number" id="sTopK" value="15" min="1" max="100" step="1">
+          </div>
+          <div>
+            <label class="f">top_p <span id="sTopPV" style="color:var(--accent)">1.00</span></label>
+            <input type="range" id="sTopP" min="0.05" max="1" step="0.05" value="1">
+          </div>
+          <div>
+            <label class="f">temperature <span id="sTempV" style="color:var(--accent)">1.00</span></label>
+            <input type="range" id="sTemp" min="0.1" max="2" step="0.05" value="1">
+          </div>
+        </div>
+        <div class="hint" style="margin-top:10px">
+          调参手感: top_k↓ / temperature↓ 更稳定但平淡; 反之更随机有情感, 也更容易读错字。
+        </div>
+      </details>
+
       <div class="row end" style="margin-top:16px">
         <button class="btn pri" id="sGo">✦ 开始合成</button>
       </div>
       <div class="hint" style="margin-top:10px">
-        服务未加载引擎时首次合成需要先加载模型（可能耗时 1-3 分钟），后续合成秒级返回。
+        服务启动后引擎会在后台自动加载（总览页可见进度），就绪后合成秒级返回；就绪前点合成会自动等待加载完成。
       </div>
     </div>
 
@@ -506,8 +558,20 @@ async function loadStats() {
       $("pDisk").style.width = (d.disk.used_gb / d.disk.total_gb * 100).toFixed(1) + "%";
     }
     const eng = $("cEng");
-    eng.textContent = d.engine_loaded ? "已加载" : "未加载";
-    eng.className = "v " + (d.engine_loaded ? "ok" : "");
+    const STAGE_TXT = {
+      ready: "已就绪",
+      queued: "排队启动中…",
+      importing: "① 加载框架 (torch/模块)…",
+      loading: "② 加载模型权重…",
+      kernel: "③ 预热计算内核…",
+      failed: "预热失败 (首次合成时重试)",
+    };
+    const stage = d.engine_stage || "";
+    if (d.engine_ready) { eng.textContent = "已就绪"; eng.className = "v ok";
+      $("cEngSub").textContent = "合成秒级返回"; }
+    else if (stage === "failed") { eng.textContent = STAGE_TXT.failed; eng.className = "v err"; }
+    else if (STAGE_TXT[stage]) { eng.textContent = STAGE_TXT[stage]; eng.className = "v acc"; }
+    else { eng.textContent = "未加载"; eng.className = "v"; }
     $("cProf").textContent = d.profiles + " 个";
     $("cModel").innerHTML = `${d.models.cached} <small>/ ${d.models.total}</small>`;
     const tr = $("cTrain");
@@ -722,6 +786,8 @@ async function loadProfiles() {
 $("pRefresh").onclick = loadProfiles;
 
 $("sSp").oninput = e => $("sSpV").textContent = (+e.target.value).toFixed(2);
+$("sTopP").oninput = e => $("sTopPV").textContent = (+e.target.value).toFixed(2);
+$("sTemp").oninput = e => $("sTempV").textContent = (+e.target.value).toFixed(2);
 
 let lastUrl = null;
 $("sGo").onclick = async () => {
@@ -745,6 +811,12 @@ $("sGo").onclick = async () => {
         speed_factor: +$("sSp").value,
         seed: parseInt($("sSeed").value || "-1", 10),
         media_type: $("sFmt").value,
+        text_lang: $("sLang").value,
+        prompt_lang: $("sPromptLang").value,
+        text_split_method: $("sCut").value,
+        top_k: parseInt($("sTopK").value || "15", 10),
+        top_p: +$("sTopP").value,
+        temperature: +$("sTemp").value,
       })
     });
     clearTimeout(kill);
