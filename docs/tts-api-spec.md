@@ -22,6 +22,7 @@ python -m adr.server -p 9880     # 自定义端口
 | 环境变量 | 说明 |
 |---|---|
 | `ADR_TTS_DEFAULT_PROFILE` | 默认音色档案名; 请求未带 `ref_audio_path`/`profile` 时回退使用 |
+| `ADR_TTS_API_KEY` | API Key (鉴权), 逗号分隔可配多个; **未设置则不鉴权** (默认, N.E.K.O 零改造) |
 
 首次请求会加载引擎 (~10s 冷启动), 之后常驻; 权重支持请求级热换。
 推理串行 (引擎内部锁), 并发请求排队 — 与 GSV api_v2 部署行为一致。
@@ -211,7 +212,44 @@ meta.json  {"prompt_text", "t2s_weights", "vits_weights",
 
 > N.E.K.O 的消费面是 api_v2 (tts.py), 不依赖 v3 队列/WS — 上述缺口不影响对接。
 
-## 7. 安全注记
+## 7. 安全与鉴权
 
-服务面向局域网信任环境设计 (与 GSV 生态一致): 无鉴权, CORS 全开,
-`ref_audio_path`/权重路径为服务器本地路径。公网暴露请自行加反向代理鉴权。
+### 7.1 默认行为 (局域网信任环境, 与 GSV 生态一致)
+
+不设置 `ADR_TTS_API_KEY` 时**不鉴权**, CORS 全开 — N.E.K.O 及一切
+GSV 生态客户端零改造直连。
+
+### 7.2 API Key 鉴权 (推荐公网/半信任环境启用)
+
+```powershell
+$env:ADR_TTS_API_KEY = "my-secret-key"          # 单 key
+$env:ADR_TTS_API_KEY = "key-a,key-b"            # 多 key (发给不同消费方)
+python -m adr.server
+```
+
+启用后所有端点要求凭据, 三种携带方式等价:
+
+| 方式 | 示例 |
+|---|---|
+| Authorization 头 | `Authorization: Bearer my-secret-key` |
+| X-API-Key 头 | `X-API-Key: my-secret-key` |
+| 查询参数 | `/api/v2/tts?text=...&api_key=my-secret-key` |
+
+- key **精确匹配** (大小写敏感); 未通过 → `401 {"message": "unauthorized"}`
+- 豁免路径: `GET /api/adr/v1/health` (监控探活免凭据)
+- CORS 预检 (OPTIONS) 不要求凭据, 浏览器前端可正常携带凭据跨域调用
+
+curl 示例:
+
+```bash
+curl -H "Authorization: Bearer my-secret-key" \
+     -X POST http://127.0.0.1:9881/api/v2/tts \
+     -H "Content-Type: application/json" \
+     -d '{"text": "你好", "profile": "demo"}' --output out.wav
+```
+
+### 7.3 其余注记
+
+`ref_audio_path`/权重切换端点接受服务器本地路径 — 等同于把文件系统
+部分读权交给调用方, 请勿对不可信方开放 (公网部署建议: 反向代理 +
+HTTPS + 限定 key 消费方)。

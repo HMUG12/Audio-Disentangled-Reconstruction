@@ -198,3 +198,16 @@
 - [x] **测试 `tests/test_server_api.py`** ✅: FakeEngine (不加载真模型) 26 用例 — 参数校验 400 / 非流式 WAV/raw 字节数 / 流式首块头+裸 PCM / streaming_mode 分支语义 (含 bool) / 权重端点成功与失败格式 / profile 解析与覆盖优先级 / 默认档案环境变量 / 原生端点全量
 - 关键修复: 拆包顺序 — ADR 引擎 `synthesize_stream` yield `(chunk, sr)` 与 GSV pipeline `(sr, chunk)` 相反 (探针定位)
 - 回归: 240 passed + 1 skipped (基线 214 + 新增 26), 零回归
+
+### 批次 12 (2026-10-04): TTS 服务鉴权 + 推送
+
+> 用户指令: 推送批次 11 + 补鉴权机制 + 回答 neko 连接问题。
+
+- [x] **推送** ✅: 批次 11 (`47ed0c8`) 首推遇 SSL_ERROR_SYSCALL 网络错误, 重试成功 `bf87db7..47ed0c8 main`
+- [x] **API Key 鉴权** ✅ (`adr/server/auth.py` + `app.py` 接线): `ADR_TTS_API_KEY` 环境变量 (逗号分隔多 key, 空串=关闭); 接受 `Authorization: Bearer` / `X-API-Key` / `?api_key=` 三通道等价; key 精确匹配; 失败统一 `401 {"message": "unauthorized"}`; 豁免 `/api/adr/v1/health` (监控探活)。**默认不鉴权** — N.E.K.O 零改造兼容不受影响
+- 中间件顺序: APIKey 先加 (内层), CORS 后加 (外层) — 预检 OPTIONS 免 key, 401 响应带 CORS 头 (浏览器可读)
+- 纯 ASGI 实现 (无 BaseHTTPMiddleware 开销, 无框架耦合)
+- [x] **测试** ✅: 7 新增 (默认开放 / 缺 key 401 / 错 key 401 / 三通道 / 精确匹配 / health 豁免 / 空串=关闭); `client` fixture 加 delenv 防 env 泄漏
+- [x] **文档** ✅: `docs/tts-api-spec.md` §7 重写 (默认行为 / 启用方法 / 三通道表 / curl 示例 / 本地路径注记)
+- 回归: 33 passed (服务层 26+7); 全量回归见提交说明
+

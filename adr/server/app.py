@@ -7,6 +7,7 @@
 
 环境变量:
     ADR_TTS_DEFAULT_PROFILE  默认音色档案名 (ref_audio_path 缺失时回退)
+    ADR_TTS_API_KEY          API Key, 逗号分隔多个; 未设置则不鉴权 (默认)
 """
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from adr.server import native, v2_compat
+from adr.server.auth import APIKeyMiddleware
 
 
 def create_app(engine=None) -> FastAPI:
@@ -24,6 +26,10 @@ def create_app(engine=None) -> FastAPI:
         version="1.0",
         description="ADR 低资源声音克隆 — GSV api_v2 兼容层 + ADR 原生档案 API",
     )
+    # 鉴权 (批次12): 先加 = 内层; 未设 ADR_TTS_API_KEY 时完全放行。
+    # CORS 需在外层: 预检 OPTIONS 免 key, 401 响应也带 CORS 头 (浏览器可读)。
+    api_keys = [k.strip() for k in os.environ.get("ADR_TTS_API_KEY", "").split(",")]
+    app.add_middleware(APIKeyMiddleware, api_keys=api_keys)
     # CORS 全开 (与 api_neko 一致): N.E.K.O 前端 / 浏览器插件直连
     app.add_middleware(
         CORSMiddleware,
