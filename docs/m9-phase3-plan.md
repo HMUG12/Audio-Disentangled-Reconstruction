@@ -227,3 +227,18 @@
 - [x] **cargo check 验证** ✅ (零警告): 编译期修 4 处 — `TrayIcon::set_tooltip` 在 tauri 2.12 签名为 `Option<S>` (3 处), `if let` 条件里 MutexGuard 临时值存活到块尾导致 E0597 (先 clone 到局部变量); 另自查修复 `creation_flags` 缺 `CommandExt` 导入
 - [x] **用户实测 → 修复 UI 挂载** ✅: 实测窗口显示 `{"detail":"Not Found"}` — 根因: 壳最初拉起的 `python -m adr.server` 是批次 11 的**无头 FastAPI API 服务** (无 `/` 路由), 而真正的 Web 控制台是 `adr/webui` (Gradio 6), 导航 `/` 必 404。修复: spawn 改 `python -m adr.cli webui --host 127.0.0.1 --port <P> --no-browser` (cli.py 自带 `__main__` guard, Python 侧零改动), 探活 `/api/adr/v1/health` → 轮询 `GET /`, 仓库根标记同步改 `adr/cli.py`。"127.0.0.1 拒绝连接"为衍生症状 (每次启动随机端口, 旧地址失效), 修复后 base_url 始终指向当前健康端口。注: 备选方案 B (`adr.server` 加 `--ui` 用 `gr.mount_gradio_app` 单进程挂载) 因 Gradio 6 theme/css/queue/prewarm 迁移细节多而弃用
 
+### 批次 14 (2026-10-04): 三控制台改造 — 启动器三选一 + 专业/新手控制台
+
+> 用户指令: 启动时 3 个可选项 (老版本控制台 / 专业控制台 / 新手控制台), 后两个要现代化、数据可视化高级感设计, 新手控制台尽可能傻瓜化白痴化 (用户当纯小白)。
+
+- [x] **Commit A `020d0d6`: 三控制台骨架** ✅ (10 文件 +1096/-105):
+  - `adr/server/console.py` (新): 控制台 API (prefix `/api/adr/v1`) — `GET /system/stats` (GPU/RAM/磁盘 psutil+NVML, 引擎/档案/模型/训练状态汇总), `POST /train/start` (409 互斥, exp 名清洗, epochs clamp 1-50, `--skip-s1` 恒定, 4gb 配方加 `--max-clip-sec 10`), `GET /train/status` (log_tail 80 行 + gate_curve 全量读 jsonl), `POST /train/stop`, `POST /train/upload` (multipart, ext 白名单), `GET /models` + `POST /models/download` + 下载进度轮询 (tqdm 百分比正则)
+  - 静态页挂载: `/` → index (三卡片跳转), `/pro` → pro.html, `/easy` → easy.html; `auth.py` 豁免三静态页
+  - `desktop/src/launcher.html`: 三卡片选择 → `invoke("launch_console", {mode})`; legacy 拉 `adr.cli webui` (探活 `/`), pro/easy 拉 `adr.server` (探活 `/api/adr/v1/health`) → 绝对 URL 导航
+  - `lib.rs` 重构 (~464 行): 三模式按需启动 + supervise 守护让位规则 + kill_current 服务互斥; cargo check/build 一次通过
+- [x] **Commit B `c3b003b`: 专业控制台 pro.html 完整版** ✅ (1 文件 +805/-53): 深色高级感 (#0a0d14 底 + #2dd4bf/#60a5fa 双 accent), 四 tab — 总览 (GPU/内存 270° 环形仪表, 磁盘条, 显存 sparkline 60 点采样), 声音克隆 (拖拽上传 + 相似度曲线 canvas: 0.80 目标线/zero_shot 虚线/最佳点金色标注), 语音合成 (blob 播放/下载, 600s 超时), 模型库 (表格 + 下载进度)。api_key URL 透传; 手写 canvas 零依赖 (DPR 适配); 修 3 处重复 `id="errline"`
+- [x] **Commit C `1ab082d`: 新手控制台 easy.html 完整版** ✅ (2 文件 +625/-40):
+  - `console.py` 增建档 API: `POST /profiles/create` + `GET /profiles/create/status` (save_voice_auto 后台线程, 同名 409, 任务互斥; 长音频扫段需引擎加载 1-3 分钟故必须异步轮询)
+  - `easy.html` 三步向导 (暖色友好风, 大字体大按钮, 零术语): ①选声音 (卡片点选 / 上传零样本建档双模式轮询 / 可选"进阶加练"训练按显存自动选配方) ②打字 (示例句一键填充) ③听效果 (大播放球 + 保存/改文字/换声音); 人话错误翻译 `human()`; 零样本优先产品设计 — 建档即可合成, 训练做成可选, 避免小白等 20-60 分钟
+- 全部提交**未推送**; 阶段 0 便携 Python 打包留待后续 (用户此前拍板延后)
+
