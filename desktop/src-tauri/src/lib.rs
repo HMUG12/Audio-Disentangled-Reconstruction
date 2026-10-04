@@ -1,8 +1,9 @@
 //! ADR Studio 桌面壳 (Tauri 2)。
 //!
 //! 职责:
-//! 1. sidecar 托管: 启动 ``python -m adr.server --addr 127.0.0.1 --port <随机空闲端口>``
-//! 2. 健康探活: ``GET /api/adr/v1/health`` 通过后把窗口导航到本地 Web 控制台
+//! 1. sidecar 托管: 启动 ``python -m adr.cli webui --host 127.0.0.1 --port <随机空闲端口> --no-browser``
+//!    (Gradio Web 控制台, 与命令行 ``adr webui`` 同一入口)
+//! 2. 健康探活: 轮询 ``GET /`` 通过后把窗口导航到本地 Web 控制台
 //! 3. 进程守护: 服务意外退出自动重启 (稳定运行 60s 后重置失败计数)
 //! 4. 托盘: 显示窗口 / 浏览器打开 / 退出 (退出时 taskkill /T 杀整棵服务进程树)
 //! 5. 关窗 = 隐藏到托盘, 真正退出只走托盘菜单
@@ -150,8 +151,13 @@ fn supervisor(app: AppHandle) {
         let url = format!("http://127.0.0.1:{port}");
 
         let mut cmd = Command::new(&python);
-        cmd.args(["-m", "adr.server", "--addr", "127.0.0.1", "--port", &port.to_string()])
-            .current_dir(&cwd);
+        cmd.args([
+            "-m", "adr.cli", "webui",
+            "--host", "127.0.0.1",
+            "--port", &port.to_string(),
+            "--no-browser",
+        ])
+        .current_dir(&cwd);
         if let Some(pp) = &pythonpath {
             cmd.env("PYTHONPATH", pp);
         }
@@ -213,9 +219,9 @@ fn supervisor(app: AppHandle) {
     }
 }
 
-/// 轮询 /api/adr/v1/health 直到 200 或超时。
+/// 轮询 Web 控制台首页 (/) 直到 200 或超时 (Gradio 就绪即全站可用)。
 fn wait_healthy(base: &str, window: &Option<WebviewWindow>) -> bool {
-    let url = format!("{base}/api/adr/v1/health");
+    let url = format!("{base}/");
     let deadline = Instant::now() + HEALTH_TIMEOUT;
     let mut note = Instant::now();
     while Instant::now() < deadline {
@@ -265,7 +271,7 @@ fn resolve_runtime() -> (PathBuf, PathBuf, Option<PathBuf>) {
     (PathBuf::from("python"), root, None)
 }
 
-/// 从 cwd / exe 逐级向上探测仓库根 (以 adr/server/__main__.py 为标记)。
+/// 从 cwd / exe 逐级向上探测仓库根 (以 adr/cli.py 为标记)。
 fn find_repo_root() -> PathBuf {
     let mut bases: Vec<PathBuf> = Vec::new();
     if let Ok(c) = std::env::current_dir() {
@@ -278,7 +284,7 @@ fn find_repo_root() -> PathBuf {
     }
     for mut base in bases {
         for _ in 0..8 {
-            if base.join("adr").join("server").join("__main__.py").exists() {
+            if base.join("adr").join("cli.py").exists() {
                 return base;
             }
             if !base.pop() {
