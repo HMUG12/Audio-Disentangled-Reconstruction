@@ -1,0 +1,15 @@
+{
+  "name": "adr-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ADR Studio 桌面壳 (Tauri 2 + Python sidecar)",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "icon": "tauri icon assets/icon.png -o src-tauri/icons"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}
