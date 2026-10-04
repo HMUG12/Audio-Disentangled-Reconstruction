@@ -6,6 +6,7 @@
 - set_gpt/set_sovits_weights 端点与错误格式
 - profile/voice 档案解析 + ADR_TTS_DEFAULT_PROFILE 回退
 - /api/adr/v1 原生端点 (health/profiles/ref/tts)
+- ADR_TTS_API_KEY 鉴权 (Bearer/X-API-Key/query 三通道 + 豁免 health + 默认关闭)
 """
 import json
 
@@ -61,7 +62,9 @@ def engine():
 
 
 @pytest.fixture
-def client(engine):
+def client(engine, monkeypatch):
+    # 防鉴权用例的环境变量泄漏到默认 client
+    monkeypatch.delenv("ADR_TTS_API_KEY", raising=False)
     return TestClient(create_app(engine=engine))
 
 
@@ -309,3 +312,69 @@ def test_native_tts_get_and_stream(client, engine, voice_dir):
     assert r.status_code == 200
     _assert_stream_wav(r.content)
     assert len(engine.stream_calls) == 1
+
+
+# ─── 鉴权 (ADR_TTS_API_KEY) ───
+
+@pytest.fixture
+def auth_client(engine, monkeypatch):
+    """双 key 配置: k1 / k2 (逗号分隔 + 空格, 验证解析健壮性)。"""
+    monkeypatch.delenv("ADR_TTS_API_KEY", raising=False)
+    monkeypatch.setenv("ADR_TTS_API_KEY", "k1, k2")
+    return TestClient(create_app(engine=engine))
+
+
+def test_auth_open_by_default(engine, monkeypatch):
+    """未配置 key → 完全放行 (N.E.K.O 零改造兼容)。"""
+    monkeypatch.delenv("ADR_TTS_API_KEY", raising=False)
+    c = TestClient(create_app(engine=engine))
+    assert c.get("/api/adr/v1/health").status_code == 200
+    r = c.post("/api/v2/tts", json={"text": "hi", "ref_audio_path": "a.wav"})
+    assert r.status_code == 200
+
+
+def test_auth_missing_key_401(auth_client):
+    r = auth_client.post("/api/v2/tts", json={"text": "hi", "ref_audio_path": "a.wav"})
+    assert r.status_code == 401
+    assert r.json() == {"message": "unauthorized"}
+
+
+def test_auth_wrong_key_401(auth_client):
+    r = auth_client.get("/api/v2/tts",
+                        params={"text": "hi", "ref_audio_path": "a.wav"},
+                        headers={"Authorization": "Bearer nope"})
+    assert r.status_code == 401
+
+
+def test_auth_three_credential_channels(auth_client, engine):
+    """Bearer 头 / X-API-Key 头 / 查询参数 三通道等价。"""
+    for kwargs in (
+        {"headers": {"Authorization": "Bearer k1"}},
+        {"headers": {"X-API-Key": "k2"}},
+        {"params": {"api_key": "k1"}},
+    ):
+        r = auth_client.post("/api/v2/tts",
+                             json={"text": "hi", "ref_audio_path": "a.wav"}, **kwargs)
+        assert r.status_code == 200, kwargs
+    assert len(engine.synth_calls) == 3
+
+
+def test_auth_keys_exact_match(auth_client):
+    """key 大小写敏感; 逗号+空格分隔解析出的 k1/k2 都可用。"""
+    assert auth_client.get("/api/adr/v1/profiles",
+                           headers={"X-API-Key": "K1"}).status_code == 401
+    assert auth_client.get("/api/adr/v1/profiles",
+                           headers={"X-API-Key": "k2"}).status_code == 200
+
+
+def test_auth_health_exempt(auth_client):
+    """监控探活免凭据。"""
+    assert auth_client.get("/api/adr/v1/health").status_code == 200
+
+
+def test_auth_empty_value_means_off(engine, monkeypatch):
+    """ADR_TTS_API_KEY 置空串 = 未配置 → 放行。"""
+    monkeypatch.setenv("ADR_TTS_API_KEY", "")
+    c = TestClient(create_app(engine=engine))
+    assert c.post("/api/v2/tts",
+                  json={"text": "hi", "ref_audio_path": "a.wav"}).status_code == 200
