@@ -131,6 +131,10 @@ class GSVEngine:
     def _lazy_init(self):
         if self._tts is not None:
             return
+        # 批次10: t2s CUDA Graph 桥 — AR 提速 3.77x 但官方 SDPA 实现下 AR 分布
+        # 漂移 (同输入 45→254 token, 音频时长翻倍), 默认关闭; 需上游修复后
+        # 可设 ADR_T2S_CUDAGRAPH=1 启用 (诊断见 docs/m9-phase3-plan.md 批次10)
+        os.environ.setdefault("ADR_T2S_CUDAGRAPH", "0")
         # 兼容补丁: NLTK (英文 G2P 依赖) 离线环境下载默认超时 72s/次,
         # 收紧到 5s 快速失败走内置回退发音
         import socket

@@ -175,3 +175,14 @@
   - 4s 级长音频: 非流式 9.68s (RTF 0.99), AR 物理速度为底
 - [x] **不追的优化 (记录)**: t2s AR torch.compile — AR 的 KV cache shape 逐步递增会反复触发 recompile, 除非重构 KV cache 静态化 (改上游模型结构, 超出框架层范围); GPU ORT BERT — 需装 onnxruntime-gpu, 收益 ~0.2s 优先级低
 - [x] **测试** ✅: 4 新增 (切分×3 + 热换幂等), 回归 214 passed
+
+### 批次 10 (2026-10-04): 2 秒目标冲线尝试 — CUDA Graph 实证 + 诚实边界
+
+> 用户目标: "2s 长度 2s 内合成"。批次 9 后剩余大头 = t2s AR 逐 token 解码 (~22-26 it/s 物理底), 唯一大杠杆 = 消除 kernel launch 开销。
+
+- [x] **官方 CUDAGraphRunner 桥接入** ✅ (`adr/models/adr_t2s_bridge.py` + 补丁 #20): 官方 CUDA Graph 路径 (`AR/models/t2s_model_cudagraph.py`, KV cache 静态预分配 + graph capture/replay) 只接在 inference_webui.py, TTS_infer_pack 引擎从未享受 → 桥按官方模式挂 `infer_panel` (输入归一化 list/tensor 双形态 / bs≠1 回退 / prompt None 兜底 / 静默 tqdm / runner 单例缓存; 流式=完整 AR 后按 chunk 切块 yield)
+- [x] **AR 速度实锤 3.77x** ✅ (`_probe_cudagraph.py`): 同输入短文本 AR 阶段提速 3.77x — kernel launch 开销确实是主瓶颈, 方向判断正确
+- [x] **⚠️ 质量损坏诊断 → 默认关闭** ✅ (`_diag_cg.py`): e2e 发现音频时长翻倍 ("好的没问题" 1.74s→8.10s) + 同 seed 两轮不确定 (5.22s/7.18s) → 诊断石锤 **AR 分布漂移: 同输入 base 45 token vs cudagraph 254 token (5.6x)** — 官方 SDPA attention + 自带 Sampler 实现与原路径语义不一致, 不是等价加速而是换了条生成分布 → 按质量红线**默认关闭** (`ADR_T2S_CUDAGRAPH=0`, `gsv_engine._lazy_init` 里 setdefault), 完整实现+挂钩保留, 上游修复 SDPA 语义后设 `=1` 即启用
+- [x] **GPU ORT BERT 实验 → 放弃** ✅ (`_bench_bert_gpu.py`): HF fp16 CUDA BERT 单句仅 **43-45ms** (占 2s 预算 <2%, 优化天花板 0.04s << 0.15s 收益线); onnxruntime-gpu 1.24.4 的 CUDA EP 需 CUDA 12 runtime (`cublasLt64_12.dll`), 本机 torch 2.10+cu130 DLL 版本不匹配 → CUDA EP 加载失败回退 CPU (79-117ms, 反而慢 2x)。**结论: GPU 档 BERT 无优化价值**, 环境已还原 CPU onnxruntime (与 requirements-lock 一致)
+- **诚实边界结论**: AR ~22-26 it/s 物理速度为底, 2s 音频 (~43 语义 token) 纯 AR 已需 1.5-2s — **不动模型内核, 2s 整体合成不可达**; 批次 9 的 2.2-2.5s 即框架层极限。剩余路径: ① 上游修复 cudagraph SDPA 语义 (3.77x 白拿) ② 模型内核级蒸馏/投机解码 (超框架范围)
+- 回归: 214 passed 基线维持
