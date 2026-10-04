@@ -186,3 +186,15 @@
 - [x] **GPU ORT BERT 实验 → 放弃** ✅ (`_bench_bert_gpu.py`): HF fp16 CUDA BERT 单句仅 **43-45ms** (占 2s 预算 <2%, 优化天花板 0.04s << 0.15s 收益线); onnxruntime-gpu 1.24.4 的 CUDA EP 需 CUDA 12 runtime (`cublasLt64_12.dll`), 本机 torch 2.10+cu130 DLL 版本不匹配 → CUDA EP 加载失败回退 CPU (79-117ms, 反而慢 2x)。**结论: GPU 档 BERT 无优化价值**, 环境已还原 CPU onnxruntime (与 requirements-lock 一致)
 - **诚实边界结论**: AR ~22-26 it/s 物理速度为底, 2s 音频 (~43 语义 token) 纯 AR 已需 1.5-2s — **不动模型内核, 2s 整体合成不可达**; 批次 9 的 2.2-2.5s 即框架层极限。剩余路径: ① 上游修复 cudagraph SDPA 语义 (3.77x 白拿) ② 模型内核级蒸馏/投机解码 (超框架范围)
 - 回归: 214 passed 基线维持
+
+### 批次 11 (2026-10-04): 对外 TTS 服务层 — N.E.K.O 生态对接
+
+> 用户指令: 学习 api_neko (N.E.K.O 消费 GSV 的 HTTP 服务层), 为 ADR 预留对接口与对接规范, 对接 neko 和一切需要 TTS 服务的消费方。
+
+- [x] **api_neko 学习** ✅ (`需要适配的一个接口/api_neko.zip` 解包精读): N.E.K.O 消费面 = GPT-SoVITS **api_v2** (`/api/v2/tts` GET+POST + set_gpt/set_sovits_weights), 端口 9881; 流式 WAV 字节契约 = 首块 44B 头 + 裸 s16le PCM; streaming_mode 0/1/2/3 分支语义 (bool True == 1 落分支 1); 错误统一 `400 {"message": ...}`; v3 高级面 (task 队列 + 双 WebSocket) N.E.K.O 不依赖 → 不复刻, 文档注明差异
+- [x] **服务层 `adr/server/`** ✅: `app.py` create_app 工厂 (CORS 全开, 引擎惰性单例, 测试可注入); `v2_compat.py` api_v2 兼容层 (请求模型同名同义, streaming_mode 分支逐字对齐, 流式生成器字节契约一致, 权重切换端点走引擎预热); `native.py` ADR 原生 API `/api/adr/v1/*` (health/profiles/profiles/{name}/ref/tts); `audio_codec.py` 打包工具 (wav/raw/ogg/aac + wave_header_chunk, 字节级对齐移植); `__main__.py` `python -m adr.server -p 9881` (默认端口即 GSV 标准, N.E.K.O 零配置)
+- [x] **ADR 扩展参数** ✅: `profile`/`voice` → 音色档案解析 (ref_audio/prompt_text/微调权重自动带上, 显式值优先); `t2s_weights`/`vits_weights` 请求级热换; `ADR_TTS_DEFAULT_PROFILE` 环境变量回退; 引擎不支持的采样参数接受但忽略 (差异清单文档化)
+- [x] **对接规范 `docs/tts-api-spec.md`** ✅: 快速启动 / v2 参数表 (支持+忽略清单) / 流式字节格式与客户端拼接示例 / N.E.K.O 对接步骤 / 原生 API / 档案机制 / 与官方 api_v2 差异诚实清单 (v3 队列+WS 未实现等) / 安全注记
+- [x] **测试 `tests/test_server_api.py`** ✅: FakeEngine (不加载真模型) 26 用例 — 参数校验 400 / 非流式 WAV/raw 字节数 / 流式首块头+裸 PCM / streaming_mode 分支语义 (含 bool) / 权重端点成功与失败格式 / profile 解析与覆盖优先级 / 默认档案环境变量 / 原生端点全量
+- 关键修复: 拆包顺序 — ADR 引擎 `synthesize_stream` yield `(chunk, sr)` 与 GSV pipeline `(sr, chunk)` 相反 (探针定位)
+- 回归: 240 passed + 1 skipped (基线 214 + 新增 26), 零回归
