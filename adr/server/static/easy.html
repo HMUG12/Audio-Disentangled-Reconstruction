@@ -313,9 +313,12 @@ function human(e) {
   return s;
 }
 
+/* 返回启动器 (仅桌面壳内: 壳导航带 ?desktop=1)。
+   远程控制台页不走 Tauri IPC (ACL 限制), 纯导航回壳内启动器, 由 launcher 收尾引擎。 */
 const back = $("back");
-if (!window.__TAURI__) back.style.display = "none";
-back.onclick = () => window.__TAURI__ && window.__TAURI__.core.invoke("back_to_launcher");
+const isDesktop = new URLSearchParams(location.search).get("desktop") === "1";
+if (!isDesktop) back.style.display = "none";
+back.onclick = () => { if (isDesktop) location.href = "http://tauri.localhost/launcher.html"; };
 
 /* ---- 步骤切换 ---- */
 let step = 1;

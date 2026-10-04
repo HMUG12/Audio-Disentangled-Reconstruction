@@ -386,10 +386,13 @@ async function jfetch(url, opts) {
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const fmtGB = v => v == null ? "—" : v.toFixed(1);
 
-/* ---- 返回启动器 (仅桌面壳内) ---- */
+/* ---- 返回启动器 (仅桌面壳内: 壳导航带 ?desktop=1) ----
+   远程控制台页不在 Tauri capability 授权内, invoke 会被 ACL 拒绝,
+   因此纯 location 导航回壳内启动器, 由 launcher 加载时统一收尾引擎。 */
+const isDesktop = new URLSearchParams(location.search).get("desktop") === "1";
 const back = $("back");
-if (!window.__TAURI__) back.style.display = "none";
-back.onclick = () => window.__TAURI__ && window.__TAURI__.core.invoke("back_to_launcher");
+if (!isDesktop) back.style.display = "none";
+back.onclick = () => { if (isDesktop) location.href = "http://tauri.localhost/launcher.html"; };
 
 /* ---- Tab 切换 ---- */
 let curTab = "ov";
