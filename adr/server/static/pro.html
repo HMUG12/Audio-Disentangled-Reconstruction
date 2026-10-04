@@ -5,83 +5,835 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ADR Studio · 专业控制台</title>
 <style>
-  :root { color-scheme: dark; }
+  :root {
+    color-scheme: dark;
+    --bg: #0a0d14; --panel: #121724; --panel2: #0e1320; --line: #1f2740;
+    --txt: #e8ecf4; --sub: #8fa1c0; --dim: #667795;
+    --accent: #2dd4bf; --accent2: #60a5fa; --warn: #f0b429; --err: #f87171;
+    --ok: #34d399;
+  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scrollbar-color: #2a3550 var(--bg); }
   body {
     font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
-    background: #0a0d14; color: #e8ecf4; min-height: 100vh; padding: 32px 40px;
+    background:
+      radial-gradient(900px 480px at 85% -10%, #173a4d55, transparent 60%),
+      radial-gradient(800px 420px at -10% 110%, #1a2c5a55, transparent 60%),
+      var(--bg);
+    color: var(--txt); min-height: 100vh;
   }
-  header { display: flex; align-items: center; gap: 14px; margin-bottom: 28px; }
-  h1 { font-size: 20px; font-weight: 700; }
-  h1 em { font-style: normal; color: #2dd4bf; }
-  .badge { font-size: 11px; color: #f0b429; border: 1px solid #f0b42955;
-    border-radius: 999px; padding: 3px 10px; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #2a3550; border-radius: 6px; }
+
+  /* ---------- header ---------- */
+  header {
+    position: sticky; top: 0; z-index: 50; display: flex; align-items: center;
+    gap: 20px; padding: 14px 28px;
+    background: #0a0d14e6; backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--line);
+  }
+  .brand { display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
+  .brand b { font-size: 18px; letter-spacing: .3px;
+    background: linear-gradient(90deg, #2dd4bf, #60a5fa);
+    -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .brand span { font-size: 12px; color: var(--dim); }
+  nav { display: flex; gap: 4px; flex: 1; }
+  nav button {
+    background: none; border: none; color: var(--sub); font-size: 13.5px;
+    padding: 8px 16px; border-radius: 8px; cursor: pointer; transition: .18s;
+    font-family: inherit;
+  }
+  nav button:hover { color: var(--txt); background: #ffffff0d; }
+  nav button.on { color: var(--txt); background: #2dd4bf14; box-shadow: inset 0 -2px 0 var(--accent); }
   #back {
-    margin-left: auto; background: #161d2e; color: #aebad0; border: 1px solid #263149;
-    border-radius: 8px; padding: 8px 16px; font-size: 13px; cursor: pointer;
+    background: #161d2e; color: var(--sub); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 14px; font-size: 12.5px; cursor: pointer;
+    transition: .18s; font-family: inherit; white-space: nowrap;
   }
-  #back:hover { border-color: #2dd4bf66; color: #e8ecf4; }
-  .panel { background: #121724; border: 1px solid #1f2740; border-radius: 14px;
-    padding: 22px 24px; }
-  .panel h2 { font-size: 14px; color: #8fa1c0; margin-bottom: 14px; font-weight: 600; }
-  .row { display: flex; gap: 12px; flex-wrap: wrap; }
-  .stat { flex: 1; min-width: 180px; background: #0e1320; border: 1px solid #1c2438;
-    border-radius: 10px; padding: 14px 16px; }
-  .stat .k { font-size: 12px; color: #667795; }
-  .stat .v { font-size: 18px; font-weight: 600; margin-top: 6px; }
-  .stat .v small { font-size: 12px; color: #667795; font-weight: 400; }
-  #err { color: #f87171; font-size: 13px; margin-top: 14px; min-height: 18px; }
+  #back:hover { border-color: #2dd4bf66; color: var(--txt); }
+
+  main { max-width: 1180px; margin: 0 auto; padding: 26px 28px 60px; }
+  section.tab { display: none; animation: fadein .25s ease; }
+  section.tab.on { display: block; }
+  @keyframes fadein { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; } }
+
+  .panel {
+    background: linear-gradient(180deg, #131a2a, var(--panel));
+    border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px;
+    margin-bottom: 18px;
+  }
+  .panel h2 { font-size: 13px; color: var(--sub); margin-bottom: 14px; font-weight: 600;
+    letter-spacing: .5px; display: flex; align-items: center; gap: 8px; }
+  .panel h2::before { content: ""; width: 3px; height: 12px; border-radius: 2px;
+    background: linear-gradient(180deg, var(--accent), var(--accent2)); }
+  .grid { display: grid; gap: 12px; }
+  .g4 { grid-template-columns: repeat(4, 1fr); }
+  .g3 { grid-template-columns: repeat(3, 1fr); }
+  .g2 { grid-template-columns: 1.2fr .8fr; }
+  @media (max-width: 900px) { .g4, .g3, .g2 { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 560px) { .g4, .g3, .g2 { grid-template-columns: 1fr; } }
+
+  .card { background: var(--panel2); border: 1px solid #1c2438; border-radius: 12px;
+    padding: 14px 16px; }
+  .card .k { font-size: 11.5px; color: var(--dim); letter-spacing: .4px; }
+  .card .v { font-size: 19px; font-weight: 650; margin-top: 6px; }
+  .card .v small { font-size: 12px; color: var(--dim); font-weight: 400; }
+  .card .v.ok { color: var(--ok); } .card .v.warn { color: var(--warn); }
+  .card .v.err { color: var(--err); } .card .v.acc { color: var(--accent); }
+
+  .gauge-wrap { text-align: center; }
+  .gauge-wrap canvas { width: 150px; height: 96px; }
+  .gauge-wrap .gl { font-size: 11.5px; color: var(--dim); margin-top: -6px; }
+
+  /* ---------- controls ---------- */
+  label.f { display: block; font-size: 12px; color: var(--sub); margin: 12px 0 6px; }
+  input[type=text], input[type=number], select, textarea {
+    width: 100%; background: #0b101c; color: var(--txt); border: 1px solid #232d47;
+    border-radius: 9px; padding: 9px 12px; font-size: 13.5px; font-family: inherit;
+    outline: none; transition: border-color .15s;
+  }
+  input:focus, select:focus, textarea:focus { border-color: #2dd4bf77; }
+  textarea { resize: vertical; min-height: 110px; line-height: 1.6; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .btn {
+    display: inline-flex; align-items: center; gap: 7px; border-radius: 9px;
+    padding: 9px 18px; font-size: 13.5px; cursor: pointer; font-family: inherit;
+    border: 1px solid var(--line); background: #161d2e; color: var(--txt);
+    transition: .18s;
+  }
+  .btn:hover:not(:disabled) { border-color: #2dd4bf66; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn.pri { background: linear-gradient(135deg, #0f766e, #1d4ed8); border-color: transparent;
+    font-weight: 600; }
+  .btn.pri:hover:not(:disabled) { filter: brightness(1.15); }
+  .btn.danger { color: var(--err); border-color: #7f1d1d55; }
+  .btn.danger:hover:not(:disabled) { border-color: var(--err); }
+  .file-drop {
+    border: 1.5px dashed #2a3550; border-radius: 12px; padding: 26px 18px;
+    text-align: center; color: var(--dim); font-size: 13px; cursor: pointer;
+    transition: .18s; position: relative;
+  }
+  .file-drop:hover, .file-drop.drag { border-color: var(--accent); color: var(--sub);
+    background: #2dd4bf08; }
+  .file-drop input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+  .file-drop .big { font-size: 14px; color: var(--sub); margin-bottom: 4px; }
+
+  .prog { height: 7px; background: #0b101c; border-radius: 4px; overflow: hidden;
+    border: 1px solid #1c2438; }
+  .prog > i { display: block; height: 100%; width: 0;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    border-radius: 4px; transition: width .5s ease; }
+
+  pre.log {
+    background: #070a11; border: 1px solid #1a2236; border-radius: 10px;
+    padding: 12px 14px; font: 11.5px/1.55 Consolas, "Cascadia Mono", monospace;
+    color: #9fb3d1; max-height: 260px; overflow: auto; white-space: pre-wrap;
+    word-break: break-all;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--dim); font-weight: 500; font-size: 11.5px;
+    padding: 8px 10px; border-bottom: 1px solid var(--line); letter-spacing: .4px; }
+  td { padding: 10px; border-bottom: 1px solid #18203433; }
+  tr:hover td { background: #ffffff05; }
+  .tag { display: inline-block; font-size: 11px; border-radius: 999px; padding: 2px 10px; }
+  .tag.ok { color: var(--ok); background: #34d39914; border: 1px solid #34d39933; }
+  .tag.no { color: var(--dim); background: #66779512; border: 1px solid #66779530; }
+  .tag.run { color: var(--accent2); background: #60a5fa14; border: 1px solid #60a5fa33; }
+
+  .hint { font-size: 12px; color: var(--dim); line-height: 1.7; }
+  .toast {
+    position: fixed; left: 50%; bottom: 34px; transform: translateX(-50%) translateY(20px);
+    background: #1a2337; color: var(--txt); border: 1px solid #2a3550;
+    padding: 10px 20px; border-radius: 10px; font-size: 13px; opacity: 0;
+    pointer-events: none; transition: .25s; z-index: 99; max-width: 70vw;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.err { border-color: #7f1d1d; color: #fca5a5; }
+  #errline { color: var(--err); font-size: 12.5px; margin-top: 10px; min-height: 16px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .row.end { justify-content: flex-end; }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 860px) { .split { grid-template-columns: 1fr; } }
+  audio { width: 100%; margin-top: 12px; }
+  .empty { color: var(--dim); font-size: 12.5px; text-align: center; padding: 26px 0; }
+  .curvewrap canvas { width: 100%; height: 230px; display: block; }
+  .legend { display: flex; gap: 18px; font-size: 11.5px; color: var(--dim); margin-top: 8px; }
+  .legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px;
+    vertical-align: middle; margin-right: 5px; }
 </style>
 </head>
 <body>
-  <header>
-    <h1>ADR <em>Studio</em> · 专业控制台</h1>
-    <span class="badge">预览版</span>
-    <button id="back">← 返回启动器</button>
-  </header>
 
+<header>
+  <div class="brand"><b>ADR STUDIO</b><span>专业控制台</span></div>
+  <nav>
+    <button data-tab="ov" class="on">总览</button>
+    <button data-tab="train">声音克隆</button>
+    <button data-tab="tts">语音合成</button>
+    <button data-tab="models">模型库</button>
+  </nav>
+  <button id="back">← 返回启动器</button>
+</header>
+
+<main>
+
+<!-- ================= 总览 ================= -->
+<section class="tab on" id="tab-ov">
   <div class="panel">
-    <h2>系统总览（链路自检）</h2>
-    <div class="row" id="stats"></div>
-    <div id="err"></div>
+    <h2>硬件资源</h2>
+    <div class="grid g4">
+      <div class="card gauge-wrap">
+        <canvas id="gGpu" width="300" height="192"></canvas>
+        <div class="gl" id="gGpuTxt">GPU 显存</div>
+      </div>
+      <div class="card gauge-wrap">
+        <canvas id="gRam" width="300" height="192"></canvas>
+        <div class="gl" id="gRamTxt">内存占用</div>
+      </div>
+      <div class="card">
+        <div class="k">磁盘剩余</div>
+        <div class="v" id="cDisk">—</div>
+        <div class="prog" style="margin-top:10px"><i id="pDisk"></i></div>
+      </div>
+      <div class="card">
+        <div class="k">GPU 型号</div>
+        <div class="v" id="cGpuName" style="font-size:14.5px">—</div>
+        <div class="k" style="margin-top:8px">运行时长 <span id="cUp" style="color:var(--sub)">—</span>
+          &nbsp;·&nbsp; Python <span id="cPy" style="color:var(--sub)">—</span></div>
+      </div>
+    </div>
   </div>
 
+  <div class="panel">
+    <h2>显存趋势（最近 60 次采样）</h2>
+    <div class="curvewrap"><canvas id="spark" width="1100" height="200"></canvas></div>
+  </div>
+
+  <div class="panel">
+    <h2>引擎与业务状态</h2>
+    <div class="grid g4">
+      <div class="card"><div class="k">GSV 引擎</div><div class="v" id="cEng">—</div>
+        <div class="k" style="margin-top:6px">首次合成时惰性加载</div></div>
+      <div class="card"><div class="k">音色档案</div><div class="v acc" id="cProf">—</div></div>
+      <div class="card"><div class="k">预训练模型</div><div class="v" id="cModel">—</div></div>
+      <div class="card"><div class="k">训练任务</div><div class="v" id="cTrain">—</div></div>
+    </div>
+    <div id="errline"></div>
+  </div>
+</section>
+
+<!-- ================= 声音克隆 ================= -->
+<section class="tab" id="tab-train">
+  <div class="split">
+    <div class="panel">
+      <h2>1 · 上传录音与参数</h2>
+      <div class="file-drop" id="drop">
+        <input type="file" id="file" accept=".wav,.mp3,.flac,.m4a,.ogg,.zip">
+        <div class="big" id="dropTxt">点击选择或拖入录音文件</div>
+        <div>wav / mp3 / flac / m4a / ogg / zip（≥1 分钟清晰人声效果最佳）</div>
+      </div>
+
+      <label class="f">实验名称</label>
+      <input type="text" id="tExp" value="my_voice" placeholder="英文/数字/下划线">
+
+      <div class="grid g2" style="gap:14px; margin-top:4px">
+        <div>
+          <label class="f">训练轮数 <span id="tEpV" style="color:var(--accent)">8</span></label>
+          <input type="range" id="tEp" min="4" max="24" step="1" value="8">
+        </div>
+        <div>
+          <label class="f">显存配方</label>
+          <select id="tRecipe">
+            <option value="8gb">8GB+ 显存（batch 4，速度优先）</option>
+            <option value="4gb">4GB 显存（batch 1，片段 ≤10s）</option>
+          </select>
+        </div>
+      </div>
+
+      <label class="f">训练后绑定到音色档案（可选）</label>
+      <select id="tBind"><option value="">不绑定（仅产出权重）</option></select>
+
+      <div class="row" style="margin-top:16px">
+        <label style="display:flex;align-items:center;gap:7px;font-size:13px;color:var(--sub);cursor:pointer">
+          <input type="checkbox" id="tGate" checked style="accent-color:var(--accent);width:15px;height:15px">
+          启用质量门禁（相似度 ≥0.80 自动早停）
+        </label>
+      </div>
+      <div class="row end" style="margin-top:16px">
+        <button class="btn danger" id="tStop" disabled>■ 停止</button>
+        <button class="btn pri" id="tStart">▶ 开始训练</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>2 · 训练进度与相似度曲线</h2>
+      <div class="grid g3" style="margin-bottom:14px">
+        <div class="card"><div class="k">状态</div><div class="v" id="tState" style="font-size:16px">空闲</div></div>
+        <div class="card"><div class="k">最佳相似度</div><div class="v acc" id="tBest">—</div></div>
+        <div class="card"><div class="k">零样本基线</div><div class="v" id="tBase" style="font-size:16px">—</div></div>
+      </div>
+      <div class="prog"><i id="tProg"></i></div>
+      <div class="hint" style="margin:8px 0 14px" id="tMeta">尚未开始训练</div>
+      <div class="curvewrap">
+        <canvas id="curve" width="1100" height="300"></canvas>
+        <div class="legend">
+          <span><i style="background:#2dd4bf"></i>每轮门禁打分</span>
+          <span><i style="background:#60a5fa"></i>零样本基线</span>
+          <span><i style="background:#34d399"></i>早停目标 0.80</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>训练日志</h2>
+    <pre class="log" id="tLog">等待训练输出…</pre>
+  </div>
+</section>
+
+<!-- ================= 语音合成 ================= -->
+<section class="tab" id="tab-tts">
+  <div class="split">
+    <div class="panel">
+      <h2>合成请求</h2>
+      <label class="f">音色档案 <button class="btn" id="pRefresh"
+        style="padding:2px 10px;font-size:11.5px;margin-left:8px">刷新</button></label>
+      <select id="pSel"><option value="">加载中…</option></select>
+
+      <label class="f">合成文本</label>
+      <textarea id="sText" placeholder="输入要合成的文字…"></textarea>
+
+      <div class="grid g3" style="gap:14px">
+        <div>
+          <label class="f">语速 <span id="sSpV" style="color:var(--accent)">1.00</span></label>
+          <input type="range" id="sSp" min="0.5" max="2" step="0.05" value="1">
+        </div>
+        <div>
+          <label class="f">随机种子</label>
+          <input type="number" id="sSeed" value="-1" step="1">
+        </div>
+        <div>
+          <label class="f">音频格式</label>
+          <select id="sFmt">
+            <option value="wav">wav</option>
+            <option value="ogg">ogg</option>
+            <option value="aac">aac</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row end" style="margin-top:16px">
+        <button class="btn pri" id="sGo">✦ 开始合成</button>
+      </div>
+      <div class="hint" style="margin-top:10px">
+        服务未加载引擎时首次合成需要先加载模型（可能耗时 1-3 分钟），后续合成秒级返回。
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>合成结果</h2>
+      <div class="grid g3">
+        <div class="card"><div class="k">耗时</div><div class="v" id="rTime" style="font-size:16px">—</div></div>
+        <div class="card"><div class="k">大小</div><div class="v" id="rSize" style="font-size:16px">—</div></div>
+        <div class="card"><div class="k">字符数</div><div class="v" id="rChars" style="font-size:16px">—</div></div>
+      </div>
+      <div id="rBox"><div class="empty">尚无合成结果</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 模型库 ================= -->
+<section class="tab" id="tab-models">
+  <div class="panel">
+    <h2>预训练模型 <span id="mDir" class="hint" style="margin-left:auto;font-weight:400"></span></h2>
+    <table>
+      <thead><tr><th>模型</th><th>类别</th><th>说明</th><th>体积</th><th>状态</th><th style="width:110px">操作</th></tr></thead>
+      <tbody id="mBody"><tr><td colspan="6" class="empty">加载中…</td></tr></tbody>
+    </table>
+    <div class="prog" style="margin-top:14px; display:none" id="mProgBox">
+      <i id="mProg"></i>
+    </div>
+    <div class="hint" id="mStat" style="margin-top:10px"></div>
+  </div>
+</section>
+
+</main>
+<div class="toast" id="toast"></div>
+
 <script>
-/* ---- 共用: API key 透传 (启用鉴权时, 页面从 URL 取 key 附给后续请求) ---- */
+"use strict";
+/* ---- 基础: api_key 透传 + 请求封装 + toast ---- */
 const KEY = new URLSearchParams(location.search).get("api_key");
 const api = p => p + (KEY ? (p.includes("?") ? "&" : "?") + "api_key=" + encodeURIComponent(KEY) : "");
+const $ = id => document.getElementById(id);
+let toastTimer = null;
+function toast(msg, isErr) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.className = "toast show" + (isErr ? " err" : "");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.className = "toast" + (isErr ? " err" : ""), 3200);
+}
+async function jfetch(url, opts) {
+  const r = await fetch(api(url), opts);
+  if (!r.ok) {
+    let msg = "HTTP " + r.status;
+    try { const j = await r.json(); if (j.detail || j.message) msg = j.detail || j.message; } catch {}
+    throw new Error(msg);
+  }
+  return r.json();
+}
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const fmtGB = v => v == null ? "—" : v.toFixed(1);
 
-/* ---- 返回启动器 (仅桌面壳内可用) ---- */
-const back = document.getElementById("back");
+/* ---- 返回启动器 (仅桌面壳内) ---- */
+const back = $("back");
 if (!window.__TAURI__) back.style.display = "none";
 back.onclick = () => window.__TAURI__ && window.__TAURI__.core.invoke("back_to_launcher");
 
-/* ---- 总览数据 ---- */
-function card(k, v) {
-  return `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`;
+/* ---- Tab 切换 ---- */
+let curTab = "ov";
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("nav button").forEach(x => x.classList.remove("on"));
+  document.querySelectorAll("section.tab").forEach(x => x.classList.remove("on"));
+  b.classList.add("on");
+  curTab = b.dataset.tab;
+  $("tab-" + curTab).classList.add("on");
+  if (curTab === "tts") loadProfiles();
+  if (curTab === "models") loadModels();
+  if (curTab === "train") drawCurve();
+  if (curTab === "ov") drawSpark();
+});
+
+/* ================================================================
+ * 总览: 状态轮询 + 环形仪表 + 显存 sparkline
+ * ================================================================ */
+const gpuHist = [];   // [{used, total}]
+const DPR = window.devicePixelRatio || 1;
+
+function setupCanvas(cv) {
+  const w = cv.clientWidth, h = cv.clientHeight;
+  if (!w || !h) return null;
+  cv.width = w * DPR; cv.height = h * DPR;
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  return { ctx, w, h };
 }
-async function load() {
+
+/* 270° 环形仪表 */
+function drawGauge(cvId, txtId, used, total, color1, color2, subTxt) {
+  const cv = $(cvId), g = setupCanvas(cv);
+  if (!g) return;
+  const { ctx, w, h } = g;
+  const pct = total > 0 ? Math.min(used / total, 1) : 0;
+  const cx = w / 2, cy = h * 0.94, r = Math.min(w * 0.42, h * 0.82);
+  const a0 = Math.PI * 1.25, a1 = Math.PI * 2.75;
+  ctx.clearRect(0, 0, w, h);
+  ctx.lineWidth = 10; ctx.lineCap = "round";
+  ctx.beginPath(); ctx.arc(cx, cy, r, a0, a1);
+  ctx.strokeStyle = "#1c2438"; ctx.stroke();
+  const grad = ctx.createLinearGradient(cx - r, 0, cx + r, 0);
+  grad.addColorStop(0, color1); grad.addColorStop(1, color2);
+  ctx.beginPath(); ctx.arc(cx, cy, r, a0, a0 + (a1 - a0) * pct);
+  ctx.strokeStyle = grad; ctx.stroke();
+  ctx.fillStyle = "#e8ecf4";
+  ctx.font = `600 ${r * 0.42}px "Segoe UI", sans-serif`;
+  ctx.textAlign = "center";
+  ctx.fillText(Math.round(pct * 100) + "%", cx, cy - r * 0.18);
+  ctx.fillStyle = "#667795";
+  ctx.font = `11px "Segoe UI", sans-serif`;
+  ctx.fillText(subTxt, cx, cy - r * 0.18 + 18);
+  const el = $(txtId);
+  if (el) el.textContent = subTxt;
+}
+
+/* 显存 sparkline */
+function drawSpark() {
+  const g = setupCanvas($("spark"));
+  if (!g) return;
+  const { ctx, w, h } = g;
+  ctx.clearRect(0, 0, w, h);
+  if (gpuHist.length < 2) {
+    ctx.fillStyle = "#667795"; ctx.font = "12px sans-serif"; ctx.textAlign = "center";
+    ctx.fillText("采样中…", w / 2, h / 2);
+    return;
+  }
+  const maxT = Math.max(...gpuHist.map(p => p.total), 1);
+  const pad = 8;
+  const X = i => pad + i / (gpuHist.length - 1) * (w - pad * 2);
+  const Y = v => h - pad - v / maxT * (h - pad * 2);
+  ctx.strokeStyle = "#1c2438"; ctx.lineWidth = 1;
+  for (let f = 0.25; f < 1; f += 0.25) {
+    ctx.beginPath(); ctx.moveTo(pad, Y(maxT * f)); ctx.lineTo(w - pad, Y(maxT * f)); ctx.stroke();
+  }
+  ctx.beginPath();
+  gpuHist.forEach((p, i) => i ? ctx.lineTo(X(i), Y(p.used)) : ctx.moveTo(X(i), Y(p.used)));
+  ctx.strokeStyle = "#2dd4bf"; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.stroke();
+  ctx.lineTo(X(gpuHist.length - 1), h - pad); ctx.lineTo(X(0), h - pad); ctx.closePath();
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, "#2dd4bf33"); grad.addColorStop(1, "#2dd4bf00");
+  ctx.fillStyle = grad; ctx.fill();
+  ctx.fillStyle = "#667795"; ctx.font = "10.5px sans-serif"; ctx.textAlign = "left";
+  ctx.fillText(`峰值上限 ${maxT.toFixed(1)} GB`, pad, 14);
+}
+
+const TRAIN_STATE_TXT = { idle: "空闲", running: "训练中", done: "已完成", failed: "失败", stopped: "已停止" };
+
+async function loadStats() {
   try {
-    const r = await fetch(api("/api/adr/v1/system/stats"));
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    const d = await r.json();
-    const gpu = d.gpu ? `${d.gpu.used_gb} / ${d.gpu.total_gb} GB` : "无 CUDA";
-    const ram = d.ram ? `${d.ram.used_gb} / ${d.ram.total_gb} GB (${d.ram.percent}%)` : "未知";
-    const disk = d.disk ? `剩余 ${d.disk.free_gb} / ${d.disk.total_gb} GB` : "未知";
-    document.getElementById("stats").innerHTML =
-      card("GPU 显存", gpu) + card("内存", ram) + card("磁盘", disk) +
-      card("GPU 型号", d.gpu ? d.gpu.name : "—") +
-      card("引擎状态", d.engine_loaded ? "已加载" : "未加载 (首次合成时惰性加载)") +
-      card("音色档案", d.profiles + " 个") +
-      card("预训练模型", `${d.models.cached} / ${d.models.total} 已缓存`) +
-      card("训练状态", d.train.state);
-    document.getElementById("err").textContent = "";
+    const d = await jfetch("/api/adr/v1/system/stats");
+    if (d.gpu) {
+      gpuHist.push({ used: d.gpu.used_gb, total: d.gpu.total_gb });
+      if (gpuHist.length > 60) gpuHist.shift();
+      if (curTab === "ov") {
+        drawGauge("gGpu", "gGpuTxt", d.gpu.used_gb, d.gpu.total_gb, "#2dd4bf", "#60a5fa",
+          `${d.gpu.used_gb.toFixed(1)} / ${d.gpu.total_gb.toFixed(0)} GB`);
+        drawSpark();
+      }
+      $("cGpuName").textContent = d.gpu.name;
+    } else {
+      if (curTab === "ov") drawGauge("gGpu", "gGpuTxt", 0, 1, "#667795", "#667795", "无 CUDA 设备");
+      $("cGpuName").textContent = "未检测到 NVIDIA GPU";
+    }
+    if (d.ram && curTab === "ov")
+      drawGauge("gRam", "gRamTxt", d.ram.used_gb, d.ram.total_gb, "#60a5fa", "#a78bfa",
+        `${d.ram.used_gb.toFixed(1)} / ${d.ram.total_gb.toFixed(0)} GB`);
+    if (d.disk) {
+      $("cDisk").innerHTML = `${fmtGB(d.disk.free_gb)} <small>/ ${fmtGB(d.disk.total_gb)} GB</small>`;
+      $("pDisk").style.width = (d.disk.used_gb / d.disk.total_gb * 100).toFixed(1) + "%";
+    }
+    const eng = $("cEng");
+    eng.textContent = d.engine_loaded ? "已加载" : "未加载";
+    eng.className = "v " + (d.engine_loaded ? "ok" : "");
+    $("cProf").textContent = d.profiles + " 个";
+    $("cModel").innerHTML = `${d.models.cached} <small>/ ${d.models.total}</small>`;
+    const tr = $("cTrain");
+    tr.textContent = TRAIN_STATE_TXT[d.train.state] || d.train.state;
+    tr.className = "v " + (d.train.state === "running" ? "acc" : d.train.state === "failed" ? "err" : "");
+    const up = d.uptime_sec;
+    $("cUp").textContent = up >= 3600 ? `${(up / 3600).toFixed(1)} h` : `${Math.round(up / 60)} min`;
+    $("cPy").textContent = d.python;
+    $("errline").textContent = "";
   } catch (e) {
-    document.getElementById("err").textContent = "API 连接失败: " + e.message;
+    $("errline").textContent = "API 连接失败: " + e.message;
   }
 }
-load();
-setInterval(load, 5000);
+loadStats();
+setInterval(loadStats, 4000);
+
+/* ================================================================
+ * 声音克隆: 上传 → 启动 → 轮询(日志 + 门禁曲线)
+ * ================================================================ */
+let audioPath = "", audioName = "";
+
+const drop = $("drop");
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("drag"); };
+drop.ondragleave = () => drop.classList.remove("drag");
+drop.ondrop = e => {
+  e.preventDefault(); drop.classList.remove("drag");
+  if (e.dataTransfer.files[0]) pickFile(e.dataTransfer.files[0]);
+};
+$("file").onchange = e => e.target.files[0] && pickFile(e.target.files[0]);
+function pickFile(f) {
+  audioPath = ""; audioName = f.name;
+  $("dropTxt").textContent = `已选择: ${f.name} (${(f.size / 1048576).toFixed(1)} MB)`;
+  const fd = new FormData();
+  fd.append("file", f);
+  $("dropTxt").textContent = `上传中… ${f.name}`;
+  fetch(api("/api/adr/v1/train/upload"), { method: "POST", body: fd })
+    .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+    .then(d => { audioPath = d.path; $("dropTxt").textContent = `✓ 已上传: ${d.filename}`; })
+    .catch(e => { $("dropTxt").textContent = "上传失败: " + e.message; toast("上传失败: " + e.message, true); });
+}
+
+$("tEp").oninput = e => $("tEpV").textContent = e.target.value;
+
+async function loadBindOptions() {
+  try {
+    const d = await jfetch("/api/adr/v1/profiles");
+    const sel = $("tBind");
+    sel.innerHTML = '<option value="">不绑定（仅产出权重）</option>' +
+      d.profiles.map(p => `<option value="${esc(p.name)}">绑定到: ${esc(p.name)}</option>`).join("");
+  } catch {}
+}
+loadBindOptions();
+
+$("tStart").onclick = async () => {
+  if (!audioPath) { toast("请先上传录音文件", true); return; }
+  const body = {
+    audio_path: audioPath,
+    exp_name: $("tExp").value.trim() || "my_voice",
+    epochs: +$("tEp").value,
+    recipe: $("tRecipe").value,
+    gate_on: $("tGate").checked,
+    bind_voice: $("tBind").value,
+  };
+  try {
+    $("tStart").disabled = true;
+    await jfetch("/api/adr/v1/train/start", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    toast("训练已启动");
+    pollTrain();
+  } catch (e) { toast("启动失败: " + e.message, true); }
+  finally { $("tStart").disabled = false; }
+};
+
+$("tStop").onclick = async () => {
+  try { await jfetch("/api/adr/v1/train/stop", { method: "POST" }); toast("已发送停止信号"); }
+  catch (e) { toast(e.message, true); }
+};
+
+let trainPollTimer = null;
+function pollTrain() {
+  clearTimeout(trainPollTimer);
+  jfetch("/api/adr/v1/train/status").then(updateTrain).catch(() => {}).finally(() => {
+    trainPollTimer = setTimeout(pollTrain, 2000);
+  });
+}
+
+let lastCurve = [], lastBase = null;
+function updateTrain(d) {
+  const running = d.state === "running";
+  $("tStop").disabled = !running;
+  const st = $("tState");
+  st.textContent = (TRAIN_STATE_TXT[d.state] || d.state) + (d.early_stop ? " · 早停" : "");
+  st.className = "v " + (running ? "acc" : d.state === "failed" ? "err" : d.state === "done" ? "ok" : "");
+  st.style.fontSize = "16px";
+  $("tBest").textContent = d.best_sim != null ? d.best_sim.toFixed(3) : "—";
+  $("tBase").textContent = d.zero_shot != null ? d.zero_shot.toFixed(3) : "—";
+  const progPct = running ? Math.min((d.gate_curve.length / Math.max(d.epochs, 1)) * 100, 100) :
+    d.state === "done" ? 100 : 0;
+  $("tProg").style.width = progPct + "%";
+  const mins = d.elapsed_sec != null ? Math.floor(d.elapsed_sec / 60) + " 分 " + Math.round(d.elapsed_sec % 60) + " 秒" : "";
+  $("tMeta").textContent = d.exp
+    ? `实验: ${d.exp} · 配方: ${d.recipe} · 目标轮数: ${d.epochs}` + (mins ? ` · 已用时: ${mins}` : "") +
+      (d.exit_code != null ? ` · 退出码: ${d.exit_code}` : "")
+    : "尚未开始训练";
+  if (d.log_tail.length) {
+    const log = $("tLog");
+    const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+    log.textContent = d.log_tail.join("\n");
+    if (atBottom) log.scrollTop = log.scrollHeight;
+  }
+  lastCurve = d.gate_curve || [];
+  lastBase = d.zero_shot;
+  if (curTab === "train") drawCurve();
+}
+
+/* 门禁相似度曲线 (canvas 手绘) */
+function drawCurve() {
+  const g = setupCanvas($("curve"));
+  if (!g) return;
+  const { ctx, w, h } = g;
+  ctx.clearRect(0, 0, w, h);
+  const padL = 46, padR = 16, padT = 16, padB = 30;
+  const cw = w - padL - padR, ch = h - padT - padB;
+  const target = 0.80;
+  let yMin = 0.5, yMax = 1.0;
+  const sims = lastCurve.map(p => p.sim).filter(v => v != null).concat(lastBase != null ? [lastBase] : []);
+  if (sims.length) {
+    yMin = Math.max(0, Math.min(...sims, target) - 0.06);
+    yMax = Math.min(1, Math.max(...sims, target) + 0.05);
+  }
+  const X = i => padL + (lastCurve.length <= 1 ? cw / 2 : i / (lastCurve.length - 1) * cw);
+  const Y = v => padT + (1 - (v - yMin) / (yMax - yMin)) * ch;
+
+  /* 网格 + Y 轴刻度 */
+  ctx.font = "10.5px sans-serif"; ctx.fillStyle = "#667795";
+  ctx.strokeStyle = "#1a2236"; ctx.lineWidth = 1;
+  for (let k = 0; k <= 4; k++) {
+    const v = yMin + (yMax - yMin) * k / 4, y = Y(v);
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.textAlign = "right"; ctx.fillText(v.toFixed(2), padL - 7, y + 3.5);
+  }
+
+  /* 目标线 0.80 */
+  ctx.setLineDash([6, 5]);
+  ctx.strokeStyle = "#34d39988";
+  ctx.beginPath(); ctx.moveTo(padL, Y(target)); ctx.lineTo(w - padR, Y(target)); ctx.stroke();
+  /* 零样本基线 */
+  if (lastBase != null) {
+    ctx.strokeStyle = "#60a5fa88";
+    ctx.beginPath(); ctx.moveTo(padL, Y(lastBase)); ctx.lineTo(w - padR, Y(lastBase)); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+
+  if (!lastCurve.length) {
+    ctx.fillStyle = "#667795"; ctx.textAlign = "center"; ctx.font = "12px sans-serif";
+    ctx.fillText("门禁打分将随训练轮次实时出现在这里", w / 2, h / 2);
+    return;
+  }
+
+  /* 面积 + 折线 */
+  ctx.beginPath();
+  lastCurve.forEach((p, i) => i ? ctx.lineTo(X(i), Y(p.sim)) : ctx.moveTo(X(i), Y(p.sim)));
+  ctx.strokeStyle = "#2dd4bf"; ctx.lineWidth = 2.2; ctx.lineJoin = "round"; ctx.stroke();
+  ctx.lineTo(X(lastCurve.length - 1), Y(yMin)); ctx.lineTo(X(0), Y(yMin)); ctx.closePath();
+  const grad = ctx.createLinearGradient(0, padT, 0, h - padB);
+  grad.addColorStop(0, "#2dd4bf30"); grad.addColorStop(1, "#2dd4bf00");
+  ctx.fillStyle = grad; ctx.fill();
+
+  /* 数据点 + 最佳点高亮 */
+  let bestI = 0;
+  lastCurve.forEach((p, i) => { if (p.sim > lastCurve[bestI].sim) bestI = i; });
+  lastCurve.forEach((p, i) => {
+    const isBest = i === bestI;
+    ctx.beginPath(); ctx.arc(X(i), Y(p.sim), isBest ? 5 : 3.2, 0, 7);
+    ctx.fillStyle = isBest ? "#f0b429" : "#2dd4bf";
+    ctx.fill();
+    if (isBest) {
+      ctx.fillStyle = "#f0b429"; ctx.textAlign = "center"; ctx.font = "600 11px sans-serif";
+      ctx.fillText(p.sim.toFixed(3), X(i), Y(p.sim) - 11);
+    }
+  });
+  /* X 轴轮次标签 */
+  ctx.fillStyle = "#667795"; ctx.font = "10.5px sans-serif"; ctx.textAlign = "center";
+  const step = Math.ceil(lastCurve.length / 12);
+  lastCurve.forEach((p, i) => {
+    if (i % step === 0 || i === lastCurve.length - 1)
+      ctx.fillText(p.epoch != null ? "E" + p.epoch : i + 1, X(i), h - 10);
+  });
+}
+
+pollTrain();
+
+/* ================================================================
+ * 语音合成
+ * ================================================================ */
+async function loadProfiles() {
+  try {
+    const d = await jfetch("/api/adr/v1/profiles");
+    const sel = $("pSel");
+    if (!d.profiles.length) {
+      sel.innerHTML = '<option value="">暂无音色档案 — 请先在「声音克隆」训练</option>';
+      return;
+    }
+    const prev = sel.value;
+    sel.innerHTML = d.profiles.map(p =>
+      `<option value="${esc(p.name)}">${esc(p.name)}${p.style ? " · " + esc(p.style) : ""}</option>`).join("");
+    if (prev) sel.value = prev;
+  } catch (e) { toast("档案加载失败: " + e.message, true); }
+}
+$("pRefresh").onclick = loadProfiles;
+
+$("sSp").oninput = e => $("sSpV").textContent = (+e.target.value).toFixed(2);
+
+let lastUrl = null;
+$("sGo").onclick = async () => {
+  const profile = $("pSel").value;
+  const text = $("sText").value.trim();
+  if (!profile) { toast("请先选择音色档案", true); return; }
+  if (!text) { toast("请输入合成文本", true); return; }
+  const btn = $("sGo");
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = "⟳ 合成中…（首次需加载引擎）";
+  const t0 = performance.now();
+  try {
+    const ctrl = new AbortController();
+    const kill = setTimeout(() => ctrl.abort(), 600000);
+    const r = await fetch(api("/api/adr/v1/tts"), {
+      method: "POST", signal: ctrl.signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text, profile,
+        speed_factor: +$("sSp").value,
+        seed: parseInt($("sSeed").value || "-1", 10),
+        media_type: $("sFmt").value,
+      })
+    });
+    clearTimeout(kill);
+    if (!r.ok) {
+      let msg = "HTTP " + r.status;
+      try { const j = await r.json(); if (j.message || j.detail) msg = j.message || j.detail; } catch {}
+      throw new Error(msg);
+    }
+    const blob = await r.blob();
+    const secs = ((performance.now() - t0) / 1000).toFixed(1);
+    $("rTime").innerHTML = `${secs} <small>s</small>`;
+    $("rSize").innerHTML = `${(blob.size / 1048576).toFixed(2)} <small>MB</small>`;
+    $("rChars").textContent = text.length;
+    if (lastUrl) URL.revokeObjectURL(lastUrl);
+    lastUrl = URL.createObjectURL(blob);
+    const ext = $("sFmt").value;
+    $("rBox").innerHTML = `
+      <audio controls autoplay src="${lastUrl}"></audio>
+      <div class="row end" style="margin-top:10px">
+        <a class="btn" href="${lastUrl}" download="adr_tts_${Date.now()}.${ext}">⤓ 下载音频</a>
+      </div>`;
+    toast("合成完成");
+  } catch (e) {
+    toast("合成失败: " + (e.name === "AbortError" ? "超时 (10 分钟)" : e.message), true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+};
+
+/* ================================================================
+ * 模型库
+ * ================================================================ */
+let modelRows = [];
+async function loadModels() {
+  try {
+    const d = await jfetch("/api/adr/v1/models");
+    modelRows = d.models;
+    $("mDir").textContent = "缓存目录: " + d.cache_dir;
+    renderModels();
+    pollDl();
+  } catch (e) { $("errline").textContent = "模型清单加载失败: " + e.message; }
+}
+function renderModels(dlName, dlPct) {
+  $("mBody").innerHTML = modelRows.map(m => {
+    const busy = dlName === m.name && dlPct != null && dlPct < 100;
+    const act = m.downloaded
+      ? '<span class="tag ok">已缓存</span>'
+      : busy
+        ? `<span class="tag run">${dlPct == null ? "下载中…" : dlPct + "%"}</span>`
+        : `<button class="btn" style="padding:4px 14px;font-size:12px" data-dl="${esc(m.name)}">下载</button>`;
+    return `<tr>
+      <td><b>${esc(m.name)}</b></td>
+      <td><span class="tag no">${esc(m.category)}</span></td>
+      <td class="hint">${esc(m.description || "")}</td>
+      <td>${m.size_mb} MB</td>
+      <td>${m.downloaded ? '<span class="tag ok">v' + esc(m.version || "?") + "</span>" : '<span class="tag no">未下载</span>'}</td>
+      <td>${act}</td>
+    </tr>`;
+  }).join("");
+  $("mBody").querySelectorAll("[data-dl]").forEach(b => b.onclick = () => downloadModel(b.dataset.dl));
+}
+async function downloadModel(name) {
+  try {
+    const d = await jfetch("/api/adr/v1/models/download", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name })
+    });
+    if (d.state === "already") { toast("该模型已在本地缓存"); return; }
+    toast("开始下载 " + name);
+    $("mProgBox").style.display = "block";
+    pollDl();
+  } catch (e) { toast(e.message, true); }
+}
+let dlTimer = null;
+function pollDl() {
+  clearTimeout(dlTimer);
+  jfetch("/api/adr/v1/models/download/status").then(d => {
+    if (d.state === "downloading") {
+      $("mProgBox").style.display = "block";
+      $("mProg").style.width = (d.percent ?? 0) + "%";
+      $("mStat").textContent = `下载 ${d.name} … ${d.percent ?? "?"}%  (已进行 ${Math.round((d.elapsed_sec || 0))}s)`;
+      renderModels(d.name, d.percent);
+      dlTimer = setTimeout(pollDl, 1500);
+    } else {
+      $("mProgBox").style.display = "none";
+      if (d.state === "done") { $("mStat").textContent = `✓ ${d.name} 下载完成`; loadModels(); }
+      else if (d.state === "failed") { $("mStat").textContent = `✗ ${d.name} 下载失败 (exit ${d.exit_code})`; }
+      else $("mStat").textContent = "";
+    }
+  }).catch(() => { dlTimer = setTimeout(pollDl, 4000); });
+}
 </script>
 </body>
 </html>
