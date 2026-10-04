@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADR Studio · 控制台索引</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    background: #0a0d14; color: #e8ecf4; min-height: 100vh;
+    display: grid; place-items: center; user-select: none;
+  }
+  .wrap { width: min(680px, 92vw); text-align: center; padding: 48px 0; }
+  .logo { font-size: 30px; font-weight: 700; letter-spacing: 1px; }
+  .logo em { font-style: normal; color: #2dd4bf; }
+  .sub { color: #7c8aa5; font-size: 14px; margin: 10px 0 36px; }
+  .grid { display: grid; gap: 14px; }
+  a.card {
+    display: flex; align-items: center; gap: 16px; text-decoration: none;
+    background: #121724; border: 1px solid #1f2740; border-radius: 14px;
+    padding: 20px 24px; color: #e8ecf4; transition: .18s;
+  }
+  a.card:hover { border-color: #2dd4bf66; transform: translateY(-2px);
+    box-shadow: 0 8px 28px #0008; }
+  .ic { width: 40px; height: 40px; flex: none; display: grid; place-items: center;
+    background: #1a2337; border-radius: 10px; }
+  .ttl { font-size: 16px; font-weight: 600; }
+  .dsc { font-size: 12.5px; color: #8391ab; margin-top: 3px; }
+  .arrow { margin-left: auto; color: #475a7d; font-size: 18px; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="logo">ADR <em>Studio</em></div>
+    <div class="sub">本地低资源语音克隆 · 控制台索引（浏览器直达）</div>
+    <div class="grid">
+      <a class="card" href="/easy">
+        <div class="ic">🎙️</div>
+        <div>
+          <div class="ttl">新手控制台</div>
+          <div class="dsc">3 步出声 · 零参数 · 纯小白友好</div>
+        </div>
+        <div class="arrow">→</div>
+      </a>
+      <a class="card" href="/pro">
+        <div class="ic">📊</div>
+        <div>
+          <div class="ttl">专业控制台</div>
+          <div class="dsc">数据可视化 · 训练曲线 · 模型库全参数</div>
+        </div>
+        <div class="arrow">→</div>
+      </a>
+    </div>
+    <div class="sub" style="margin-top:32px">
+      经典 Gradio 控制台请通过桌面壳启动器进入，或运行 <code>python -m adr.cli webui</code>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>ADR Studio</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    background: #0a0d14; color: #e8ecf4; min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 8px; overflow: hidden; user-select: none;
+  }
+  /* 背景光晕 */
+  body::before, body::after {
+    content: ""; position: fixed; border-radius: 50%; filter: blur(110px);
+    z-index: -1; opacity: .5;
+  }
+  body::before { width: 460px; height: 460px; left: -140px; top: -160px;
+    background: #0e749033; }
+  body::after { width: 420px; height: 420px; right: -120px; bottom: -160px;
+    background: #4f46e526; }
+
+  .logo { font-size: 32px; font-weight: 700; letter-spacing: 1px; }
+  .logo em { font-style: normal; color: #2dd4bf; }
+  .sub { color: #7c8aa5; font-size: 13.5px; margin-bottom: 34px; }
+
+  .grid { display: grid; grid-template-columns: repeat(3, 236px); gap: 18px; }
+  @media (max-width: 820px) { .grid { grid-template-columns: 1fr; width: min(320px, 90vw); } }
+
+  .card {
+    position: relative; text-align: left; overflow: hidden; cursor: pointer;
+    background: linear-gradient(160deg, #131a2a, #0e1422);
+    border: 1px solid #202a44; border-radius: 16px; padding: 22px 20px 18px;
+    transition: transform .18s, border-color .18s, box-shadow .18s;
+  }
+  .card:hover:not(.busy) { transform: translateY(-4px); border-color: #2dd4bf55;
+    box-shadow: 0 12px 34px #000a; }
+  .card.busy { pointer-events: none; border-color: #2dd4bf88; }
+  .card .ic { width: 44px; height: 44px; border-radius: 12px; display: grid;
+    place-items: center; margin-bottom: 14px; }
+  .card h2 { font-size: 16.5px; font-weight: 650; margin-bottom: 6px; }
+  .card p { font-size: 12.5px; line-height: 1.65; color: #8391ab; min-height: 42px; }
+  .tags { display: flex; gap: 6px; margin-top: 14px; flex-wrap: wrap; }
+  .tag { font-size: 10.5px; color: #7f92b5; background: #182136;
+    border: 1px solid #223050; border-radius: 999px; padding: 2.5px 9px; }
+  .go { margin-top: 16px; font-size: 12.5px; font-weight: 600; }
+  .classic .ic { background: #0d3340; } .classic .go { color: #22d3ee; }
+  .pro    .ic { background: #172a52; } .pro    .go { color: #60a5fa; }
+  .easy   .ic { background: #0d3a2b; } .easy   .go { color: #34d399; }
+  .card.busy .go::after {
+    content: ""; display: inline-block; width: 11px; height: 11px; margin-left: 8px;
+    border: 2px solid currentColor; border-top-color: transparent;
+    border-radius: 50%; vertical-align: -1px; animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .card .shine { position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(115deg, transparent 30%, #ffffff08 48%, transparent 62%);
+    opacity: 0; transition: opacity .25s; }
+  .card:hover:not(.busy) .shine { opacity: 1; }
+
+  #toast { position: fixed; left: 50%; bottom: 34px; transform: translateX(-50%);
+    max-width: 80vw; background: #2a1215; color: #fca5a5; border: 1px solid #7f1d1d88;
+    border-radius: 10px; padding: 10px 18px; font-size: 13px; display: none; }
+  .foot { color: #47556e; font-size: 11.5px; margin-top: 30px; }
+</style>
+</head>
+<body>
+  <div class="logo">ADR <em>Studio</em></div>
+  <div class="sub">本地低资源语音克隆 · 选择一个控制台进入</div>
+
+  <div class="grid">
+    <div class="card classic" data-mode="legacy">
+      <div class="shine"></div>
+      <div class="ic">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#22d3ee"
+             stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M6 12h.01M10 12h.01M14 8h4M14 12h4M6 16h12"/>
+        </svg>
+      </div>
+      <h2>经典控制台</h2>
+      <p>原 Gradio WebUI，功能最全、久经实测。习惯旧版操作流程的优选。</p>
+      <div class="tags"><span class="tag">稳定版</span><span class="tag">全功能</span></div>
+      <div class="go">进入 →</div>
+    </div>
+
+    <div class="card pro" data-mode="pro">
+      <div class="shine"></div>
+      <div class="ic">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#60a5fa"
+             stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/>
+        </svg>
+      </div>
+      <h2>专业控制台</h2>
+      <p>现代化仪表盘：系统资源监控、训练相似度曲线可视化、模型库管理、全参数合成。</p>
+      <div class="tags"><span class="tag">数据可视化</span><span class="tag">全参数</span></div>
+      <div class="go">进入 →</div>
+    </div>
+
+    <div class="card easy" data-mode="easy">
+      <div class="shine"></div>
+      <div class="ic">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#34d399"
+             stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+          <path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/>
+        </svg>
+      </div>
+      <h2>新手控制台</h2>
+      <p>纯小白友好：选声音、输文字、点生成，三步出声，全程不需要懂任何参数。</p>
+      <div class="tags"><span class="tag">傻瓜化</span><span class="tag">零配置</span></div>
+      <div class="go">进入 →</div>
+    </div>
+  </div>
+
+  <div class="foot">首次进入任一控制台需加载本地引擎（导入 torch/CUDA），请耐心等待</div>
+  <div id="toast"></div>
+
+<script>
+const cards = document.querySelectorAll(".card");
+const toast = document.getElementById("toast");
+let timer = null;
+
+function showToast(msg) {
+  toast.textContent = msg;
+  toast.style.display = "block";
+  clearTimeout(timer);
+  timer = setTimeout(() => (toast.style.display = "none"), 6000);
+}
+
+async function launch(mode, card) {
+  if (!window.__TAURI__) { showToast("请在 ADR Studio 桌面应用内使用"); return; }
+  cards.forEach(c => c.classList.remove("busy"));
+  card.classList.add("busy");
+  try {
+    // 阻塞式命令: 探活通过后壳会把窗口导航到对应控制台
+    await window.__TAURI__.core.invoke("launch_console", { mode });
+  } catch (e) {
+    card.classList.remove("busy");
+    showToast(String(e));
+  }
+}
+cards.forEach(c => c.addEventListener("click", () => launch(c.dataset.mode, c)));
+</script>
+</body>
+</html>

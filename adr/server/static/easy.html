@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADR Studio · 新手控制台</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    background: #0a0d14; color: #e8ecf4; min-height: 100vh; padding: 32px 40px;
+  }
+  header { display: flex; align-items: center; gap: 14px; margin-bottom: 28px; }
+  h1 { font-size: 20px; font-weight: 700; }
+  h1 em { font-style: normal; color: #34d399; }
+  .badge { font-size: 11px; color: #f0b429; border: 1px solid #f0b42955;
+    border-radius: 999px; padding: 3px 10px; }
+  #back {
+    margin-left: auto; background: #161d2e; color: #aebad0; border: 1px solid #263149;
+    border-radius: 8px; padding: 8px 16px; font-size: 13px; cursor: pointer;
+  }
+  #back:hover { border-color: #34d39966; color: #e8ecf4; }
+  .panel { background: #121724; border: 1px solid #1f2740; border-radius: 14px;
+    padding: 22px 24px; }
+  .panel h2 { font-size: 14px; color: #8fa1c0; margin-bottom: 14px; font-weight: 600; }
+  #status { font-size: 15px; color: #a7f3d0; }
+  #err { color: #f87171; font-size: 13px; margin-top: 14px; min-height: 18px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>ADR <em>Studio</em> · 新手控制台</h1>
+    <span class="badge">预览版</span>
+    <button id="back">← 返回启动器</button>
+  </header>
+
+  <div class="panel">
+    <h2>连接自检</h2>
+    <div id="status">正在连接本地引擎…</div>
+    <div id="err"></div>
+  </div>
+
+<script>
+/* ---- 共用: API key 透传 ---- */
+const KEY = new URLSearchParams(location.search).get("api_key");
+const api = p => p + (KEY ? (p.includes("?") ? "&" : "?") + "api_key=" + encodeURIComponent(KEY) : "");
+
+/* ---- 返回启动器 ---- */
+const back = document.getElementById("back");
+if (!window.__TAURI__) back.style.display = "none";
+back.onclick = () => window.__TAURI__ && window.__TAURI__.core.invoke("back_to_launcher");
+
+/* ---- 连接自检 ---- */
+(async function check() {
+  const el = document.getElementById("status");
+  try {
+    const r = await fetch(api("/api/adr/v1/health"));
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const d = await r.json();
+    el.textContent = "✓ 本地引擎已就绪，3 步出声向导即将开放（完整版开发中）";
+  } catch (e) {
+    el.textContent = "";
+    document.getElementById("err").textContent = "引擎连接失败: " + e.message;
+  }
+})();
+</script>
+</body>
+</html>
