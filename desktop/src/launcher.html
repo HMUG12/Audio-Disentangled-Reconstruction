@@ -46,6 +46,10 @@
   .tag { font-size: 10.5px; color: #7f92b5; background: #182136;
     border: 1px solid #223050; border-radius: 999px; padding: 2.5px 9px; }
   .go { margin-top: 16px; font-size: 12.5px; font-weight: 600; }
+  .exp { display: flex; align-items: center; gap: 7px; margin-top: 12px;
+    font-size: 12px; color: #7f92b5; cursor: pointer; }
+  .exp input { accent-color: #2dd4bf; cursor: pointer; margin: 0; }
+  .exp:hover { color: #a5b4d0; }
   .classic .ic { background: #0d3340; } .classic .go { color: #22d3ee; }
   .pro    .ic { background: #172a52; } .pro    .go { color: #60a5fa; }
   .easy   .ic { background: #0d3a2b; } .easy   .go { color: #34d399; }
@@ -82,6 +86,9 @@
       <h2>经典控制台</h2>
       <p>原 Gradio WebUI，功能最全、久经实测。习惯旧版操作流程的优选。</p>
       <div class="tags"><span class="tag">稳定版</span><span class="tag">全功能</span></div>
+      <label class="exp" title="勾选后引擎监听 0.0.0.0, 局域网设备可调用 TTS API (建议配合 API Key 鉴权)">
+        <input type="checkbox"> 对外提供调用 (局域网)
+      </label>
       <div class="go">进入 →</div>
     </div>
 
@@ -96,6 +103,9 @@
       <h2>专业控制台</h2>
       <p>现代化仪表盘：系统资源监控、训练相似度曲线可视化、模型库管理、全参数合成。</p>
       <div class="tags"><span class="tag">数据可视化</span><span class="tag">全参数</span></div>
+      <label class="exp" title="勾选后引擎监听 0.0.0.0, 局域网设备可调用 TTS API (建议配合 API Key 鉴权)">
+        <input type="checkbox"> 对外提供调用 (局域网)
+      </label>
       <div class="go">进入 →</div>
     </div>
 
@@ -111,6 +121,9 @@
       <h2>新手控制台</h2>
       <p>纯小白友好：选声音、输文字、点生成，三步出声，全程不需要懂任何参数。</p>
       <div class="tags"><span class="tag">傻瓜化</span><span class="tag">零配置</span></div>
+      <label class="exp" title="勾选后引擎监听 0.0.0.0, 局域网设备可调用 TTS API (建议配合 API Key 鉴权)">
+        <input type="checkbox"> 对外提供调用 (局域网)
+      </label>
       <div class="go">进入 →</div>
     </div>
   </div>
@@ -134,15 +147,22 @@ async function launch(mode, card) {
   if (!window.__TAURI__) { showToast("请在 ADR Studio 桌面应用内使用"); return; }
   cards.forEach(c => c.classList.remove("busy"));
   card.classList.add("busy");
+  const expose = card.querySelector(".exp input").checked;
   try {
     // 阻塞式命令: 探活通过后壳会把窗口导航到对应控制台
-    await window.__TAURI__.core.invoke("launch_console", { mode });
+    await window.__TAURI__.core.invoke("launch_console", { mode, expose });
   } catch (e) {
     card.classList.remove("busy");
     showToast(String(e));
   }
 }
-cards.forEach(c => c.addEventListener("click", () => launch(c.dataset.mode, c)));
+cards.forEach(c => {
+  c.addEventListener("click", () => launch(c.dataset.mode, c));
+  // 勾选框点击不触发卡片进入
+  c.querySelector(".exp input").addEventListener("click", e => e.stopPropagation());
+});
+// 每次加载 (含从控制台纯导航返回) 通知壳收尾上一个引擎
+window.__TAURI__ && window.__TAURI__.core.invoke("on_launcher_ready").catch(() => {});
 </script>
 </body>
 </html>

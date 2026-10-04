@@ -241,4 +241,10 @@
   - `console.py` 增建档 API: `POST /profiles/create` + `GET /profiles/create/status` (save_voice_auto 后台线程, 同名 409, 任务互斥; 长音频扫段需引擎加载 1-3 分钟故必须异步轮询)
   - `easy.html` 三步向导 (暖色友好风, 大字体大按钮, 零术语): ①选声音 (卡片点选 / 上传零样本建档双模式轮询 / 可选"进阶加练"训练按显存自动选配方) ②打字 (示例句一键填充) ③听效果 (大播放球 + 保存/改文字/换声音); 人话错误翻译 `human()`; 零样本优先产品设计 — 建档即可合成, 训练做成可选, 避免小白等 20-60 分钟
 - 全部提交**未推送**; 阶段 0 便携 Python 打包留待后续 (用户此前拍板延后)
+- [x] **Commit D: 返回启动器修复 + 调用模式开关** ✅ (5 文件; 用户实测两轮反馈驱动):
+  - 返回按钮根因: 控制台页是远程 origin (127.0.0.1), Tauri 2 默认 IPC 只放行本地 origin, invoke 全被 ACL 拒绝 → 方案回退: pro/easy 页 back 按钮改纯导航 `location.href = "http://tauri.localhost/launcher.html"` (不经 IPC); capabilities/default.json 移除 remote url 配置回退仅本地
+  - launcher.html 加载时 invoke `on_launcher_ready` 统一收尾上一控制台 sidecar (含托盘 tooltip 复位), 替代各页面自行杀进程
+  - 调用模式 (expose): `ServerState.expose: AtomicBool`, launcher 每卡片新增 checkbox "对外提供调用 (局域网)"; 勾选 → host 用 `0.0.0.0`, 否则 `127.0.0.1`; supervise 重启从 state.expose 读取; tooltip 加 "(对外服务)" 标记
+  - cargo check 零警告; 用户实测 debug exe 验证通过 ("可以了")
+- [x] **NSIS 安装包产出** ✅: `ADR Studio_0.1.0_x64-setup.exe` (1.60 MiB, tauri-bundler 2.12.1)。障碍与绕过: ① GitHub release 直连 TLS 握手失败 (被墙) → ghfast.top/gh-proxy.com 镜像循环重试下载 nsis-3.11.zip + nsis_tauri_utils.dll v0.5.3 (SHA1 校验); ② TRAE 沙箱对 `%LOCALAPPDATA%\tauri\NSIS` 下 Move/Copy/删除拦截 (新建写入允许) → tar `--strip-components=1` 平铺解压 + `requires_approval=true` 沙箱外放置 dll; ③ CLI 误报 "directory missing some files, recreating" 实为缺插件 dll → WebFetch 直取 tauri 源码确认 13 必需文件清单与精确版本, 手工组装工具链后三次构建内通过
 

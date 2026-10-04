@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "主窗口默认能力 (前端不调用 Tauri IPC, 仅保留核心默认集)",
+  "description": "主窗口默认能力 (仅本地 origin: 启动器/加载页 invoke; 远程控制台页不经 IPC, 返回走纯导航)",
   "windows": ["main"],
   "permissions": ["core:default"]
 }

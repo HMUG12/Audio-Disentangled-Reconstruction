@@ -56,6 +56,8 @@ struct ServerState {
     base_url: Mutex<Option<String>>,
     /// "" (启动器) | legacy | pro | easy
     mode: Mutex<String>,
+    /// 调用模式: true = 服务监听 0.0.0.0 (局域网可调用 API), false = 仅 127.0.0.1
+    expose: AtomicBool,
 }
 
 /// 退出标记: 托盘退出 / RunEvent::Exit 时置位, supervise 轮询后收尾。
@@ -72,6 +74,7 @@ pub fn run() {
                 pid: AtomicU32::new(0),
                 base_url: Mutex::new(None),
                 mode: Mutex::new(String::new()),
+                expose: AtomicBool::new(false),
             });
 
             // 系统托盘
@@ -120,7 +123,7 @@ pub fn run() {
             // 启动即展示 launcher.html, 服务按需拉起 (launch_console command)
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![launch_console, back_to_launcher])
+        .invoke_handler(tauri::generate_handler![launch_console, on_launcher_ready])
         .on_window_event(|window, event| {
             // 关窗 = 隐藏到托盘; 真正退出走托盘菜单 (保证 sidecar 被清理)
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -142,27 +145,28 @@ pub fn run() {
 // ---------------------------------------------------------------------------
 
 /// 启动指定控制台 (阻塞到探活通过并完成导航, 前端转 loading 态)。
+/// expose = 调用模式: 服务监听 0.0.0.0 供局域网调用 (默认仅 127.0.0.1)。
 #[tauri::command]
-async fn launch_console(app: AppHandle, mode: String) -> Result<String, String> {
+async fn launch_console(app: AppHandle, mode: String, expose: Option<bool>) -> Result<String, String> {
     if !matches!(mode.as_str(), "legacy" | "pro" | "easy") {
         return Err(format!("未知控制台模式: {mode}"));
     }
     // 探活最长 180s, 放到阻塞线程池, 避免卡住 async runtime
-    tauri::async_runtime::spawn_blocking(move || launch_blocking(app, mode))
+    tauri::async_runtime::spawn_blocking(move || launch_blocking(app, mode, expose.unwrap_or(false)))
         .await
         .map_err(|e| format!("内部任务失败: {e}"))?
 }
 
-/// 停掉 sidecar 并回到启动器 (静态页的 ← 按钮与托盘"返回启动器"共用)。
+/// launcher.html 每次加载时调用 (含从控制台返回): 收尾上一个控制台的 sidecar。
+/// 远程控制台页 (http://127.0.0.1:P) 不在 capability 授权范围内, 无法走 IPC,
+/// 其返回按钮是纯 location 导航回本页, 因此统一由本页 (本地 origin) 收尾。
 #[tauri::command]
-fn back_to_launcher(app: AppHandle) {
+fn on_launcher_ready(app: AppHandle) {
     let state: State<ServerState> = app.state();
     kill_current(&state);
     if let Some(t) = app.tray_by_id("adr-tray") {
         let _ = t.set_tooltip(Some("ADR Studio — 引擎已停止"));
     }
-    let window = app.get_webview_window("main");
-    navigate(&window, &format!("{TAURI_ORIGIN}/launcher.html"));
 }
 
 // ---------------------------------------------------------------------------
@@ -170,13 +174,14 @@ fn back_to_launcher(app: AppHandle) {
 // ---------------------------------------------------------------------------
 
 /// launch_console 的阻塞实现: 杀旧 → 置模式 → 启动+探活+导航 → 交给守护线程。
-fn launch_blocking(app: AppHandle, mode: String) -> Result<String, String> {
+fn launch_blocking(app: AppHandle, mode: String, expose: bool) -> Result<String, String> {
     let window = app.get_webview_window("main");
     let state: State<ServerState> = app.state();
 
     // 服务互斥: 切换前杀旧 sidecar, 等端口释放
     kill_current(&state);
     *state.mode.lock().unwrap() = mode.clone();
+    state.expose.store(expose, Ordering::Relaxed);
     std::thread::sleep(Duration::from_millis(600));
 
     navigate(&window, &format!("{TAURI_ORIGIN}/loading.html"));
@@ -212,13 +217,15 @@ fn start_and_wait(
     };
     let (python, cwd, pythonpath) = resolve_runtime();
     let base = format!("http://127.0.0.1:{port}");
+    // 调用模式: 0.0.0.0 对局域网开放 API; 默认仅本机 (webview 与探活都走 127.0.0.1)
+    let host = if state.expose.load(Ordering::Relaxed) { "0.0.0.0" } else { "127.0.0.1" };
 
     let mut cmd = Command::new(&python);
     match mode {
         "legacy" => {
             cmd.args([
                 "-m", "adr.cli", "webui",
-                "--host", "127.0.0.1",
+                "--host", host,
                 "--port", &port.to_string(),
                 "--no-browser",
             ]);
@@ -227,7 +234,7 @@ fn start_and_wait(
         _ => {
             cmd.args([
                 "-m", "adr.server",
-                "--addr", "127.0.0.1",
+                "--addr", host,
                 "--port", &port.to_string(),
             ]);
         }
@@ -259,13 +266,15 @@ fn start_and_wait(
     }
 
     *state.base_url.lock().unwrap() = Some(base.clone());
+    // ?desktop=1: 控制台页据此显示"返回启动器" (壳内标记; 浏览器直开不带)
     let target = match mode {
         "legacy" => format!("{base}/"),
-        "pro" => format!("{base}/pro"),
-        _ => format!("{base}/easy"),
+        "pro" => format!("{base}/pro?desktop=1"),
+        _ => format!("{base}/easy?desktop=1"),
     };
+    let expose_tip = if state.expose.load(Ordering::Relaxed) { " (对外服务)" } else { "" };
     if let Some(t) = app.tray_by_id("adr-tray") {
-        let _ = t.set_tooltip(Some(format!("ADR Studio — {target}")));
+        let _ = t.set_tooltip(Some(format!("ADR Studio — {target}{expose_tip}")));
     }
     navigate(window, &target);
     Some((child, target, Instant::now()))
@@ -293,7 +302,7 @@ fn supervise(app: AppHandle, mode: String, mut child: Child, mut started: Instan
             return;
         }
 
-        // 所有权丢失 (被新 launch_console / back_to_launcher 接管) → 让位
+        // 所有权丢失 (被新 launch_console / on_launcher_ready 接管) → 让位
         if state.pid.load(Ordering::Relaxed) != my_pid {
             return;
         }
