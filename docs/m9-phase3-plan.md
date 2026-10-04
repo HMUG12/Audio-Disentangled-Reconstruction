@@ -218,11 +218,12 @@
 - [x] **选型对比 → Tauri 2 + Python Sidecar** ✅: 壳只做 进程托管 + 托盘 + 窗口导航到 `http://127.0.0.1:<port>` 现有 Gradio 控制台, **前端零新代码**。三方案对比: Electron 内存大且壳/后端双 Node 运行时冗余; Flutter 桌面生态弱且仍需内嵌 Python, 技术栈割裂; Tauri 2 壳体积小 (~10MB 级) 内存占用低, WebView2 Win10/11 自带, Rust 侧进程管理可靠。三阶段路线: **阶段 0** 便携 Python 运行时 (python-build-standalone + requirements-lock 离线轮子 + 静态 ffmpeg → `runtime/` 绿色文件夹, 实现真"零系统依赖"); **阶段 1** 本批次壳 MVP; **阶段 2** 原生前端 (替换 Gradio, 可选)
 - [x] **脚手架 `desktop/`** ✅: `src-tauri/` (Cargo.toml: tauri 2 + tray-icon, release LTO+strip; tauri.conf.json: productName "ADR Studio", identifier io.github.hmug12.adr-studio, NSIS 打包, 主窗 1280x820) + `src/loading.html` 深色加载占位页 (`window.__adrStatus()` 供壳推状态) + `assets/icon.png` (纯 stdlib 生成 512px 深蓝底青色声波条) → `npx tauri icon` 全平台图标
 - [x] **sidecar 托管 `src-tauri/src/lib.rs`** (~290 行) ✅:
-  - 启动: 随机空闲端口 + `--addr 127.0.0.1` (避让现有 GSV/N.E.K.O 的 9881) + `python -m adr.server` spawn, `CREATE_NO_WINDOW` 防控制台闪窗
-  - 探活: 轮询 `GET /api/adr/v1/health` (批次 12 鉴权豁免路径, 壳无需 API key), 180s 超时容忍 torch/CUDA 冷导入, 每 6s 推送加载页状态
+  - 启动: 随机空闲端口 + `--host 127.0.0.1` (避让现有 GSV/N.E.K.O 的 9881) + `python -m adr.cli webui --port <P> --no-browser` spawn (与命令行 `adr webui` 同一入口, 壳不重复开浏览器), `CREATE_NO_WINDOW` 防控制台闪窗
+  - 探活: 轮询 `GET /` (Gradio 首页 200 即全站可用), 180s 超时容忍 torch/CUDA 冷导入, 每 6s 推送加载页状态
   - 守护: `try_wait()` 轮询 (**不能用阻塞 wait()**, 否则托盘退出路径死锁); 崩溃自动重启, 稳定运行 60s 重置失败计数, 连续 4 次失败托盘/加载页报错
   - 清理: 退出 `taskkill /PID <pid> /T /F` 杀整棵进程树; 托盘退出 + `RunEvent::Exit` 双保险; 关窗 = 隐藏到托盘, 真正退出只走托盘
-  - 解释器解析: 便携 `runtime/python/python.exe` → `ADR_DESKTOP_PYTHON` → 仓库 `.venv` → PATH `python`; 仓库根由 cwd/exe 向上 8 层探测 `adr/server/__main__.py`
+  - 解释器解析: 便携 `runtime/python/python.exe` → `ADR_DESKTOP_PYTHON` → 仓库 `.venv` → PATH `python`; 仓库根由 cwd/exe 向上 8 层探测 `adr/cli.py`
 - 工具链: Rust 1.99.0 经 rsproxy.cn 镜像安装 (win.rust-lang.org 直连被掐); cargo 换 rsproxy sparse 源 (用户级 ~/.cargo/config.toml, 不进仓库); MSVC Build Tools 2022 用户手动安装
 - [x] **cargo check 验证** ✅ (零警告): 编译期修 4 处 — `TrayIcon::set_tooltip` 在 tauri 2.12 签名为 `Option<S>` (3 处), `if let` 条件里 MutexGuard 临时值存活到块尾导致 E0597 (先 clone 到局部变量); 另自查修复 `creation_flags` 缺 `CommandExt` 导入
+- [x] **用户实测 → 修复 UI 挂载** ✅: 实测窗口显示 `{"detail":"Not Found"}` — 根因: 壳最初拉起的 `python -m adr.server` 是批次 11 的**无头 FastAPI API 服务** (无 `/` 路由), 而真正的 Web 控制台是 `adr/webui` (Gradio 6), 导航 `/` 必 404。修复: spawn 改 `python -m adr.cli webui --host 127.0.0.1 --port <P> --no-browser` (cli.py 自带 `__main__` guard, Python 侧零改动), 探活 `/api/adr/v1/health` → 轮询 `GET /`, 仓库根标记同步改 `adr/cli.py`。"127.0.0.1 拒绝连接"为衍生症状 (每次启动随机端口, 旧地址失效), 修复后 base_url 始终指向当前健康端口。注: 备选方案 B (`adr.server` 加 `--ui` 用 `gr.mount_gradio_app` 单进程挂载) 因 Gradio 6 theme/css/queue/prewarm 迁移细节多而弃用
 
