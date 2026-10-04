@@ -50,6 +50,7 @@ async def profiles():
             continue
         out.append({
             "name": name,
+            "ref_audio": str(Path(voice_library.VOICES_DIR) / name / "ref.wav"),
             "prompt_text": meta.get("prompt_text", ""),
             "style": meta.get("style", ""),
             "t2s_weights": meta.get("t2s_weights"),
@@ -81,6 +82,11 @@ class NativeTTS_Request(BaseModel):
     streaming_mode: bool = False   # True → 分段流 (首块 WAV 头 + 裸 PCM)
     t2s_weights: Optional[str] = None
     vits_weights: Optional[str] = None
+    # 采样参数 (批次14E 控制台高级面板透传)
+    top_k: int = 15
+    top_p: float = 1.0
+    temperature: float = 1.0
+    text_split_method: str = "cut1"  # cut0 不切 / cut1 凑四句 / cut3 按句 / cut5 按标点
 
 
 def _native_to_v2(body: NativeTTS_Request) -> dict:
@@ -98,6 +104,10 @@ def _native_to_v2(body: NativeTTS_Request) -> dict:
         "profile": body.profile,
         "t2s_weights": body.t2s_weights,
         "vits_weights": body.vits_weights,
+        "top_k": body.top_k,
+        "top_p": body.top_p,
+        "temperature": body.temperature,
+        "text_split_method": body.text_split_method,
     }
 
 
@@ -118,10 +128,15 @@ async def tts_get(
     seed: int = -1,
     media_type: str = "wav",
     streaming_mode: bool = False,
+    top_k: int = 15,
+    top_p: float = 1.0,
+    temperature: float = 1.0,
+    text_split_method: str = "cut1",
 ):
     body = NativeTTS_Request(
         text=text, profile=profile, prompt_text=prompt_text or None,
         text_lang=text_lang, prompt_lang=prompt_lang,
         speed_factor=speed_factor, seed=seed, media_type=media_type,
-        streaming_mode=streaming_mode)
+        streaming_mode=streaming_mode, top_k=top_k, top_p=top_p,
+        temperature=temperature, text_split_method=text_split_method)
     return await tts_handle(_native_to_v2(body), request)

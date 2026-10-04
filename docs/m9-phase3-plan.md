@@ -248,3 +248,20 @@
   - cargo check 零警告; 用户实测 debug exe 验证通过 ("可以了")
 - [x] **NSIS 安装包产出** ✅: `ADR Studio_0.1.0_x64-setup.exe` (1.60 MiB, tauri-bundler 2.12.1)。障碍与绕过: ① GitHub release 直连 TLS 握手失败 (被墙) → ghfast.top/gh-proxy.com 镜像循环重试下载 nsis-3.11.zip + nsis_tauri_utils.dll v0.5.3 (SHA1 校验); ② TRAE 沙箱对 `%LOCALAPPDATA%\tauri\NSIS` 下 Move/Copy/删除拦截 (新建写入允许) → tar `--strip-components=1` 平铺解压 + `requires_approval=true` 沙箱外放置 dll; ③ CLI 误报 "directory missing some files, recreating" 实为缺插件 dll → WebFetch 直取 tauri 源码确认 13 必需文件清单与精确版本, 手工组装工具链后三次构建内通过
 
+### 批次 15 (2026-10-04): 状态实时化 + 服务级预热 + 壳启动预热 + 调用控制台
+
+> 用户指令链: ①三 bug (专业版状态不动 / 首次合成慢 / 调用参数暴露不足); ②四问题追问 (状态还是不动 / 要独立调用控制台, 参数参考 api_neko / 怀疑假数据硬编码+体积小是不是没打包引擎 / 预热 2 分钟没动静); ③壳启动即自动预热, 预热好才放行进启动面板; ④"退了火绒, 先杀掉那几个 (30 个僵尸 python), 把调用控制台做好, 我这边没看到"。
+
+- [x] **stats 500/全接口僵死双根因修复** ✅ (`console.py`):
+  - 根因一: `system_stats` 是 `async def`, 内部 GPU 查询 (首次触发 torch 导入 20s)/文件 IO 全在事件循环上执行 → 一个慢请求卡死全部接口 (状态不动的真凶)。修复: 改普通 `def`, FastAPI 自动丢线程池执行; `_gpu_stats` 加 `"torch" in sys.modules` 守卫, 预热导入 torch 期间不并发 import (会抢引擎锁)
+  - 根因二: `train_status` 是 async 函数, stats 里直接调用返回 coroutine 被 jsonable_encoder 拒 → 整个 stats 500。修复: 改 `_train_snapshot()` 同步快照
+- [x] **引擎状态实时化 (三态+细分阶段)** ✅ (`gsv_engine.py` + `console.py`): 模块级 `_LOADING`/`_STAGE` + `is_loading()`/`is_ready()`/`stage()` 三个只读探针 (不触发加载); stats 新增 `engine_loading`/`engine_ready`/`engine_stage` (queued/importing/loading/kernel/ready/failed); `_engine_loaded` 单布尔废弃
+- [x] **服务启动即后台预热** ✅ (`app.py`): lifespan + `_prewarm_gsv` daemon 线程 — queued→importing (torch+GSV 模块)→loading (档案权重优先, 损坏回退预训练)→kernel (档案参考音频合成首块, JIT 预热省 ~14s CUDA 编译)→ready; 失败不致命 (首次合成现场加载); 测试引擎注入时跳过。裸服务 (N.E.K.O 直连) 也受益: 首请求不再付 1 分钟冷加载
+- [x] **原生 API 参数补齐** ✅ (`native.py`): `/profiles` 每项加 `ref_audio` 绝对路径 (调用控制台自动填充用); `/tts` GET+POST 加 `top_k`/`top_p`/`temperature`/`text_split_method` (cut0/cut1/cut3/cut5) 透传 v2
+- [x] **壳启动即预热 (预热好才进启动面板)** ✅ (`lib.rs` +242 行 + `prewarm.html` 新 + `tauri.conf.json`): 主窗口 url 指 `prewarm.html` 四阶段进度页 (检查服务→加载模型→内核预热→就绪); setup spawn `prewarm_flow` 线程: `start_server("pro")` 拉服务→探活→spawn supervise 守护→轮询 stats `engine_stage` (500ms)→Rust `eval` 驱动页面阶段推进; **240s 超时放行** (引擎继续后台加载, 不阻塞用户) + `skip_prewarm`/`retry_prewarm` 命令; `engine_status` 命令 (探活 `/api/adr/v1/health` + stats stage) 供 launcher 状态条 3s 轮询三色显示; 用户实测全链路走通: prewarm 页→超时放行→launcher→pro 热通道秒进 (日志 `/pro?desktop=1` 200 铁证)
+- [x] **独立调用控制台 `/call`** ✅ (`call.html` 新 ~430 行 + `console.py` 挂载 + `index.html` 入口): 面向程序集成 — 原生 `/api/adr/v1/tts` 与 GSV 兼容 `/api/v2/tts` 双端点切换, 档案下拉自动填充 `prompt_text`/`ref_audio_path`, 全参数面板 (含批次14E 新增采样参数), 实时生成 cURL/Python/JS 调用代码, 合成试听记录 TTFB/总耗时, 引擎状态 4s 轮询
+- [x] **launcher 第四卡片 + call 模式接入** ✅ (`launcher.html` + `lib.rs`): 3 列→4 列 grid + 紫色「调用控制台」卡片 (无 expose 勾选框, expose 读取 `?.checked ?? false` 兼容); `launch_console`/`enter_console`/`start_and_wait` 三处 call 模式白名单与 target 映射 (热通道与 pro/easy 同路径秒进); `call.html` 桌面壳内返回链接改「← 返回启动器」(仿 pro.html 纯导航)
+- [x] **假数据/硬编码排查结论 (汇报)** ✅: stats 全实测 — GPU 走 NVML, RAM/磁盘走 psutil, 引擎状态来自进程内真实标记, 训练状态来自真实 jsonl/日志; 引擎本来就不在安装包里 (壳 ~1.6MB 只是 Tauri 壳+静态页, 设计如此): 引擎 = D:\pyhon Python 环境 + adr 包, 模型按需下载 (stats `models.cached` 如实显示 0/3)
+- [x] **预热慢根因 = 火绒 (汇报)** ✅: 用户"退了火绒"仅关界面, 内核服务 HipsDaemon (34592)/wsctrlsvc (13204) 仍在 — 文件单次读取 111ms→~40ms (正常 <1ms), 模型加载被放大成分钟级; 30 个 python 僵尸实为火绒驱动冻结尸体 (CPU=0/WS=0MB, taskkill Access denied, 不占资源无害); 用户已把 D:\pyhon 与 ADR 目录加火绒信任区, 下次冷启动预热应回到 1-2 分钟
+- 验证: cargo build 通过; `python -m pytest tests/test_server_api.py` 全绿; 服务端 /call 页 HTTP 200; 用户确认四卡片 + 调用控制台秒进 + 返回按钮 OK
+

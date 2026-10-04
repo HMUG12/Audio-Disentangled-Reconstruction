@@ -17,7 +17,7 @@
         "minWidth": 960,
         "minHeight": 600,
         "center": true,
-        "url": "launcher.html"
+        "url": "prewarm.html"
       }
     ],
     "security": {

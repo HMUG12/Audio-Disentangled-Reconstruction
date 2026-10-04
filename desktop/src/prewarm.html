@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>ADR Studio</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    background: #0a0d14; color: #e8ecf4; min-height: 100vh;
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 8px; overflow: hidden; user-select: none;
+  }
+  /* 背景光晕 (与 launcher 一致) */
+  body::before, body::after {
+    content: ""; position: fixed; border-radius: 50%; filter: blur(110px);
+    z-index: -1; opacity: .5;
+  }
+  body::before { width: 460px; height: 460px; left: -140px; top: -160px;
+    background: #0e749033; }
+  body::after { width: 420px; height: 420px; right: -120px; bottom: -160px;
+    background: #4f46e526; }
+
+  .logo { font-size: 30px; font-weight: 700; letter-spacing: 1px; }
+  .logo em { font-style: normal; color: #2dd4bf; }
+  .sub { color: #7c8aa5; font-size: 13.5px; margin-bottom: 30px; }
+
+  .panel { width: min(480px, 88vw); display: flex; flex-direction: column; gap: 12px; }
+  .step {
+    display: flex; gap: 14px; align-items: center; padding: 14px 18px;
+    border-radius: 13px; background: linear-gradient(160deg, #131a2a, #0e1422);
+    border: 1px solid #202a44; transition: border-color .25s, opacity .25s;
+    opacity: .55;
+  }
+  .step.active, .step.done, .step.failed { opacity: 1; }
+  .step.active { border-color: #2dd4bf66; }
+  .step.failed { border-color: #7f1d1d99; }
+  .dot {
+    width: 27px; height: 27px; border-radius: 50%; flex: none;
+    display: grid; place-items: center; font-size: 12px; font-weight: 700;
+    background: #182136; border: 1px solid #223050; color: #7f92b5;
+  }
+  .step.active .dot { border-color: #2dd4bf99; color: #2dd4bf; }
+  .step.active .dot span { display: none; }
+  .step.active .dot::after {
+    content: ""; width: 13px; height: 13px; border: 2px solid #2dd4bf;
+    border-top-color: transparent; border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  .step.done .dot { border-color: #34d39977; background: #0d3a2b; color: #34d399; }
+  .step.failed .dot { border-color: #f8717177; background: #2a1215; color: #f87171; }
+  .step .tx { flex: 1; min-width: 0; }
+  .step h3 { font-size: 14px; font-weight: 600; }
+  .step p { font-size: 11.5px; color: #8391ab; margin-top: 3px; line-height: 1.5; }
+  .step.failed p { color: #fca5a5; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  #tip { min-height: 20px; font-size: 12.5px; color: #7c8aa5; text-align: center;
+    margin-top: 8px; }
+  #tip.ok { color: #34d399; }
+  #tip.warn { color: #fbbf24; }
+
+  #acts { display: none; gap: 12px; justify-content: center; margin-top: 6px; }
+  #acts button {
+    font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+    border-radius: 10px; padding: 9px 22px; transition: transform .15s, opacity .15s;
+  }
+  #acts button:hover { transform: translateY(-2px); }
+  #btnRetry { background: #172a52; color: #60a5fa; border: 1px solid #2b3f6e; }
+  #btnSkip { background: transparent; color: #7f92b5; border: 1px solid #223050; }
+  .foot { color: #47556e; font-size: 11.5px; margin-top: 26px; }
+</style>
+</head>
+<body>
+  <div class="logo">ADR <em>Studio</em></div>
+  <div class="sub">正在预热本地引擎，就绪后自动进入启动器</div>
+
+  <div class="panel">
+    <div class="step" id="st0">
+      <div class="dot"><span>1</span></div>
+      <div class="tx"><h3>启动本地服务</h3><p>拉起 FastAPI 引擎进程并探活</p></div>
+    </div>
+    <div class="step" id="st1">
+      <div class="dot"><span>2</span></div>
+      <div class="tx"><h3>加载框架</h3><p>导入 torch / CUDA（首次启动较慢）</p></div>
+    </div>
+    <div class="step" id="st2">
+      <div class="dot"><span>3</span></div>
+      <div class="tx"><h3>加载模型权重</h3><p>载入 GPT-SoVITS 声音克隆模型</p></div>
+    </div>
+    <div class="step" id="st3">
+      <div class="dot"><span>4</span></div>
+      <div class="tx"><h3>预热推理内核</h3><p>跑通合成链路，进控制台后首句即快</p></div>
+    </div>
+  </div>
+
+  <div id="tip">准备中…</div>
+  <div id="acts">
+    <button id="btnRetry">重试预热</button>
+    <button id="btnSkip">仍要进入</button>
+  </div>
+  <div class="foot">预热完成后引擎常驻后台，专业 / 新手控制台均可秒进</div>
+
+<script>
+const steps = [0, 1, 2, 3].map(i => document.getElementById("st" + i));
+const tip = document.getElementById("tip");
+const acts = document.getElementById("acts");
+// 引擎阶段 → 步骤下标 (queued/importing 同属"加载框架")
+const MAP = { starting: 0, queued: 1, importing: 1, loading: 2, kernel: 3 };
+
+function setTip(text, cls) {
+  tip.textContent = text;
+  tip.className = cls || "";
+}
+function setStep(idx, cls) {
+  steps.forEach((s, i) => {
+    if (i < idx) s.className = "step done";
+    else if (i === idx) s.className = "step " + cls;
+    else s.className = "step";
+  });
+}
+
+// 壳 (Rust) 通过 eval 驱动: window.__adrPrewarm(stage, text)
+window.__adrPrewarm = function (stage, text) {
+  if (stage === "ready") {
+    steps.forEach(s => (s.className = "step done"));
+    setTip(text || "预热完成, 正在进入启动器…", "ok");
+    acts.style.display = "none";
+    return;
+  }
+  if (stage === "failed") {
+    const cur = steps.findIndex(s => s.classList.contains("active"));
+    steps.forEach((s, i) => { if (i < cur) s.className = "step done"; });
+    if (cur >= 0) steps[cur].className = "step failed";
+    steps[cur >= 0 ? cur : 3].querySelector("p").textContent = text || "预热失败";
+    setTip("预热失败, 可重试或先进入启动器 (引擎会在后台重载)", "warn");
+    acts.style.display = "flex";
+    return;
+  }
+  if (stage === "timeout") {
+    setTip(text || "预热超时, 即将进入启动器 (引擎后台继续加载)", "warn");
+    return;
+  }
+  const idx = MAP[stage] ?? 0;
+  setStep(idx, "active");
+  setTip(text || "预热中…");
+};
+
+// start_server 失败时的状态文本也走这里
+window.__adrStatus = function (text) {
+  setTip(text, "warn");
+};
+
+document.getElementById("btnRetry").addEventListener("click", async () => {
+  setTip("正在重试…");
+  acts.style.display = "none";
+  try { await window.__TAURI__.core.invoke("retry_prewarm"); }
+  catch (e) { setTip(String(e), "warn"); acts.style.display = "flex"; }
+});
+document.getElementById("btnSkip").addEventListener("click", () => {
+  window.__TAURI__.core.invoke("skip_prewarm").catch(() => {});
+});
+</script>
+</body>
+</html>

@@ -149,9 +149,16 @@ POST /api/v2/tts
 | 端点 | 方法 | 说明 |
 |---|---|---|
 | `/health` | GET | 服务/引擎/当前权重状态 |
-| `/profiles` | GET | 档案清单 (名称/prompt/风格/权重/创建时间) |
+| `/profiles` | GET | 档案清单 (名称/ref_audio 绝对路径/prompt/风格/权重/创建时间) |
 | `/profiles/{name}/ref` | GET | 下载档案参考音频 (audio/wav) |
 | `/tts` | POST+GET | 按档案名合成 |
+| `/system/stats` | GET | 控制台总览: GPU/内存/磁盘/引擎状态/训练状态 |
+| `/call` | GET | 调用控制台页 (双端点参数调试 + 代码片段生成) |
+
+`/system/stats` 引擎三态字段: `engine_loading` (后台预热中) /
+`engine_ready` (_tts 权重就绪可合成) / `engine_stage` 预热细分阶段
+`queued → importing → loading → kernel → ready`, 失败为 `failed`。
+消费方探活推荐 `/health`; 需要区分"服务活着但引擎没好"时看 `engine_stage`。
 
 原生合成请求:
 
@@ -166,7 +173,11 @@ POST /api/adr/v1/tts
   "media_type": "wav",
   "streaming_mode": false,    // true → 分段流 (§2.3 字节格式)
   "t2s_weights": null,        // 可选请求级热换
-  "vits_weights": null
+  "vits_weights": null,
+  "top_k": 15,
+  "top_p": 1.0,
+  "temperature": 1.0,
+  "text_split_method": "cut1" // cut0 不切 / cut1 凑四句 / cut3 按句 / cut5 按标点
 }
 ```
 

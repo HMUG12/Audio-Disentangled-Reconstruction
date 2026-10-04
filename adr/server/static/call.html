@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADR Studio · 调用控制台</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    background: #0a0d14; color: #e8ecf4; min-height: 100vh;
+    display: flex; flex-direction: column; user-select: none;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px;
+    padding: 14px 18px; border-bottom: 1px solid #1f2740; background: #0d1119;
+  }
+  .brand { font-size: 17px; font-weight: 700; letter-spacing: .5px; }
+  .brand em { font-style: normal; color: #2dd4bf; }
+  .engstat {
+    margin-left: auto; font-size: 12.5px; color: #7c8aa5;
+    padding: 5px 12px; border: 1px solid #1f2740; border-radius: 99px; background: #121724;
+  }
+  .engstat.ok { color: #2dd4bf; border-color: #2dd4bf55; }
+  .engstat.busy { color: #fbbf24; border-color: #fbbf2455; }
+  .engstat.bad { color: #f87171; border-color: #f8717155; }
+  header a { color: #8391ab; font-size: 13px; text-decoration: none; }
+  header a:hover { color: #2dd4bf; }
+
+  main.cols {
+    flex: 1; display: grid; grid-template-columns: minmax(340px, 5fr) minmax(360px, 6fr);
+    gap: 14px; padding: 14px 18px; align-items: start; user-select: text;
+  }
+  @media (max-width: 980px) { main.cols { grid-template-columns: 1fr; } }
+  .panel {
+    background: #121724; border: 1px solid #1f2740; border-radius: 12px;
+    padding: 16px; margin-bottom: 14px;
+  }
+  .panel h2 {
+    font-size: 13.5px; font-weight: 600; color: #aab6cf;
+    letter-spacing: .5px; margin-bottom: 12px; display: flex; align-items: center; gap: 10px;
+  }
+  label { display: block; font-size: 12px; color: #7c8aa5; margin: 10px 0 4px; }
+  label b { color: #f87171; font-weight: 400; }
+  input, select, textarea {
+    width: 100%; background: #0d1119; border: 1px solid #1f2740; border-radius: 8px;
+    color: #e8ecf4; font-size: 13px; padding: 8px 10px; font-family: inherit; outline: none;
+  }
+  input:focus, select:focus, textarea:focus { border-color: #2dd4bf66; }
+  textarea { resize: vertical; min-height: 84px; line-height: 1.5; }
+  input[type=number] { appearance: textfield; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .four { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .seg { display: flex; border: 1px solid #1f2740; border-radius: 8px; overflow: hidden; }
+  .seg button {
+    flex: 1; background: #0d1119; border: none; color: #7c8aa5; font-size: 12.5px;
+    padding: 8px 6px; cursor: pointer; font-family: inherit;
+  }
+  .seg button.on { background: #1a2337; color: #2dd4bf; font-weight: 600; }
+  details { margin-top: 10px; border: 1px solid #1f2740; border-radius: 8px; padding: 0 12px; }
+  summary { cursor: pointer; font-size: 12.5px; color: #8391ab; padding: 9px 0; list-style: none; }
+  summary::before { content: "▸ "; color: #475a7d; }
+  details[open] summary::before { content: "▾ "; }
+  details .inner { padding: 2px 0 12px; }
+  .go {
+    width: 100%; margin-top: 14px; padding: 11px; border: none; border-radius: 9px;
+    background: #2dd4bf; color: #06281f; font-size: 14px; font-weight: 700;
+    cursor: pointer; font-family: inherit;
+  }
+  .go:hover { filter: brightness(1.1); }
+  .go:disabled { opacity: .55; cursor: wait; }
+  .hint { font-size: 11.5px; color: #5d6b87; margin-top: 9px; line-height: 1.6; }
+  .tabs { margin-left: auto; display: flex; gap: 4px; }
+  .tabs button {
+    background: #0d1119; border: 1px solid #1f2740; border-radius: 6px; color: #7c8aa5;
+    font-size: 11.5px; padding: 3px 10px; cursor: pointer; font-family: inherit;
+  }
+  .tabs button.on { color: #2dd4bf; border-color: #2dd4bf55; }
+  pre#code {
+    background: #0a0e16; border: 1px solid #1f2740; border-radius: 8px;
+    padding: 12px; font-size: 12px; line-height: 1.65; overflow: auto;
+    max-height: 380px; white-space: pre-wrap; word-break: break-all;
+    user-select: text; color: #c3cee3;
+  }
+  .copy { margin-top: 8px; background: #1a2337; border: 1px solid #2a3a5f; color: #aab6cf;
+    border-radius: 6px; font-size: 12px; padding: 5px 14px; cursor: pointer; font-family: inherit; }
+  .copy:hover { border-color: #2dd4bf66; color: #2dd4bf; }
+  audio { width: 100%; margin: 4px 0 8px; }
+  #meta { font-size: 12px; color: #8391ab; line-height: 1.7; }
+  #meta b { color: #2dd4bf; font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; font-size: 11.5px; margin-top: 8px; }
+  th { color: #5d6b87; font-weight: 500; text-align: left; padding: 4px 6px; border-bottom: 1px solid #1f2740; }
+  td { color: #8391ab; padding: 4px 6px; border-bottom: 1px solid #161d2e; }
+  td.ok { color: #2dd4bf; } td.err { color: #f87171; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">ADR <em>调用控制台</em></div>
+  <div class="engstat" id="engStat">引擎状态检查中…</div>
+  <a href="/" id="back">← 返回索引</a>
+</header>
+
+<main class="cols">
+  <!-- ══════════════ 左列: 请求参数 ══════════════ -->
+  <section>
+    <div class="panel">
+      <h2>请求参数</h2>
+      <div class="seg" id="epSeg">
+        <button data-ep="native" class="on">原生 /api/adr/v1/tts</button>
+        <button data-ep="v2">GSV 兼容 /api/v2/tts</button>
+      </div>
+
+      <label>音色档案 profile <span id="profReq" style="color:#f87171">*</span></label>
+      <select id="prof"><option value="">加载中…</option></select>
+
+      <div id="refRow" style="display:none">
+        <label>参考音频绝对路径 ref_audio_path <b>*</b></label>
+        <input id="ref" placeholder="D:\audio\my_voice.wav (3-10 秒干净人声)">
+      </div>
+
+      <label>合成文本 text <b>*</b></label>
+      <textarea id="text">你好，这是一次 ADR 声音克隆合成测试，引擎就绪后响应非常快。</textarea>
+
+      <div class="two">
+        <div>
+          <label>文本语言 text_lang</label>
+          <select id="tlang"></select>
+        </div>
+        <div>
+          <label>参考语言 prompt_lang</label>
+          <select id="plang"></select>
+        </div>
+      </div>
+
+      <label>参考音频文本 prompt_text (参考音频里说的那句话, 可空)</label>
+      <input id="ptext" placeholder="与参考音频逐字一致可提升相似度">
+
+      <details>
+        <summary>高级参数 (采样 / 切句 / 流式 / 权重)</summary>
+        <div class="inner">
+          <div class="two">
+            <div>
+              <label>切句方式 text_split_method</label>
+              <select id="cut">
+                <option value="cut0">cut0 · 不切</option>
+                <option value="cut1">cut1 · 凑四句一切</option>
+                <option value="cut2">cut2 · 凑50字一切</option>
+                <option value="cut3">cut3 · 按句号切 (流式首包最优)</option>
+                <option value="cut4">cut4 · 按英文句号切</option>
+                <option value="cut5" selected>cut5 · 按标点切</option>
+              </select>
+            </div>
+            <div>
+              <label>流式模式 streaming_mode</label>
+              <select id="sm">
+                <option value="0" selected>0 · 非流式 (整段返回)</option>
+                <option value="1">1 · 分段流</option>
+                <option value="2">2 · 真流式</option>
+                <option value="3">3 · 真流式 · 定长块</option>
+              </select>
+            </div>
+          </div>
+          <div class="four">
+            <div><label>top_k</label><input id="topk" type="number" value="15" min="1" max="100" step="1"></div>
+            <div><label>top_p</label><input id="topp" type="number" value="1.0" min="0" max="1" step="0.05"></div>
+            <div><label>temperature</label><input id="temp" type="number" value="1.0" min="0.01" max="2" step="0.05"></div>
+            <div><label>语速 speed_factor</label><input id="spd" type="number" value="1.0" min="0.5" max="2" step="0.05"></div>
+          </div>
+          <div class="two">
+            <div><label>随机种子 seed (-1 随机)</label><input id="seed" type="number" value="-1" step="1"></div>
+            <div>
+              <label>封装格式 media_type</label>
+              <select id="mt">
+                <option value="wav" selected>wav</option>
+                <option value="raw">raw (裸 PCM)</option>
+                <option value="ogg">ogg</option>
+                <option value="aac">aac</option>
+              </select>
+            </div>
+          </div>
+          <div class="two">
+            <div><label>GPT 权重 t2s_weights (空 = 档案/默认)</label><input id="t2s" placeholder="output\logs\…\你的s1.ckpt"></div>
+            <div><label>SoVITS 权重 vits_weights</label><input id="vits" placeholder="output\logs\…\你的s2.pth"></div>
+          </div>
+        </div>
+      </details>
+
+      <button class="go" id="go">✦ 合成试听</button>
+      <div class="hint" id="goHint">引擎未就绪时点合成会自动等待加载完成，耗时属正常。</div>
+      <div class="hint">兼容性说明：aux_ref_audio_paths / batch_size / batch_threshold / split_bucket /
+        fragment_interval / parallel_infer / repetition_penalty / sample_steps 等参数按 GSV 协议接受但被 ADR 引擎忽略（差异清单见 docs/tts-api-spec.md）。</div>
+    </div>
+  </section>
+
+  <!-- ══════════════ 右列: 代码片段 + 试听 ══════════════ -->
+  <section>
+    <div class="panel">
+      <h2>外部调用代码
+        <span class="tabs" id="langTabs">
+          <button data-lang="curl" class="on">cURL</button>
+          <button data-lang="python">Python</button>
+          <button data-lang="js">JavaScript</button>
+        </span>
+      </h2>
+      <pre id="code"></pre>
+      <button class="copy" id="copy">复制代码</button>
+    </div>
+
+    <div class="panel">
+      <h2>试听结果</h2>
+      <audio id="au" controls></audio>
+      <div id="meta">尚未合成。点左侧「合成试听」，右键音频可另存为文件。</div>
+      <table>
+        <thead><tr><th>时间</th><th>端点</th><th>流式</th><th>首包</th><th>总耗时</th><th>大小</th><th>状态</th></tr></thead>
+        <tbody id="logBody"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const LANGS = ["all_zh", "auto", "all_ja", "all_ko", "zh", "en", "ja", "ko", "yue"];
+const STAGE_TXT = {
+  ready: "引擎已就绪", queued: "引擎排队启动…", importing: "引擎加载框架 (torch)…",
+  loading: "引擎加载权重…", kernel: "引擎预热内核…", failed: "引擎预热失败 (合成时重试)",
+};
+
+let endpoint = "native";   // native | v2
+let codeLang = "curl";     // curl | python | js
+let profiles = [];
+
+/* ---- 桌面壳内 (?desktop=1): 返回链接指向壳内启动器 ---- */
+if (new URLSearchParams(location.search).get("desktop") === "1") {
+  const back = $("back");
+  back.textContent = "← 返回启动器";
+  back.href = "http://tauri.localhost/launcher.html";
+}
+
+/* ---- 端点切换: native 档案必选 / v2 可手动 ref_audio_path ---- */
+$("epSeg").onclick = e => {
+  const b = e.target.closest("button"); if (!b) return;
+  endpoint = b.dataset.ep;
+  [...$("epSeg").children].forEach(x => x.classList.toggle("on", x === b));
+  $("refRow").style.display = endpoint === "v2" ? "" : "none";
+  $("profReq").textContent = endpoint === "native" ? "*" : "(推荐)";
+  renderCode();
+};
+
+/* ---- 语言下拉 (GSV 官方全量值) ---- */
+for (const sel of [$("tlang"), $("plang")]) {
+  for (const l of LANGS) {
+    const o = document.createElement("option");
+    o.value = l; o.textContent = l;
+    sel.appendChild(o);
+  }
+}
+$("tlang").value = "all_zh";
+$("plang").value = "zh";
+
+/* ---- 档案下拉 → 自动填充 prompt_text / ref_audio_path ---- */
+async function loadProfiles() {
+  try {
+    const d = await fetch("/api/adr/v1/profiles").then(r => r.json());
+    profiles = d.profiles || [];
+  } catch { profiles = []; }
+  const sel = $("prof");
+  sel.innerHTML = "";
+  const none = document.createElement("option");
+  none.value = ""; none.textContent = "— 不使用档案 (手动指定参考音频) —";
+  sel.appendChild(none);
+  for (const p of profiles) {
+    const o = document.createElement("option");
+    o.value = p.name;
+    o.textContent = p.name + (p.style ? ` · ${p.style}` : "");
+    o.dataset.prompt = p.prompt_text || "";
+    o.dataset.ref = p.ref_audio || "";
+    sel.appendChild(o);
+  }
+}
+$("prof").onchange = () => {
+  const o = $("prof").selectedOptions[0];
+  $("ptext").value = o?.dataset.prompt || "";
+  if (o?.dataset.ref) $("ref").value = o.dataset.ref;
+  renderCode();
+};
+
+/* ---- 请求体组装 (只发生效参数) ---- */
+function buildBody() {
+  const p = $("prof").value;
+  const b = {
+    text: $("text").value,
+    text_lang: $("tlang").value,
+    prompt_text: $("ptext").value,
+    prompt_lang: $("plang").value,
+    top_k: +$("topk").value || 15,
+    top_p: +$("topp").value,
+    temperature: +$("temp").value,
+    speed_factor: +$("spd").value,
+    seed: +$("seed").value,
+    text_split_method: $("cut").value,
+    media_type: $("mt").value,
+    streaming_mode: +$("sm").value,
+  };
+  if (endpoint === "native") {
+    b.profile = p || null;
+    b.streaming_mode = +$("sm").value === 0 ? false : true; // native 仅 bool
+  } else {
+    if (p) b.profile = p;
+    const ref = $("ref").value.trim();
+    if (ref) b.ref_audio_path = ref;
+  }
+  const t2s = $("t2s").value.trim(), vits = $("vits").value.trim();
+  if (t2s) b.t2s_weights = t2s;
+  if (vits) b.vits_weights = vits;
+  return b;
+}
+
+/* ---- 代码片段生成 (实时) ---- */
+const j = o => JSON.stringify(o, null, 2);
+function renderCode() {
+  const base = location.origin;
+  const url = endpoint === "native" ? base + "/api/adr/v1/tts" : base + "/api/v2/tts";
+  const body = buildBody();
+  let code = "";
+  if (codeLang === "curl") {
+    code = `curl -X POST "${url}" \\\n  -H "Content-Type: application/json" \\\n  -d '${j(body)}' \\\n  --output out.wav`;
+  } else if (codeLang === "python") {
+    code = `import requests\n\nr = requests.post(\n    "${url}",\n    json=${j(body).split("\n").join("\n    ")},\n)\nr.raise_for_status()\nopen("out.wav", "wb").write(r.content)\nprint("已保存 out.wav,", len(r.content), "bytes")`;
+  } else {
+    code = `const resp = await fetch("${url}", {\n  method: "POST",\n  headers: { "Content-Type": "application/json" },\n  body: JSON.stringify(${j(body)}),\n});\nif (!resp.ok) throw new Error(await resp.text());\nconst blob = await resp.blob();\ndocument.querySelector("audio").src = URL.createObjectURL(blob);`;
+  }
+  $("code").textContent = code;
+}
+["text", "ref", "ptext", "tlang", "plang", "cut", "sm", "topk", "topp",
+ "temp", "spd", "seed", "mt", "t2s", "vits"].forEach(id => {
+  $(id).addEventListener("input", renderCode);
+  $(id).addEventListener("change", renderCode);
+});
+$("langTabs").onclick = e => {
+  const b = e.target.closest("button"); if (!b) return;
+  codeLang = b.dataset.lang;
+  [...$("langTabs").children].forEach(x => x.classList.toggle("on", x === b));
+  renderCode();
+};
+$("copy").onclick = async () => {
+  try { await navigator.clipboard.writeText($("code").textContent); $("copy").textContent = "已复制 ✓"; }
+  catch { $("copy").textContent = "复制失败 (手动选择)"; }
+  setTimeout(() => $("copy").textContent = "复制代码", 1500);
+};
+
+/* ---- 合成试听: 记录 TTFB / 总耗时 / 日志 ---- */
+function addLog(row) {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td>${row.t}</td><td>${row.ep}</td><td>${row.sm}</td>` +
+    `<td>${row.ttfb}</td><td>${row.total}</td><td>${row.size}</td>` +
+    `<td class="${row.cls}">${row.status}</td>`;
+  $("logBody").prepend(tr);
+  while ($("logBody").children.length > 8) $("logBody").lastChild.remove();
+}
+
+$("go").onclick = async () => {
+  const body = buildBody();
+  if (!body.text?.trim()) { $("meta").textContent = "⚠ 请先输入合成文本"; return; }
+  if (endpoint === "native" && !body.profile) { $("meta").textContent = "⚠ 原生端点必须选择音色档案"; return; }
+  if (endpoint === "v2" && !body.profile && !body.ref_audio_path) {
+    $("meta").textContent = "⚠ GSV 兼容端点需要档案或 ref_audio_path"; return;
+  }
+  const url = endpoint === "native" ? "/api/adr/v1/tts" : "/api/v2/tts";
+  const btn = $("go");
+  btn.disabled = true; btn.textContent = "⟳ 合成中…";
+  $("meta").textContent = "合成中… (流式模式下音频完整下载后播放)";
+  const t0 = performance.now();
+  try {
+    const r = await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const ttfb = Math.round(performance.now() - t0);
+    if (!r.ok) {
+      const errJ = await r.json().catch(() => ({}));
+      throw new Error(errJ.message || errJ.detail || `HTTP ${r.status}`);
+    }
+    const blob = await r.blob();
+    const total = Math.round(performance.now() - t0);
+    $("au").src = URL.createObjectURL(blob);
+    const kb = blob.size >= 1 << 20 ? (blob.size / (1 << 20)).toFixed(2) + " MB"
+                                    : Math.round(blob.size / 1024) + " KB";
+    $("meta").innerHTML = `✔ 合成完成 · 首包 <b>${ttfb} ms</b> · 总耗时 <b>${total} ms</b> · 音频 <b>${kb}</b>` +
+      (blob.size < 2000 ? '<br>⚠ 音频异常小, 可能合成失败' : "");
+    addLog({ t: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
+             ep: endpoint === "native" ? "native" : "v2", sm: body.streaming_mode,
+             ttfb: ttfb + "ms", total: total + "ms", size: kb, cls: "ok", status: "成功" });
+  } catch (e) {
+    const total = Math.round(performance.now() - t0);
+    $("meta").innerHTML = `✘ 合成失败: ${e.message}`;
+    addLog({ t: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
+             ep: endpoint === "native" ? "native" : "v2", sm: body.streaming_mode,
+             ttfb: "—", total: total + "ms", size: "—", cls: "err", status: e.message.slice(0, 40) });
+  } finally {
+    btn.disabled = false; btn.textContent = "✦ 合成试听";
+  }
+};
+
+/* ---- 引擎状态轮询 (4s, 与专业控制台同源) ---- */
+async function pollEngine() {
+  const el = $("engStat");
+  try {
+    const d = await fetch("/api/adr/v1/system/stats").then(r => r.json());
+    const stage = d.engine_stage || "";
+    if (d.engine_ready) { el.textContent = "● " + STAGE_TXT.ready; el.className = "engstat ok"; }
+    else if (stage === "failed") { el.textContent = "● " + STAGE_TXT.failed; el.className = "engstat bad"; }
+    else if (STAGE_TXT[stage]) { el.textContent = "● " + STAGE_TXT[stage]; el.className = "engstat busy"; }
+    else { el.textContent = "● 引擎未加载"; el.className = "engstat"; }
+  } catch { el.textContent = "● 服务不可达"; el.className = "engstat bad"; }
+}
+
+loadProfiles().then(renderCode);
+renderCode();
+pollEngine();
+setInterval(pollEngine, 4000);
+</script>
+</body>
+</html>
