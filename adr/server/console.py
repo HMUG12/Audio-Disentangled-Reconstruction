@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -294,7 +295,8 @@ async def train_start(body: TrainStartReq):
                 fh = open(gate_log, "a", encoding="utf-8", errors="replace")
                 gate_proc = subprocess.Popen(
                     gate_cmd, stdout=fh, stderr=subprocess.STDOUT,
-                    text=True, encoding="utf-8", errors="replace", cwd=str(REPO))
+                    text=True, encoding="utf-8", errors="replace", cwd=str(REPO),
+                    env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"})
             except Exception:
                 gate_proc = None  # 门禁失败不影响训练
 
@@ -302,7 +304,9 @@ async def train_start(body: TrainStartReq):
             proc = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, encoding="utf-8", errors="replace",
-                cwd=str(REPO), bufsize=1)
+                cwd=str(REPO), bufsize=1,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8",
+                     "PYTHONUTF8": "1"})  # 训练链全 utf-8, 否则 Windows GBK 输出乱码
         except Exception as e:
             if gate_proc:
                 gate_proc.terminate()

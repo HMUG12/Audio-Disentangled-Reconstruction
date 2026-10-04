@@ -265,3 +265,14 @@
 - [x] **预热慢根因 = 火绒进程链冻结, 与磁盘/代码无关 (汇报, 三轮实验定案)** ✅: 旧结论"文件读取被拖慢"被实测推翻 — 磁盘读 456MB 仅 185ms (2.5GB/s)、TEMP 建删文件 3.8ms/次, 均正常。py-spy 三次抓栈同位置: 壳 spawn 的 python 卡死在 `numba ensure_cache_path → tempfile.TemporaryFile(dir=__pycache__)` 的 `os.open` (librosa `@jit(cache=True)` 导入链) 14+ 分钟, WS 恒定不涨 = 进程被火绒**冻结挂起**而非慢。决定性对照: 裸进程 `import librosa` 0.0s; PowerShell 手动/`.NET CreateNoWindow` spawn 同款服务 50-60s 正常推进; **终端拉起的壳被火绒静默终止 (无事件日志) 且其子 python cmdline 冻结不可读**, 而 **explorer.exe 中转 (等同用户双击) 启动壳 → 存活 + 服务 91s fully ready (WS 3.2GB, stage=ready)**。定论: 火绒按**启动来源/进程链信誉**行为判定 — 用户双击日常使用完全正常不受影响; 目录信任区对该判定无效也无需; `CREATE_NO_WINDOW` 标记非触发条件 (已排除)。29 个 cmdline 为空的 python 僵尸 = 历次冻结尸体 (taskkill 拒绝访问, WS=0 不占资源, 无害残留)
 - 验证: cargo build 通过; `python -m pytest tests/test_server_api.py` 全绿; 服务端 /call 页 HTTP 200; 用户确认四卡片 + 调用控制台秒进 + 返回按钮 OK
 
+### 批次 16 (2026-10-04): 专业控制台训练三问题 — 门禁崩溃根因修复
+
+> 用户反馈: "训练花了 33 分钟 24 轮太慢了; 训好的模型不知道去哪里了识别不出; 训练进度与相似度曲线从始至终一点反应都没有"。三问题同源: 门禁进程秒崩。
+
+- [x] **根因链 (实验+日志定案)** ✅: 门禁进程打零样本基线时把**完整训练录音** (output/uploads/xxx.mp3, 常 >10s) 直接当克隆 ref → GSV 硬限制 "参考音频在3~10秒范围外" 抛 OSError (TTS.py:816 set_ref_audio) → 门禁进程秒崩。连锁后果: ①`train_gate_<exp>.jsonl` 不存在 → 进度/相似度曲线全无数据; ②sim≥0.80 早停永不触发 → 跑满 24 轮 (55s/轮本身正常, 33 分钟 = 24×~80s); ③绑定下拉默认"不绑定"用户没选 → 权重产出在 `SoVITS_weights_v2/` 但没建档案 → "模型不知道去哪"
+- [x] **门禁 ref 自动裁剪** ✅ (`train_gate.py`): 新增 `_clip_ref()` — ref >10s 时 librosa 去首尾静音 (top_db=30) 取前 8s 写 `output/gate_ref_<exp>.wav`, 基线与逐轮打分用同一裁剪 ref, 可比性不变
+- [x] **绑定默认自动建档** ✅ (`pro.html`): 下拉首项改 `__auto__` (用实验名自动建档绑定, 推荐); `loadBindOptions()` 动态填充同步保留该项; tStart 提交 `__auto__` → 实验名 (空则 my_voice)。训完即档案即用, 不再"模型去哪了"
+- [x] **训练日志乱码修复** ✅ (`console.py`): 训练/门禁两个 Popen 加 `PYTHONIOENCODING=utf-8 + PYTHONUTF8=1` — Windows 子进程默认 GBK 输出, 按utf-8 读全乱码 (exp 名/报错栈不可辨认)
+- [x] **存量补绑** ✅: 「yui的声音」e24 权重 (81MB) 经 `voice_library.save_voice` 手动建档案, ref 取 slicer_opt 首切片 — 用户可直接在 Clone 页刷新使用, 无需重训
+- 验证: py_compile 语法通过; `pytest tests/test_server_api.py` 33 全绿。注: 服务 pid 33808 是旧代码启动, console.py/train_gate.py 修复需重启服务/壳生效; pro.html 静态页刷新即可
+

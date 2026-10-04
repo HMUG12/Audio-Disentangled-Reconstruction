@@ -52,6 +52,26 @@ def _score_probes(eng, ref: str, vits: str = PRE_S2G, t2s: str = PRE_T2S,
     return sum(sims) / len(sims), sims
 
 
+def _clip_ref(ref: str, exp: str) -> str:
+    """参考音频超 10s (GSV 合成硬限制 3~10s) 时自动裁剪: 去首尾静音后取前 8s。
+
+    实测事故: 控制台把完整训练录音 (--ref output/uploads/xxx) 直接传进门禁,
+    零样本基线合成即抛 "参考音频在3~10秒范围外" → 门禁进程崩 → 无曲线/无早停。
+    基线与逐轮打分用同一裁剪 ref, 可比性不变。
+    """
+    import librosa
+    import soundfile as sf
+    y, sr = librosa.load(ref, sr=None, mono=True)
+    if len(y) / sr <= 10.0:
+        return ref
+    y, _ = librosa.effects.trim(y, top_db=30)          # 去首尾静音
+    y = y[: int(8.0 * sr)]                              # 8s < 10s 上限, 留安全边
+    out = REPO / "output" / f"gate_ref_{exp}.wav"
+    sf.write(str(out), y, sr)
+    print(f"[gate] ref 超长已裁剪: {Path(ref).name} -> {out.name} (8s, 去静音)", flush=True)
+    return str(out)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--exp", default="user_voice")
@@ -85,6 +105,7 @@ def main():
         eng = get_gsv_engine()
 
     # 基线: 真零样本 (官方预训练 s1+s2), 不受 tts_infer.yaml custom 段漂移影响
+    args.ref = _clip_ref(args.ref, args.exp)
     base, base_sims = _score_probes(eng, args.ref, sents=sents)
     print(f"[gate] 零样本基线 mean={base:.3f} 逐句={['%.3f' % s for s in base_sims]}, "
           f"目标 {args.target}", flush=True)

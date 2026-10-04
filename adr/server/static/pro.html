@@ -251,7 +251,7 @@
       </div>
 
       <label class="f">训练后绑定到音色档案（可选）</label>
-      <select id="tBind"><option value="">不绑定（仅产出权重）</option></select>
+      <select id="tBind"><option value="__auto__">自动建档绑定（用实验名, 推荐）</option><option value="">不绑定（仅产出权重）</option></select>
 
       <div class="row" style="margin-top:16px">
         <label style="display:flex;align-items:center;gap:7px;font-size:13px;color:var(--sub);cursor:pointer">
@@ -619,7 +619,8 @@ async function loadBindOptions() {
   try {
     const d = await jfetch("/api/adr/v1/profiles");
     const sel = $("tBind");
-    sel.innerHTML = '<option value="">不绑定（仅产出权重）</option>' +
+    sel.innerHTML = '<option value="__auto__">自动建档绑定（用实验名, 推荐）</option>' +
+      '<option value="">不绑定（仅产出权重）</option>' +
       d.profiles.map(p => `<option value="${esc(p.name)}">绑定到: ${esc(p.name)}</option>`).join("");
   } catch {}
 }
@@ -633,7 +634,10 @@ $("tStart").onclick = async () => {
     epochs: +$("tEp").value,
     recipe: $("tRecipe").value,
     gate_on: $("tGate").checked,
-    bind_voice: $("tBind").value,
+    // __auto__ = 用实验名自动建档绑定 (后端支持档案不存在时自动新建)
+    bind_voice: $("tBind").value === "__auto__"
+      ? ($("tExp").value.trim() || "my_voice")
+      : $("tBind").value,
   };
   try {
     $("tStart").disabled = true;
