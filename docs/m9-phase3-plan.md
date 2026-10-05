@@ -370,3 +370,12 @@
 - [x] **测试 +9 (266→275)** ✅: 新建 `tests/test_gsv_seg_cache.py` — GSVEngine 轻量构造 (monkeypatch `_lazy_init`/`_gsv_context`/`_ensure_weights`) + FakeTTS (`run` yield **(sr, chunk)** 顺序与引擎消费面一致); 覆盖命中零前向+PCM 字节一致 / 不同文本不误命中 / `ADR_SEG_CACHE=0` 关闭 / 条数上限逐出 / LRU 触碰改变逐出序 / 采样参数入 key / 双线程排队时序 (轮询 queue_depth>=1 后 join 断言归零) / 模块级透传 / 合成期间 busy=1。**坑: `@pytest.fixture(autouse)` 少写 `=True` → NameError (裸 autouse 被当位置参数求值); 段缓存回放 chunk 边界与首发不同 (段级整块 vs 逐块), 断言须拼接后比字节**
 - [x] **全量 pytest** ✅: tests/ 全套 **275 passed + 1 skipped (0:02:52)**
 - [x] **实弹验证 (12444 重启批次 23 代码, prewarm 44s)** ✅: health 带 `queue_depth/synth_busy`; 冷文本 t1 (三句) 流式 **10125ms** → 重叠文本 t2 (首句同/尾句异, 整体缓存必 miss) **6482ms** — 首段命中省 ~3.6s GPU 前向; 双长文本并发: 20 个采样 `q1/b1` (请求1 合成 + 请求2 排队 12 秒全程可见) → `q0/b1` (请求2 转入合成) → 结束双端点归零 `q0/b0`; 两音频完整产出 (754802B/724524B) — 排队计数时序全链路验证通过
+
+### 批次 24 (2026-10-05): M9 Phase 3 回归收尾
+
+> 用户圈定: 跑一轮整体回归收尾 M9 Phase 3。服务未重启 (PID 32372 批次 23 代码持续运行)。
+
+- [x] **全量 pytest** ✅: tests/ 全套 **275 passed + 1 skipped (0:02:51)** — 与批次 23 基线一致, 零回归
+- [x] **端点冒烟 (零 GPU)** ✅: `/api/adr/v1/health` 三态 `ready=True/loading=False/stage=ready` + `q=0/busy=0`; console `/system/stats` 同源一致; `/v1/models` 列 3 档案。**坑: native health 真实路径是 `/api/adr/v1/health` (router 挂 `/api/adr/v1` 前缀), 裸 `/health` 404 — health 判据语义仍是批次 22 修复后的三态**
+- [x] **三面 TTS 实弹** ✅: OpenAI 非流式冷 **5558ms** (241964B, RIFF 合法) → 同 body 二发 **9ms** (≈617x, 字节一致, 整体 tts_cache); OpenAI 流式冷 **5538ms** (279084B, chunked audio/wav) → 同文本二发 **22.8ms** (≈243x, **279084B 字节级一致 — 段缓存回放连 WAV 容器头都稳定**); v2 面 `/api/v2/tts` 新文本 **10.7s** 200 audio/wav 合法; 全部结束后 health 归零 `q=0/busy=0` — 队列计数无泄漏
+- **结论**: M9 Phase 3 (批次 14~23) 回归全绿收尾。当前能力面: 训练管线 (显存治理/bf16) + 三协议 TTS 面 (v2/v3/OpenAI) + 双层缓存 (整体落盘持久化 + 句级内存 LRU) + 排队可视化 + 调用台三端点对照; 遗留跟进项见批次 19~21 "待用户" (素材增补/试听/N.E.KO 对接实测)
