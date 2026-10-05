@@ -285,6 +285,7 @@ class GSVEngine:
         top_k: int = 15,
         top_p: float = 1.0,
         temperature: float = 1.0,
+        speed_factor: float = 1.0,
     ):
         """流式合成: 逐块 yield (wav_chunk float32 [-1,1], sr)。
 
@@ -296,6 +297,8 @@ class GSVEngine:
               收敛到确定值 (后续段仍随机, 不伤韵律多样性)
         top_k / top_p / temperature: GPT 采样参数。默认 (15, 1.0, 1.0)
               为上游流式历史行为; 偏发散, 档案可配保守值压电音 (批次20)
+        speed_factor: 语速 (批次21)。仅 ≠1.0 时注入 GSV inputs —
+              GSV 流式路径对语速支持不稳, ==1.0 保持历史行为字节级一致
         """
         import numpy as np
 
@@ -320,6 +323,8 @@ class GSVEngine:
                 "streaming_mode": True,
                 "parallel_infer": True,
             }
+            if speed_factor != 1.0:
+                inputs["speed_factor"] = speed_factor
             with self._gsv_context():
                 self._ensure_weights(vits_weights, t2s_weights)
                 for i, seg in enumerate(segments):

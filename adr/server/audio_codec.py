@@ -65,6 +65,29 @@ def pack_wav(io_buffer: BytesIO, data: np.ndarray, rate: int) -> BytesIO:
     return io_buffer
 
 
+def pack_mp3(io_buffer: BytesIO, data: np.ndarray, rate: int) -> BytesIO:
+    """编码为 MP3 (ffmpeg libmp3lame, 192k) — 批次21 OpenAI 兼容面默认格式。"""
+    process = subprocess.Popen(
+        [
+            "ffmpeg",
+            "-f", "s16le",
+            "-ar", str(rate),
+            "-ac", "1",
+            "-i", "pipe:0",
+            "-c:a", "libmp3lame",
+            "-b:a", "192k",
+            "-f", "mp3",
+            "pipe:1",
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    out, _ = process.communicate(input=to_int16(data).tobytes())
+    io_buffer.write(out)
+    return io_buffer
+
+
 def pack_aac(io_buffer: BytesIO, data: np.ndarray, rate: int) -> BytesIO:
     """编码为 AAC/ADTS (ffmpeg, 192k)。"""
     process = subprocess.Popen(
@@ -95,6 +118,8 @@ def pack_audio(io_buffer: BytesIO, data: np.ndarray, rate: int, media_type: str)
         io_buffer = pack_ogg(io_buffer, data, rate)
     elif media_type == "aac":
         io_buffer = pack_aac(io_buffer, data, rate)
+    elif media_type == "mp3":
+        io_buffer = pack_mp3(io_buffer, data, rate)
     elif media_type == "wav":
         io_buffer = pack_wav(io_buffer, data, rate)
     else:

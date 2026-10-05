@@ -7,14 +7,18 @@
 - profile/voice 档案解析 + ADR_TTS_DEFAULT_PROFILE 回退
 - /api/adr/v1 原生端点 (health/profiles/ref/tts)
 - ADR_TTS_API_KEY 鉴权 (Bearer/X-API-Key/query 三通道 + 豁免 health + 默认关闭)
+- /v1/audio/speech + /v1/models OpenAI 兼容面 (批次21, N.E.KO OpenAI provider)
+- TTS LRU 缓存: 命中/关闭/media_type 入 key/seed 不入 key (批次21)
 """
 import json
+import shutil
 
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
 from adr.server import create_app
+from adr.server import tts_cache
 
 
 class FakeEngine:
@@ -42,11 +46,15 @@ class FakeEngine:
 
     def synthesize_stream(self, text, ref_audio, prompt_text="", text_lang="zh",
                           prompt_lang="zh", t2s_weights=None, vits_weights=None,
-                          split_method="cut3", head_seed=-1):
+                          split_method="cut3", head_seed=-1,
+                          top_k=15, top_p=1.0, temperature=1.0,
+                          speed_factor=1.0):
         self.stream_calls.append(dict(
             text=text, ref_audio=ref_audio, prompt_text=prompt_text,
             t2s_weights=t2s_weights, vits_weights=vits_weights,
-            split_method=split_method, head_seed=head_seed))
+            split_method=split_method, head_seed=head_seed,
+            top_k=top_k, top_p=top_p, temperature=temperature,
+            speed_factor=speed_factor))
         if self.fail:
             raise RuntimeError("boom")
         for _ in range(3):
@@ -54,6 +62,15 @@ class FakeEngine:
 
     def warmup(self, vits_weights=None, t2s_weights=None):
         self.warmup_calls.append((vits_weights, t2s_weights))
+
+
+@pytest.fixture(autouse=True)
+def _clean_tts_cache(monkeypatch):
+    """tts_cache 是模块级全局: 每用例前清空防跨用例泄漏 (批次21)。"""
+    monkeypatch.delenv("ADR_TTS_CACHE", raising=False)
+    tts_cache.clear()
+    yield
+    tts_cache.clear()
 
 
 @pytest.fixture
@@ -100,7 +117,7 @@ def test_v2_missing_ref_400(client):
 
 def test_v2_bad_media_type_400(client):
     r = client.post("/api/v2/tts",
-                    json={"text": "hi", "ref_audio_path": "a.wav", "media_type": "mp3"})
+                    json={"text": "hi", "ref_audio_path": "a.wav", "media_type": "flac"})
     assert r.status_code == 400
     assert "media_type" in r.json()["message"]
 
@@ -318,9 +335,13 @@ def test_native_tts_get_and_stream(client, engine, voice_dir):
 
 @pytest.fixture
 def auth_client(engine, monkeypatch):
-    """双 key 配置: k1 / k2 (逗号分隔 + 空格, 验证解析健壮性)。"""
+    """双 key 配置: k1 / k2 (逗号分隔 + 空格, 验证解析健壮性)。
+
+    缓存关闭: 三通道用例同 body 连发 3 次, 命中缓存会吞掉第 2/3 次合成。
+    """
     monkeypatch.delenv("ADR_TTS_API_KEY", raising=False)
     monkeypatch.setenv("ADR_TTS_API_KEY", "k1, k2")
+    monkeypatch.setenv("ADR_TTS_CACHE", "0")
     return TestClient(create_app(engine=engine))
 
 
@@ -378,3 +399,171 @@ def test_auth_empty_value_means_off(engine, monkeypatch):
     c = TestClient(create_app(engine=engine))
     assert c.post("/api/v2/tts",
                   json={"text": "hi", "ref_audio_path": "a.wav"}).status_code == 200
+
+
+# ─── OpenAI 兼容面 (/v1/audio/speech + /v1/models, 批次21) ───
+
+def test_openai_speech_wav_nonstream(client, engine, voice_dir):
+    """model=档案名 + stream=false → 与 /api/v2 非流式完全同路径。"""
+    r = client.post("/v1/audio/speech", json={
+        "model": "demo", "input": "你好", "response_format": "wav",
+        "stream": False})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("audio/wav")
+    assert r.content[:4] == b"RIFF"
+    call = engine.synth_calls[0]
+    assert call["ref_audio"].endswith(("demo\\ref.wav", "demo/ref.wav"))
+    assert call["prompt_text"] == "参考文本"          # 档案回填 prompt_text
+    assert call["speed_factor"] == 1.0
+
+
+def test_openai_voice_alias_fallback(client, engine, voice_dir):
+    """voice 字段 (OpenAI 语义) 无 model 时作档案别名回退。"""
+    r = client.post("/v1/audio/speech", json={
+        "input": "hi", "voice": "demo", "response_format": "wav", "stream": False})
+    assert r.status_code == 200
+    assert engine.synth_calls[0]["ref_audio"].endswith(
+        ("demo\\ref.wav", "demo/ref.wav"))
+
+
+def test_openai_speed_passthrough(client, engine, voice_dir):
+    r = client.post("/v1/audio/speech", json={
+        "model": "demo", "input": "hi", "response_format": "wav",
+        "stream": False, "speed": 1.3})
+    assert r.status_code == 200
+    assert engine.synth_calls[0]["speed_factor"] == 1.3
+
+
+def test_openai_stream_wav(client, engine, voice_dir):
+    """stream=true (默认) → 流式 WAV, 首块 44B 头 + 裸 PCM。"""
+    r = client.post("/v1/audio/speech", json={
+        "model": "demo", "input": "hi", "response_format": "wav", "stream": True})
+    assert r.status_code == 200
+    _assert_stream_wav(r.content)
+    assert len(engine.stream_calls) == 1
+    assert engine.synth_calls == []
+
+
+def test_openai_stream_speed_passthrough(client, engine, voice_dir):
+    """流式 speed 透传到引擎 (批次21 补齐)。"""
+    r = client.post("/v1/audio/speech", json={
+        "model": "demo", "input": "hi", "response_format": "wav",
+        "stream": True, "speed": 1.2})
+    assert r.status_code == 200
+    assert engine.stream_calls[0]["speed_factor"] == 1.2
+
+
+def test_openai_unknown_model_openai_error(client, engine, voice_dir):
+    """未知档案 → 400 + OpenAI 风格错误壳 (error.type / error.message)。"""
+    r = client.post("/v1/audio/speech", json={
+        "model": "ghost", "input": "hi", "response_format": "wav", "stream": False})
+    assert r.status_code == 400
+    err = r.json()["error"]
+    assert err["type"] == "invalid_request_error"
+    assert "unknown profile: ghost" in err["message"]
+
+
+def test_openai_bad_response_format_400(client):
+    r = client.post("/v1/audio/speech", json={
+        "input": "hi", "response_format": "flac"})
+    assert r.status_code == 400
+    err = r.json()["error"]
+    assert err["type"] == "invalid_request_error"
+    assert "response_format" in err["message"]
+
+
+def test_openai_models_list(client, voice_dir):
+    r = client.get("/v1/models")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["object"] == "list"
+    assert [m["id"] for m in body["data"]] == ["demo"]
+    assert body["data"][0]["object"] == "model"
+    assert body["data"][0]["owned_by"] == "adr"
+
+
+def test_openai_default_format_is_mp3(client, engine, voice_dir):
+    """不传 response_format → mp3 (OpenAI 官方默认); 需 ffmpeg。"""
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg not on PATH")
+    r = client.post("/v1/audio/speech", json={
+        "model": "demo", "input": "hi", "stream": False})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("audio/mp3")
+
+
+def test_openai_explicit_null_model_uses_voice(client, engine, voice_dir):
+    """显式 null model (N.E.KO 可能发) + voice 别名 → 不炸。"""
+    r = client.post("/v1/audio/speech", json={
+        "model": None, "voice": "demo", "input": "hi",
+        "response_format": "wav", "stream": False})
+    assert r.status_code == 200
+    assert engine.synth_calls[0]["ref_audio"].endswith(
+        ("demo\\ref.wav", "demo/ref.wav"))
+
+
+# ─── TTS LRU 缓存 (批次21) ───
+
+def test_cache_hit_skips_synth(client, engine):
+    """同 body 二次 POST → 命中缓存, 引擎只跑一次。"""
+    body = {"text": "hi", "ref_audio_path": "a.wav"}
+    r1 = client.post("/api/v2/tts", json=body)
+    r2 = client.post("/api/v2/tts", json=body)
+    assert r1.status_code == 200 and r2.status_code == 200
+    assert r1.content == r2.content
+    assert len(engine.synth_calls) == 1
+
+
+def test_cache_disabled_via_env(client, engine, monkeypatch):
+    """ADR_TTS_CACHE=0 → 完全旁路。"""
+    monkeypatch.setenv("ADR_TTS_CACHE", "0")
+    body = {"text": "hi", "ref_audio_path": "a.wav"}
+    client.post("/api/v2/tts", json=body)
+    client.post("/api/v2/tts", json=body)
+    assert len(engine.synth_calls) == 2
+
+
+def test_cache_key_includes_media_type(client, engine):
+    """wav 与 raw 缓存不同条目 (key 含 media_type)。"""
+    client.post("/api/v2/tts", json={"text": "hi", "ref_audio_path": "a.wav",
+                                     "media_type": "wav"})
+    client.post("/api/v2/tts", json={"text": "hi", "ref_audio_path": "a.wav",
+                                     "media_type": "raw"})
+    assert len(engine.synth_calls) == 2
+
+
+def test_cache_seed_not_in_key(client, engine):
+    """seed 不入 key: 播报一致性优先, 仅 seed 不同 → 复用同一次合成。"""
+    client.post("/api/v2/tts", json={"text": "hi", "ref_audio_path": "a.wav",
+                                     "seed": 1})
+    client.post("/api/v2/tts", json={"text": "hi", "ref_audio_path": "a.wav",
+                                     "seed": 2})
+    assert len(engine.synth_calls) == 1
+
+
+def test_cache_stream_bypassed(client, engine):
+    """流式路径不缓存: 同 body 两次流式 → 引擎跑两次。"""
+    body = {"text": "hi", "ref_audio_path": "a.wav", "streaming_mode": 1}
+    client.post("/api/v2/tts", json=body)
+    client.post("/api/v2/tts", json=body)
+    assert len(engine.stream_calls) == 2
+
+
+def test_cache_failed_synth_not_stored(client, engine):
+    """合成失败不写缓存: 失败后修好, 同 body 重试会真正再合成 (共 2 次调用)。"""
+    body = {"text": "hi", "ref_audio_path": "a.wav"}
+    engine.fail = True
+    assert client.post("/api/v2/tts", json=body).status_code == 400
+    engine.fail = False
+    assert client.post("/api/v2/tts", json=body).status_code == 200
+    assert len(engine.synth_calls) == 2
+
+
+def test_v2_stream_speed_factor_passthrough(client, engine):
+    """v2 流式 speed_factor 透传 (批次21 补齐; ==1.0 也照传, 引擎自行短路)。"""
+    r = client.post("/api/v2/tts", json={
+        "text": "hi", "ref_audio_path": "a.wav",
+        "streaming_mode": 1, "speed_factor": 1.2})
+    assert r.status_code == 200
+    _assert_stream_wav(r.content)
+    assert engine.stream_calls[0]["speed_factor"] == 1.2
