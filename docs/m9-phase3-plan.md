@@ -358,3 +358,15 @@
 - [x] **全量 pytest** ✅: tests/ 全套 **266 passed + 1 skipped (0:03:12)**
 - [x] **实弹验证 (12444 重启批次 22 代码)** ✅: health 三态 `engine_ready:true / engine_loading:false / engine_stage:"ready"` (prewarm 后, 误报修复生效); 非流式冷合成 **6.36s** 且 `data/tts_cache/29266549….wav` (359724B) 落盘; 杀进程重启 (prewarm ~40s ready) 后同 body 再发 **0.02s 命中** (≈318x), 字节数与盘上文件一致 — 持久化全链路 (落盘/惰性扫描/跨进程命中) 验证通过
 - 备注: 环境坑复盘 — WQL `Name='D:\\pyhon\\python.exe'` 反斜杠转义导致旧 PID 查找落空 (WQL 字符串里 `\` 不转义, 应写 `Name='D:\pyhon\python.exe'` 或直接 CommandLine like); PowerShell `Invoke-WebRequest -OutFile` 与 `-PassThru` 组合触发 NullReferenceException (下载本身成功, 勿混用)
+
+### 批次 23 (2026-10-05): 流式句级缓存 + 并发排队可视化
+
+> 用户圈定两项优化: 流式句子级缓存 (同句跳 GPU 前向) + 并发排队可视化 (前端可见排队/合成状态)。
+
+- [x] **引擎层句级缓存 (内存 LRU, 不落盘)** ✅: `gsv_engine.py` 模块级 `_SEG_CACHE` (OrderedDict, key→(int16 PCM bytes, sr)) + `_SEG_LOCK` 独立锁 + `_SEG_BYTES` 字节计数; key=sha1(json([seg, ref_audio, prompt_text, 语种, split_method, 采样参数, 语速, 权重])), **seed 不入 key** (播报一致性, 与批次 21 整体缓存语义一致); 上限 `ADR_SEG_CACHE_MAX=128` 条 / `ADR_SEG_CACHE_MB=256` MB / `ADR_SEG_CACHE=0` 关闭; 逐出 while 双条件 popitem(last=False), 单段超上限自然不缓存 (把自己弹空退出)。**设计决策: 引擎层而非服务层** (段边界天然存在于 synthesize_stream, v2/OpenAI 两面零改造受益); **内存不落盘** (PCM 体积大性价比低, GPU 前向才是瓶颈, 跨重启由整体 tts_cache 兜底)
+- [x] **synthesize_stream 段循环改造** ✅: 每段先算 key 查缓存 — 命中 `np.frombuffer(int16)→float32/32767` 直接 yield (整段一整块, 跳过 GSV 全部前向); 未命中逐块 yield 同时收集, 段完成后 `(clip(full)*32767).astype(int16).tobytes()` 写缓存; **int16 往返字节级一致** (audio_codec.to_int16 对 int16 输入幂等, 公式一致); 生成器被客户端断连时 GeneratorExit 从 yield 点抛出 → 段中部分数据不会写缓存 (半段不污染)
+- [x] **并发排队可视化** ✅: GSVEngine 加 `_qlock/_queue_waiters/_busy` + `queue_depth()/synth_busy()` 实例方法; 计数模式 = 进 `_lock` 前计 waiter → 拿锁转 busy (**entered 标志 + try/finally 防懒加载异常漏减, 生成器断连同样兜住**); `synthesize` 与 `synthesize_stream` 都包; 模块级同名函数 (`_ENGINE` None 时 0); native `/health` 与 console `/system/stats` 各加 `queue_depth/synth_busy` 两字段
+- [x] **前端就绪分支显示排队** ✅: pro.html 引擎卡副行 `合成中 · 排队 N` / `排队 N` / `合成秒级返回` 三态; call.html 状态点 `● 合成中 (排队 N)` 同理; easy.html 跳过 (无引擎状态卡)
+- [x] **测试 +9 (266→275)** ✅: 新建 `tests/test_gsv_seg_cache.py` — GSVEngine 轻量构造 (monkeypatch `_lazy_init`/`_gsv_context`/`_ensure_weights`) + FakeTTS (`run` yield **(sr, chunk)** 顺序与引擎消费面一致); 覆盖命中零前向+PCM 字节一致 / 不同文本不误命中 / `ADR_SEG_CACHE=0` 关闭 / 条数上限逐出 / LRU 触碰改变逐出序 / 采样参数入 key / 双线程排队时序 (轮询 queue_depth>=1 后 join 断言归零) / 模块级透传 / 合成期间 busy=1。**坑: `@pytest.fixture(autouse)` 少写 `=True` → NameError (裸 autouse 被当位置参数求值); 段缓存回放 chunk 边界与首发不同 (段级整块 vs 逐块), 断言须拼接后比字节**
+- [x] **全量 pytest** ✅: tests/ 全套 **275 passed + 1 skipped (0:02:52)**
+- [x] **实弹验证 (12444 重启批次 23 代码, prewarm 44s)** ✅: health 带 `queue_depth/synth_busy`; 冷文本 t1 (三句) 流式 **10125ms** → 重叠文本 t2 (首句同/尾句异, 整体缓存必 miss) **6482ms** — 首段命中省 ~3.6s GPU 前向; 双长文本并发: 20 个采样 `q1/b1` (请求1 合成 + 请求2 排队 12 秒全程可见) → `q0/b1` (请求2 转入合成) → 结束双端点归零 `q0/b0`; 两音频完整产出 (754802B/724524B) — 排队计数时序全链路验证通过

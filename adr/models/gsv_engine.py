@@ -15,9 +15,12 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import json
 import os
 import sys
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -106,6 +109,20 @@ class GSVEngine:
         self._tts = None
         self._lock = threading.Lock()
         self._loaded = {"t2s": None, "vits": None}   # 已热换权重路径 (批次9幂等跳过)
+        # 批次23: 并发排队可视化计数 (_lock 外等待数 + 持锁合成中数)
+        self._qlock = threading.Lock()
+        self._queue_waiters = 0
+        self._busy = 0
+
+    def queue_depth(self) -> int:
+        """正在 _lock 外排队等待合成的请求数 (批次23, 供前端可视化)。"""
+        with self._qlock:
+            return self._queue_waiters
+
+    def synth_busy(self) -> int:
+        """正在合成 (持 _lock) 的请求数 (批次23)。"""
+        with self._qlock:
+            return self._busy
 
     @property
     def is_ready(self) -> bool:
@@ -308,33 +325,74 @@ class GSVEngine:
         vits_weights = str(Path(vits_weights).resolve()) if vits_weights else None
         head, rest = self._stream_head_split(text)
         segments = [head, *self._split_long(rest)] if rest else [text]
-        with self._lock:
-            self._lazy_init()
-            inputs = {
-                "text": head,
-                "text_lang": text_lang,
-                "ref_audio_path": ref_audio,
-                "prompt_text": prompt_text,
-                "prompt_lang": prompt_lang,
-                "top_k": top_k,
-                "top_p": top_p,
-                "temperature": temperature,
-                "text_split_method": split_method,
-                "streaming_mode": True,
-                "parallel_infer": True,
-            }
-            if speed_factor != 1.0:
-                inputs["speed_factor"] = speed_factor
-            with self._gsv_context():
-                self._ensure_weights(vits_weights, t2s_weights)
-                for i, seg in enumerate(segments):
-                    inputs["text"] = seg
-                    inputs["seed"] = head_seed if (i == 0 and head_seed >= 0) else -1
-                    for sr, chunk in self._tts.run(inputs):
-                        chunk = np.asarray(chunk, dtype=np.float32)
-                        if np.abs(chunk).max() > 1.5:
-                            chunk = chunk / 32768.0
-                        yield chunk, int(sr)
+        # 批次23: 排队可视化 — 进锁前计 waiter, 拿到锁转入 busy (entered
+        # 标志防懒加载抛异常漏减; 生成器被客户端断连关闭时 finally 同样兜住)
+        with self._qlock:
+            self._queue_waiters += 1
+        entered = False
+        try:
+            with self._lock:
+                with self._qlock:
+                    self._queue_waiters -= 1
+                    self._busy += 1
+                entered = True
+                self._lazy_init()
+                inputs = {
+                    "text": head,
+                    "text_lang": text_lang,
+                    "ref_audio_path": ref_audio,
+                    "prompt_text": prompt_text,
+                    "prompt_lang": prompt_lang,
+                    "top_k": top_k,
+                    "top_p": top_p,
+                    "temperature": temperature,
+                    "text_split_method": split_method,
+                    "streaming_mode": True,
+                    "parallel_infer": True,
+                }
+                if speed_factor != 1.0:
+                    inputs["speed_factor"] = speed_factor
+                with self._gsv_context():
+                    self._ensure_weights(vits_weights, t2s_weights)
+                    for i, seg in enumerate(segments):
+                        inputs["text"] = seg
+                        inputs["seed"] = head_seed if (i == 0 and head_seed >= 0) else -1
+                        # 批次23: 句级缓存 — 命中直接回放 int16, 跳过 GPU 前向
+                        ckey = None
+                        if _seg_cache_enabled():
+                            ckey = _seg_cache_key(
+                                seg, ref_audio, prompt_text, text_lang,
+                                prompt_lang, split_method, top_k, top_p,
+                                temperature, speed_factor, t2s_weights,
+                                vits_weights)
+                            hit = _seg_cache_get(ckey)
+                            if hit is not None:
+                                pcm, hit_sr = hit
+                                buf = np.frombuffer(pcm, dtype=np.int16)
+                                yield buf.astype(np.float32) / 32767.0, int(hit_sr)
+                                continue
+                        seg_chunks: list = []
+                        seg_sr = 32000
+                        for sr, chunk in self._tts.run(inputs):
+                            chunk = np.asarray(chunk, dtype=np.float32)
+                            if np.abs(chunk).max() > 1.5:
+                                chunk = chunk / 32768.0
+                            seg_chunks.append(chunk)
+                            seg_sr = int(sr)
+                            yield chunk, int(sr)
+                        if ckey is not None and seg_chunks:
+                            full = (seg_chunks[0] if len(seg_chunks) == 1
+                                    else np.concatenate(seg_chunks))
+                            _seg_cache_put(
+                                ckey,
+                                (np.clip(full, -1.0, 1.0) * 32767).astype(np.int16).tobytes(),
+                                seg_sr)
+        finally:
+            with self._qlock:
+                if entered:
+                    self._busy -= 1
+                else:
+                    self._queue_waiters -= 1
 
     def synthesize(
         self,
@@ -370,29 +428,44 @@ class GSVEngine:
         ref_audio = str(Path(ref_audio).resolve())
         t2s_weights = str(Path(t2s_weights).resolve()) if t2s_weights else None
         vits_weights = str(Path(vits_weights).resolve()) if vits_weights else None
-        with self._lock:
-            self._lazy_init()
-            inputs = {
-                "text": text,
-                "text_lang": text_lang,
-                "ref_audio_path": str(ref_audio),
-                "prompt_text": prompt_text,
-                "prompt_lang": prompt_lang,
-                "top_k": top_k,
-                "top_p": top_p,
-                "temperature": temperature,
-                "speed_factor": speed_factor,
-                "seed": seed,
-                "text_split_method": split_method,
-                "return_fragment": False,
-                "streaming_mode": False,
-                "parallel_infer": True,
-            }
-            self._ensure_weights(vits_weights, t2s_weights)
-            with self._gsv_context():
-                sr, audio = None, None
-                for sr, audio in self._tts.run(inputs):
-                    pass  # 非流式只 yield 一次完整音频
+        # 批次23: 排队可视化 (同 synthesize_stream, entered 标志防漏减)
+        with self._qlock:
+            self._queue_waiters += 1
+        entered = False
+        try:
+            with self._lock:
+                with self._qlock:
+                    self._queue_waiters -= 1
+                    self._busy += 1
+                entered = True
+                self._lazy_init()
+                inputs = {
+                    "text": text,
+                    "text_lang": text_lang,
+                    "ref_audio_path": str(ref_audio),
+                    "prompt_text": prompt_text,
+                    "prompt_lang": prompt_lang,
+                    "top_k": top_k,
+                    "top_p": top_p,
+                    "temperature": temperature,
+                    "speed_factor": speed_factor,
+                    "seed": seed,
+                    "text_split_method": split_method,
+                    "return_fragment": False,
+                    "streaming_mode": False,
+                    "parallel_infer": True,
+                }
+                self._ensure_weights(vits_weights, t2s_weights)
+                with self._gsv_context():
+                    sr, audio = None, None
+                    for sr, audio in self._tts.run(inputs):
+                        pass  # 非流式只 yield 一次完整音频
+        finally:
+            with self._qlock:
+                if entered:
+                    self._busy -= 1
+                else:
+                    self._queue_waiters -= 1
         if audio is None:
             raise RuntimeError("GPT-SoVITS 未返回音频")
         audio = np.asarray(audio, dtype=np.float32)
@@ -400,6 +473,71 @@ class GSVEngine:
         if np.abs(audio).max() > 1.5:
             audio = audio / 32768.0
         return audio, int(sr)
+
+
+# ---------------------------------------------------------------------------
+# 批次23: 流式句级缓存 (进程内内存 LRU, 不落盘)
+# ---------------------------------------------------------------------------
+# 服务层整体缓存 (tts_cache, 批次22) 兜底跨重启; 这里按"段"缓存 int16 PCM —
+# 同文本重复播报/跨请求重发时已合成句子直接回放, 跳过 GPU 前向。PCM 体积大
+# 且 GPU 前向才是瓶颈, 内存 LRU 性价比最高。key 不含 seed (播报一致性, 同
+# 文本不同采样轮次返回相同音频, 与批次21整体缓存语义一致)。
+_SEG_CACHE: "OrderedDict[str, tuple[bytes, int]]" = OrderedDict()
+_SEG_LOCK = threading.Lock()
+_SEG_BYTES = 0   # 当前缓存占用量 (int16 PCM 字节)
+
+
+def _seg_cache_enabled() -> bool:
+    return os.environ.get("ADR_SEG_CACHE", "1") != "0"
+
+
+def _seg_cache_key(seg: str, ref_audio: str, prompt_text: str,
+                   text_lang: str, prompt_lang: str, split_method: str,
+                   top_k: int, top_p: float, temperature: float,
+                   speed_factor: float,
+                   t2s_weights: Optional[str], vits_weights: Optional[str]) -> str:
+    payload = json.dumps(
+        [seg, ref_audio, prompt_text, text_lang, prompt_lang, split_method,
+         top_k, top_p, temperature, speed_factor, t2s_weights, vits_weights],
+        ensure_ascii=False)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+
+def _seg_cache_get(key: str):
+    with _SEG_LOCK:
+        item = _SEG_CACHE.get(key)
+        if item is not None:
+            _SEG_CACHE.move_to_end(key)   # LRU 触碰
+        return item
+
+
+def _seg_cache_put(key: str, pcm: bytes, sr: int):
+    global _SEG_BYTES
+    try:
+        max_items = max(0, int(os.environ.get("ADR_SEG_CACHE_MAX", "128")))
+    except ValueError:
+        max_items = 128
+    try:
+        max_bytes = max(0, int(os.environ.get("ADR_SEG_CACHE_MB", "256"))) * 1024 * 1024
+    except ValueError:
+        max_bytes = 256 * 1024 * 1024
+    if max_items <= 0 or max_bytes <= 0:
+        return
+    with _SEG_LOCK:
+        _SEG_CACHE[key] = (pcm, sr)
+        _SEG_BYTES += len(pcm)
+        # 双上限逐出 (条数/字节); 单段超上限时把自己弹空, 自然不缓存
+        while _SEG_CACHE and (len(_SEG_CACHE) > max_items
+                              or _SEG_BYTES > max_bytes):
+            _, (old_pcm, _) = _SEG_CACHE.popitem(last=False)
+            _SEG_BYTES -= len(old_pcm)
+
+
+def _seg_cache_clear():
+    global _SEG_BYTES
+    with _SEG_LOCK:
+        _SEG_CACHE.clear()
+        _SEG_BYTES = 0
 
 
 _ENGINE: Optional[GSVEngine] = None
@@ -422,6 +560,16 @@ def stage() -> str:
     if is_ready():
         return "ready"
     return _STAGE
+
+
+def queue_depth() -> int:
+    """进程级排队数 (批次23, 引擎未初始化时 0)。"""
+    return _ENGINE.queue_depth() if _ENGINE is not None else 0
+
+
+def synth_busy() -> int:
+    """进程级合成中请求数 (批次23, 引擎未初始化时 0)。"""
+    return _ENGINE.synth_busy() if _ENGINE is not None else 0
 
 
 def get_gsv_engine() -> GSVEngine:

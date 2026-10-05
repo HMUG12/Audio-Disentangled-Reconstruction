@@ -38,6 +38,9 @@ async def health(request: Request):
         "engine_ready": _gsv.is_ready(),
         "engine_loading": _gsv.is_loading(),
         "engine_stage": _gsv.stage(),
+        # 批次23: 并发排队可视化 (排队等待数 / 合成中数)
+        "queue_depth": _gsv.queue_depth(),
+        "synth_busy": _gsv.synth_busy(),
         "default_profile": getattr(state, "default_profile", None),
         "weights": {
             "t2s": getattr(state, "t2s_weights", None),

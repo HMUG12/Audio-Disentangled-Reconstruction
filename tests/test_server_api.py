@@ -294,6 +294,9 @@ def test_native_health(client):
     body = r.json()
     assert body["status"] == "ok"
     assert body["service"] == "adr-tts"
+    # 批次23: 并发排队可视化字段 (测试进程 _ENGINE 未初始化 → 0)
+    assert isinstance(body["queue_depth"], int) and body["queue_depth"] >= 0
+    assert isinstance(body["synth_busy"], int) and body["synth_busy"] >= 0
 
 
 def test_native_profiles(client, voice_dir):
