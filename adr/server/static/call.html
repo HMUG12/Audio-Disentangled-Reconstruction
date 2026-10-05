@@ -479,7 +479,11 @@ async function pollEngine() {
   try {
     const d = await fetch("/api/adr/v1/system/stats").then(r => r.json());
     const stage = d.engine_stage || "";
-    if (d.engine_ready) { el.textContent = "● " + STAGE_TXT.ready; el.className = "engstat ok"; }
+    if (d.engine_ready) {
+      const q = d.queue_depth || 0, b = d.synth_busy || 0;
+      el.textContent = b > 0 ? `● 合成中${q > 0 ? ` (排队 ${q})` : ""}`
+        : q > 0 ? `● 排队 ${q}` : "● " + STAGE_TXT.ready;
+      el.className = "engstat ok"; }
     else if (stage === "failed") { el.textContent = "● " + STAGE_TXT.failed; el.className = "engstat bad"; }
     else if (STAGE_TXT[stage]) { el.textContent = "● " + STAGE_TXT[stage]; el.className = "engstat busy"; }
     else { el.textContent = "● 引擎未加载"; el.className = "engstat"; }

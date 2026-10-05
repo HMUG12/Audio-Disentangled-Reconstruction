@@ -607,7 +607,10 @@ async function loadStats() {
     };
     const stage = d.engine_stage || "";
     if (d.engine_ready) { eng.textContent = "已就绪"; eng.className = "v ok";
-      $("cEngSub").textContent = "合成秒级返回"; }
+      const q = d.queue_depth || 0, b = d.synth_busy || 0;
+      $("cEngSub").textContent = b > 0
+        ? `合成中${q > 0 ? ` · 排队 ${q}` : ""}`
+        : q > 0 ? `排队 ${q}` : "合成秒级返回"; }
     else if (stage === "failed") { eng.textContent = STAGE_TXT.failed; eng.className = "v err"; }
     else if (STAGE_TXT[stage]) { eng.textContent = STAGE_TXT[stage]; eng.className = "v acc"; }
     else { eng.textContent = "未加载"; eng.className = "v"; }

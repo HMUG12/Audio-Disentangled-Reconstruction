@@ -153,6 +153,9 @@ def system_stats():
         "engine_ready": gsv_engine.is_ready(),
         # 预热细分阶段: queued/importing/loading/kernel/ready/failed/""
         "engine_stage": gsv_engine.stage(),
+        # 批次23: 并发排队可视化 (排队等待数 / 合成中数)
+        "queue_depth": gsv_engine.queue_depth(),
+        "synth_busy": gsv_engine.synth_busy(),
         "profiles": _profile_count(),
         "models": _model_stats(),
         # 注意: train_status 是 async, 直接调用返回 coroutine 会被
