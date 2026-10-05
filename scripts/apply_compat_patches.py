@@ -253,6 +253,44 @@ patch(
 ''',
 )
 
+# 批次20 O3 bf16 混合精度 (s2 训练降显存 30~40%): ADR_S2_BF16=1 且显卡支持
+# (Ampere+, torch.cuda.is_bf16_supported) 时 autocast 用 bfloat16 并关 GradScaler
+# (bf16 动态范围大, 无需 loss scale, 数值更稳)。未开环境变量 → dtype=fp16,
+# 行为与上游完全一致; 模型主权重始终 fp32, 权重产物格式不变。
+patch(
+    "gpt_sovits/GPT_SoVITS/s2_train.py",
+    "ADR bf16 O3",
+    "from torch.cuda.amp import GradScaler, autocast",
+    '''from torch.cuda.amp import GradScaler, autocast
+
+# ADR 兼容补丁 ADR bf16 O3: 混合精度开关 — ADR_S2_BF16=1 且 Ampere+ 显卡生效
+_ADR_BF16 = (os.environ.get("ADR_S2_BF16") == "1"
+             and torch.cuda.is_available() and torch.cuda.is_bf16_supported())
+_ADR_AMP_DTYPE = torch.bfloat16 if _ADR_BF16 else torch.float16''',
+)
+patch(
+    "gpt_sovits/GPT_SoVITS/s2_train.py",
+    "GradScaler bf16",
+    "    scaler = GradScaler(enabled=hps.train.fp16_run)",
+    "    scaler = GradScaler(enabled=hps.train.fp16_run and not _ADR_BF16)  # GradScaler bf16",
+)
+# 第一处 autocast (前向) — 用上文 sv_emb 锚定, 避免命中第二处
+patch(
+    "gpt_sovits/GPT_SoVITS/s2_train.py",
+    "autocast fwd bf16",
+    '''                sv_emb = sv_emb.to(device)
+        with autocast(enabled=hps.train.fp16_run):''',
+    '''                sv_emb = sv_emb.to(device)
+        with autocast(enabled=hps.train.fp16_run, dtype=_ADR_AMP_DTYPE):  # autocast fwd bf16''',
+)
+# 第二处 autocast (生成器) — 上一个补丁应用后此处已唯一
+patch(
+    "gpt_sovits/GPT_SoVITS/s2_train.py",
+    "autocast gen bf16",
+    "        with autocast(enabled=hps.train.fp16_run):",
+    "        with autocast(enabled=hps.train.fp16_run, dtype=_ADR_AMP_DTYPE):  # autocast gen bf16",
+)
+
 # ---------- DiffSinger / RVC ----------
 # 均无需文件补丁: DiffSinger 直接可跑; RVC 新版用 -m 模块调用 +
 # 环境变量 (weight_root/rmvpe_root/index_root, 见 rvc_engine.py/_rvc_context)

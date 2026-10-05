@@ -247,6 +247,30 @@ class GSVEngine:
             return text[: cut + 1], text[cut + 1:]
         return text, ""
 
+    @staticmethod
+    def _split_long(text: str, max_len: int = 40) -> list:
+        """批次20 长句优化: 无句读超长段细分, 救 GSV cut 切不开的最坏情况。
+
+        GSV 内部 split (cut1/3/5) 依赖标点 — 一整段无句号的"单长句"会整段
+        一次 AR decode: 耗时线性膨胀且发散 (电音/加字) 概率随长度陡增。
+        有句读的段交给 GSV 自切 (保留其凑句/分段优化); 仅对无句读且超
+        max_len 的段按停顿标点细分, 完全无标点按 max_len+15 硬切兜底。
+        """
+        if len(text) <= max_len or any(c in text for c in "。！？!?；;"):
+            return [text]
+        segs, buf = [], ""
+        for ch in text:
+            buf += ch
+            if len(buf) >= max_len and ch in "，,、：:—…":
+                segs.append(buf)
+                buf = ""
+            elif len(buf) >= max_len + 15:  # 无标点硬切兜底
+                segs.append(buf)
+                buf = ""
+        if buf:
+            segs.append(buf)
+        return segs
+
     def synthesize_stream(
         self,
         text: str,
@@ -258,6 +282,9 @@ class GSVEngine:
         vits_weights: Optional[str] = None,
         split_method: str = "cut3",
         head_seed: int = -1,
+        top_k: int = 15,
+        top_p: float = 1.0,
+        temperature: float = 1.0,
     ):
         """流式合成: 逐块 yield (wav_chunk float32 [-1,1], sr)。
 
@@ -267,6 +294,8 @@ class GSVEngine:
               / cut1 凑四句一切 / cut0 不切 / cut5 按标点切
         head_seed: ≥0 时固定首段采样种子 — 首包延迟从 2.7~4.9s 方差
               收敛到确定值 (后续段仍随机, 不伤韵律多样性)
+        top_k / top_p / temperature: GPT 采样参数。默认 (15, 1.0, 1.0)
+              为上游流式历史行为; 偏发散, 档案可配保守值压电音 (批次20)
         """
         import numpy as np
 
@@ -275,7 +304,7 @@ class GSVEngine:
         t2s_weights = str(Path(t2s_weights).resolve()) if t2s_weights else None
         vits_weights = str(Path(vits_weights).resolve()) if vits_weights else None
         head, rest = self._stream_head_split(text)
-        segments = [head, rest] if rest else [text]
+        segments = [head, *self._split_long(rest)] if rest else [text]
         with self._lock:
             self._lazy_init()
             inputs = {
@@ -284,9 +313,9 @@ class GSVEngine:
                 "ref_audio_path": ref_audio,
                 "prompt_text": prompt_text,
                 "prompt_lang": prompt_lang,
-                "top_k": 15,
-                "top_p": 1.0,
-                "temperature": 1.0,
+                "top_k": top_k,
+                "top_p": top_p,
+                "temperature": temperature,
                 "text_split_method": split_method,
                 "streaming_mode": True,
                 "parallel_infer": True,

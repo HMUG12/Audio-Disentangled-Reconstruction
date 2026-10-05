@@ -92,6 +92,13 @@ def save_voice(
     vdir.mkdir(parents=True, exist_ok=True)
     dst = vdir / "ref.wav"
     _materialize_ref(ref_audio, dst)
+    # sampling 属档案级手工调优项 (批次20): 重建档案时保留, 不被覆盖
+    prev_sampling = None
+    try:
+        prev_sampling = json.loads(
+            (vdir / "meta.json").read_text(encoding="utf-8")).get("sampling")
+    except Exception:
+        pass
     meta = {
         "name": name,
         "prompt_text": prompt_text,
@@ -100,6 +107,7 @@ def save_voice(
         "rvc_weights": rvc_weights,
         "rvc_index": rvc_index,
         "style": style,
+        "sampling": prev_sampling,
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     (vdir / "meta.json").write_text(

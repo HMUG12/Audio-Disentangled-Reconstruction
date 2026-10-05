@@ -71,7 +71,9 @@ def main():
     ap.add_argument("--exp", default="user_voice")
     ap.add_argument("--s2-epochs", type=int, default=8)
     ap.add_argument("--s1-epochs", type=int, default=8)
-    ap.add_argument("--batch-size", type=int, default=4, help="8GB 显存安全值")
+    ap.add_argument("--batch-size", default="auto",
+                    help="O1: auto=按显存分档 (≥11GB→6 / ≥7.5GB→4 / ≥4.5GB→2 / "
+                         "更低→1+10s截断), 或显式数字; 实测锚点 8GB@bs4 峰值 7.8GB")
     ap.add_argument("--max-clip-sec", type=float, default=None,
                     help="W3: 长 clip 截断秒数 (4GB 显存训练用 10, 配 --batch-size 1~2; 不传=不截)"
                          " 需 s2 训练补丁 (apply_compat_patches.py #16/#17) 配合生效")
@@ -138,6 +140,29 @@ def main():
               "训练 (s2/s1) 需要 NVIDIA GPU (AMD/Intel 显卡暂不支持训练, 可用 CPU 推理+门禁)")
     asr_prec = "float16" if has_cuda else "int8"   # ct2 无静默回退: CPU+float16 直接 LOAD FAIL
     is_half = "True" if has_cuda else "False"      # BERT/HuBERT half 精度 CPU 不支持
+
+    # O1: batch_size 自适应 — 按显存分档 (实测锚点: 8GB@bs4 峰值 7.8GB,
+    # 4GB@bs1 训练自身 ~3.1-3.5GB; 更高显存提 bs 换吞吐, 更低显存降 bs + 截 clip)
+    bs_arg = str(args.batch_size).strip().lower()
+    if bs_arg != "auto":
+        args.batch_size = int(bs_arg)
+    elif has_cuda:
+        gb = torch.cuda.get_device_properties(0).total_memory / 1024 ** 3
+        if gb >= 11:
+            args.batch_size, cap = 6, None
+        elif gb >= 7.5:
+            args.batch_size, cap = 4, None
+        elif gb >= 4.5:
+            args.batch_size, cap = 2, None
+        else:
+            args.batch_size, cap = 1, 10.0
+        if cap and not args.max_clip_sec:
+            args.max_clip_sec = cap  # 低显存配 10s 截断 (W3 补丁), 否则 OOM 风险
+        print(f"[O1] 显存 {gb:.1f}GB -> batch_size={args.batch_size}"
+              + (f" + clip≤{cap:.0f}s" if cap else ""))
+    else:
+        args.batch_size = 1
+        print("[O1] 无 CUDA: batch_size=1 (本轮仅数据准备)")
 
     if start <= 0:
         run(f'"{PY}" -s tools/slice_audio.py "{audio}" "{sliced}" -34 4000 300 10 500 0.9 0.25 0 1',
@@ -214,8 +239,11 @@ def main():
         tmp_cfg = GSV / "TEMP" / "tmp_s2.json"
         tmp_cfg.parent.mkdir(exist_ok=True)
         tmp_cfg.write_text(json.dumps(cfg), encoding="utf-8")
+        # O3: Ampere+ 显卡 (A2000/30/40 系) 走 bf16 混合精度 — 显存降 30~40%,
+        # 免 loss scale 更稳; 老卡 (Turing-) 自动回落 fp16 现状
+        s2_env = {"ADR_S2_BF16": "1"} if torch.cuda.is_bf16_supported() else None
         run(f'"{PY}" -s GPT_SoVITS/s2_train.py --config "{tmp_cfg}"',
-            desc=f"6/7 SoVITS 微调 ({args.s2_epochs} epochs)")
+            env=s2_env, desc=f"6/7 SoVITS 微调 ({args.s2_epochs} epochs)")
 
         # C3: 训完自动把最新 s2 权重绑定到音色档案 (不存在则自动建档, 闭环断点修复)
         if args.bind_voice:
