@@ -276,3 +276,13 @@
 - [x] **存量补绑** ✅: 「yui的声音」e24 权重 (81MB) 经 `voice_library.save_voice` 手动建档案, ref 取 slicer_opt 首切片 — 用户可直接在 Clone 页刷新使用, 无需重训
 - 验证: py_compile 语法通过; `pytest tests/test_server_api.py` 33 全绿。注: 服务 pid 33808 是旧代码启动, console.py/train_gate.py 修复需重启服务/壳生效; pro.html 静态页刷新即可
 
+### 批次 17 (2026-10-05): Clone 合成 "tts failed" — 档案 ref 超长闭环修复
+
+> 用户反馈: "训练完后我想测试时报 tts failed"。批次 16 补绑档案的 ref 本身踩了门禁同款 3~10s 硬限制。
+
+- [x] **根因 (实测复现+定案)** ✅: `POST /tts (profile=yui的声音)` → 400 `{"message":"tts failed","Exception":"参考音频在3~10秒范围外"}`。量时长实锤: 档案 ref.wav = **10.50125s** (336320 采样 @ 32kHz), 16kHz 重采样后 168040 > 160000 (TTS.py:815)。源头 = 批次 16 补绑时取 slicer_opt **文件名排序首切片**, 未验时长 (该切片恰 10.5s)。与门禁崩溃 (批次 16) 同源: GSV 3~10s 硬限制的第二处踩坑
+- [x] **存量修复** ✅: yui 档案 ref.wav 跳过开头 1s 取 8s 覆盖写回 (8.0s @ 32kHz PCM_16); meta.json 不动 (权重绑定不变)
+- [x] **自动建档防护** ✅ (`gsv_finetune.py`): 新增 `_pick_ref()` 替代"盲取首切片" — soundfile 只读头测时长, 挑 3~9.5s 内最接近 7s 的切片; 无合格切片 (全超长/过短/无切片用原始录音) 则去静音裁 8s 写 `output/bind_ref_<exp>.wav`。下次训练自动建档即合法
+- [x] **复测通过** ✅: 服务 (壳 explorer 中转重启, 端口动态 13496) ready 后 `POST /tts` → **HTTP 200**, 213KB, 4.0s; 产物 WAV PCM_16 32kHz 单声道 3.34s 有效
+- 注: 复测前一次服务进程在合成请求时崩溃 (curl 56 连接重置, 无日志可查, 疑似偶发); explorer 中转重启后同请求正常, 不再复现, 观察即可。附带坑: 探活轮询应按 python 子进程 pid 过滤 netstat (壳 pid 无监听端口); 终端直起 python 跑 librosa 导入会被火绒冻结 (改纯 soundfile 方案绕开)
+
