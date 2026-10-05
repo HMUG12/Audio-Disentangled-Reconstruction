@@ -32,6 +32,29 @@ def info() -> None:
 
 
 @main.command()
+@click.option("--fix", is_flag=True,
+              help="自动修复可修项 (档案 ref 超长裁剪 / STOP 残留清理)")
+def doctor(fix: bool) -> None:
+    """一键环境自检: 依赖/权重/档案/端口/磁盘, --fix 自动修复可修项。"""
+    from adr.core.doctor import run_checks
+
+    report = run_checks(fix=fix)
+    icon = {"ok": "✓", "warn": "!", "fail": "✗", "fixed": "⟳", "info": "·"}
+    click.echo("ADR Doctor 环境诊断")
+    click.echo("=" * 64)
+    for c in report["checks"]:
+        click.echo(f"[{icon.get(c['status'], '?')}] {c['name']}")
+        for line in c["detail"].split("; "):
+            click.echo(f"      {line}")
+    s = report["summary"]
+    click.echo("=" * 64)
+    click.echo(f"结果: {s.get('ok', 0)} 正常, {s.get('fixed', 0)} 已修复, "
+               f"{s.get('warn', 0)} 警告, {s.get('fail', 0)} 失败")
+    if s.get("fail", 0) > 0:
+        sys.exit(1)
+
+
+@main.command()
 def check() -> None:
     """运行安装检查。"""
     from adr.core import get_logger, setup_logging

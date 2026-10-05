@@ -342,6 +342,48 @@ async def train_stop():
 
 
 _UPLOAD_EXT = {".wav", ".mp3", ".flac", ".m4a", ".ogg", ".zip"}
+_UPLOAD_MAX_SIZE = 500 * 1024 * 1024      # 500MB (训练素材异常上传防呆)
+_UPLOAD_MAX_DURATION = 7200.0             # 2h; 训练素材建议 5~30 分钟
+
+
+def _probe_audio(path: Path) -> dict:
+    """音频真伪/时长探测 (批次18 兜底): soundfile 优先, 失败回落 ffprobe
+    (m4a/aac 等 libsndfile 不认的格式)。两者都失败 → 抛 ValueError 拒收。"""
+    import soundfile as sf
+    try:
+        info = sf.info(str(path))
+        return {"duration_s": round(info.frames / info.samplerate, 1),
+                "samplerate": info.samplerate, "via": "soundfile"}
+    except Exception:
+        pass
+    exe = shutil.which("ffprobe")
+    if not exe:  # GSV 仓库根通常自带
+        for cand in (OUTPUT_DIR.parent.parent / "third_party" / "gpt_sovits" / "ffmpeg.exe",
+                     OUTPUT_DIR.parent.parent / "third_party" / "gpt_sovits" / "ffprobe.exe"):
+            if cand.exists():
+                exe = str(cand)
+                break
+    if not exe:
+        # 无 ffprobe 无法判定真伪 — 放行 (训练管线 ffmpeg 会再报错), 不阻塞上传
+        return {"duration_s": None, "samplerate": None, "via": "none"}
+    r = subprocess.run(
+        [exe, "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=nw=1:nk=1", str(path)],
+        capture_output=True, text=True, timeout=30,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+    try:
+        return {"duration_s": round(float(r.stdout.strip()), 1),
+                "samplerate": None, "via": "ffprobe"}
+    except ValueError:
+        raise ValueError("音频文件无法解析 (损坏或编码不支持)")
+
+
+@router.get("/system/doctor", summary="一键环境自检 (fix=true 自动修复可修项)")
+async def system_doctor(fix: bool = False):
+    """检测依赖/GPU/权重/档案/端口/磁盘; fix=true 时裁剪超长 ref、清理 STOP 残留。"""
+    from adr.core.doctor import run_checks
+
+    return run_checks(fix=fix)
 
 
 @router.post("/train/upload", summary="上传克隆录音 (wav/mp3/flac/m4a/ogg/zip)")
@@ -356,17 +398,40 @@ async def train_upload(file: UploadFile = File(...)):
     dest = UPLOAD_DIR / fname
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     size = 0
-    with dest.open("wb") as fh:
-        while True:
-            chunk = await file.read(1 << 20)
-            if not chunk:
-                break
-            fh.write(chunk)
-            size += len(chunk)
+    try:
+        with dest.open("wb") as fh:
+            while True:
+                chunk = await file.read(1 << 20)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > _UPLOAD_MAX_SIZE:
+                    raise HTTPException(
+                        413, f"文件超过 {_UPLOAD_MAX_SIZE // (1024 * 1024)}MB 上限"
+                             " (训练素材建议 5~30 分钟)")
+                fh.write(chunk)
+    except HTTPException:
+        dest.unlink(missing_ok=True)
+        raise
     if size == 0:
         dest.unlink(missing_ok=True)
         raise HTTPException(400, "上传内容为空")
-    return {"path": str(dest), "size": size, "filename": fname}
+    duration_s = samplerate = None
+    if ext != ".zip":
+        try:
+            probe = _probe_audio(dest)
+        except ValueError as e:
+            dest.unlink(missing_ok=True)
+            raise HTTPException(400, str(e))
+        duration_s, samplerate = probe["duration_s"], probe["samplerate"]
+        if duration_s and duration_s > _UPLOAD_MAX_DURATION:
+            dest.unlink(missing_ok=True)
+            raise HTTPException(
+                413, f"音频时长 {duration_s / 60:.0f} 分钟超过 "
+                     f"{_UPLOAD_MAX_DURATION // 3600} 小时上限; "
+                     "训练素材建议 5~30 分钟, 请裁剪后上传")
+    return {"path": str(dest), "size": size, "filename": fname,
+            "duration_s": duration_s, "samplerate": samplerate}
 
 
 # ---------------------------------------------------------------------------

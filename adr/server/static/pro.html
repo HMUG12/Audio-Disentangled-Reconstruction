@@ -220,6 +220,16 @@
     </div>
     <div id="errline"></div>
   </div>
+
+  <div class="panel">
+    <h2>环境诊断</h2>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <button class="btn" id="btnDoctor">一键诊断</button>
+      <button class="btn" id="btnDoctorFix" style="display:none">自动修复问题项</button>
+      <span id="doctorSum" style="color:var(--sub)"></span>
+    </div>
+    <div id="doctorOut" style="display:none;margin-top:12px;font-size:12.5px;line-height:1.8;color:var(--sub)"></div>
+  </div>
 </section>
 
 <!-- ================= 声音克隆 ================= -->
@@ -438,6 +448,35 @@ async function jfetch(url, opts) {
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const fmtGB = v => v == null ? "—" : v.toFixed(1);
 
+/* ---- 环境诊断 (一键 / 自动修复, 批次18) ---- */
+function renderDoctor(rep) {
+  const icon = { ok: "✓", warn: "!", fail: "✗", fixed: "⟳", info: "·" };
+  const color = { ok: "#34d399", warn: "#fbbf24", fail: "#f87171",
+                  fixed: "#2dd4bf", info: "var(--sub)" };
+  $("doctorOut").innerHTML = rep.checks.map(c =>
+    `<div style="margin:3px 0"><b style="color:${color[c.status] || "inherit"}">` +
+    `[${icon[c.status] || "?"}] ${esc(c.name)}</b> — ${esc(c.detail)}</div>`).join("");
+  const s = rep.summary;
+  $("doctorSum").textContent =
+    `${s.ok || 0} 正常 · ${s.fixed || 0} 已修复 · ${s.warn || 0} 警告 · ${s.fail || 0} 失败`;
+  $("btnDoctorFix").style.display = (s.warn || s.fail) ? "" : "none";
+}
+async function runDoctor(fix) {
+  const btn = $(fix ? "btnDoctorFix" : "btnDoctor");
+  btn.disabled = true;
+  $("doctorSum").textContent = "诊断中…";
+  try {
+    renderDoctor(await jfetch("/api/adr/v1/system/doctor" + (fix ? "?fix=true" : "")));
+    if (fix) toast("修复完成");
+  } catch (e) {
+    toast("诊断失败: " + e.message, true);
+    $("doctorSum").textContent = "";
+  }
+  btn.disabled = false;
+}
+$("btnDoctor").onclick = () => runDoctor(false);
+$("btnDoctorFix").onclick = () => runDoctor(true);
+
 /* ---- 返回启动器 (仅桌面壳内: 壳导航带 ?desktop=1) ----
    远程控制台页不在 Tauri capability 授权内, invoke 会被 ACL 拒绝,
    因此纯 location 导航回壳内启动器, 由 launcher 加载时统一收尾引擎。 */
@@ -608,8 +647,20 @@ function pickFile(f) {
   fd.append("file", f);
   $("dropTxt").textContent = `上传中… ${f.name}`;
   fetch(api("/api/adr/v1/train/upload"), { method: "POST", body: fd })
-    .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
-    .then(d => { audioPath = d.path; $("dropTxt").textContent = `✓ 已上传: ${d.filename}`; })
+    .then(r => {
+      if (!r.ok) return r.json().then(j => {
+        throw new Error(j.detail || "HTTP " + r.status);
+      });
+      return r.json();
+    })
+    .then(d => {
+      audioPath = d.path;
+      const dur = d.duration_s == null ? "" :
+        ` · 时长 ${d.duration_s >= 60 ? (d.duration_s / 60).toFixed(1) + " 分钟" : d.duration_s.toFixed(1) + " 秒"}`;
+      $("dropTxt").textContent = `✓ 已上传: ${d.filename}${dur}`;
+      if (dur && d.duration_s > 1800)
+        toast("素材超过 30 分钟, 建议裁剪后训练更快达标", true);
+    })
     .catch(e => { $("dropTxt").textContent = "上传失败: " + e.message; toast("上传失败: " + e.message, true); });
 }
 
