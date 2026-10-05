@@ -379,3 +379,18 @@
 - [x] **端点冒烟 (零 GPU)** ✅: `/api/adr/v1/health` 三态 `ready=True/loading=False/stage=ready` + `q=0/busy=0`; console `/system/stats` 同源一致; `/v1/models` 列 3 档案。**坑: native health 真实路径是 `/api/adr/v1/health` (router 挂 `/api/adr/v1` 前缀), 裸 `/health` 404 — health 判据语义仍是批次 22 修复后的三态**
 - [x] **三面 TTS 实弹** ✅: OpenAI 非流式冷 **5558ms** (241964B, RIFF 合法) → 同 body 二发 **9ms** (≈617x, 字节一致, 整体 tts_cache); OpenAI 流式冷 **5538ms** (279084B, chunked audio/wav) → 同文本二发 **22.8ms** (≈243x, **279084B 字节级一致 — 段缓存回放连 WAV 容器头都稳定**); v2 面 `/api/v2/tts` 新文本 **10.7s** 200 audio/wav 合法; 全部结束后 health 归零 `q=0/busy=0` — 队列计数无泄漏
 - **结论**: M9 Phase 3 (批次 14~23) 回归全绿收尾。当前能力面: 训练管线 (显存治理/bf16) + 三协议 TTS 面 (v2/v3/OpenAI) + 双层缓存 (整体落盘持久化 + 句级内存 LRU) + 排队可视化 + 调用台三端点对照; 遗留跟进项见批次 19~21 "待用户" (素材增补/试听/N.E.KO 对接实测)
+
+### 批次 25 (2026-10-05): 全架构 review (含桌面壳) — 问题清单落盘
+
+> 用户圈定: 先 review 整个架构 (包括桌面壳), 落盘问题清单, 再修复优化, 最后复审。
+
+- [x] **分层依赖 review** ✅: core (config/device/doctor/exceptions/logging/registry) ← data (asr/f0/g2p/pipeline/separate/slice) ← models (gsv/diffsinger/rvc/adr2/style_presets/voice_library) ← training/webui/server/inference/vocoder/eval, 单向无循环; `_legacy` (唱歌线) 暂缓。规模热点: webui/__init__.py 1075 / training/callbacks.py 1035 / server/console.py 531 / models/gsv_engine.py 510 / cli.py 497
+- [x] **服务层 review** ✅: create_app 五路由 (v2_compat → v3_compat → openai_compat → native → console+静态页) + 中间件序 (APIKey 内层 / CORS 外层预检免 key) + lifespan 后台线程预热 — 兼容面支撑 M9 Phase 3 全部能力
+- [x] **桌面壳 review** ✅ (Tauri 2 + Python sidecar, lib.rs 756 行): prewarm 状态机 (queued/importing/loading/kernel → prewarm.html 四步 UI) / resolve_runtime 四级解释器解析 / supervise 守护 (重试≤4, 60s 稳定重置, pid 所有权让位) / enter_console 热通道 + 冷启动回落 / 托盘退出 taskkill /T /F — 机制成熟
+- [x] **问题清单 (修复批次 26 执行)**:
+  - **P1-a** `server/app.py _prewarm_gsv` 直写 `gsv_engine._LOADING/_STAGE` 模块私有变量 (跨模块封装破坏) → 修复: gsv_engine 提供公开 `prewarm()` API, 状态机内聚引擎模块
+  - **P1-b** 盘符硬编码: lib.rs `server_log_path()` 写死 `F:\ADR_data\logs` (L314) / cli.py `model search` 写死 `F:/ADR_data/bigvgan|wavlm` (L398-399) → 修复: 数据目录推导 + 环境变量覆盖 + 兜底
+  - **P2-a** 安全面: 壳 csp null + CORS 全开 + API key 默认关 → 修复: 无 key 服务端启动警告 + launcher expose 勾选处提示
+  - **P2-b** gsv_engine 510 行多职责 → 修复: 段缓存拆 `gsv_runtime.py` (排队计数是实例状态留类内)
+  - **P2-c** 三套 UI 并存 (legacy Gradio webui / FastAPI 控制台 / 壳页面) → 定主线 = 壳 + 控制台; webui 头部加 legacy 冻结声明
+  - **P3** cli export stub + 过时 docstring / auth.py `/call` 豁免语义注释 / app.py `app.state.engine` 存疑 → 顺手清理

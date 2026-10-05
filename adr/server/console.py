@@ -4,6 +4,7 @@
 - /        index.html  浏览器直达索引
 - /pro     pro.html    专业控制台 (深色数据可视化, 全参数)
 - /easy    easy.html   新手控制台 (向导式, 零参数)
+- /call    call.html   调用控制台 (局域网 API 调试, 批次26 补记)
 
 训练链路与 webui._run_gsv_finetune 完全同构:
     python -u scripts/gsv_finetune.py <audio> --exp <name> --s2-epochs <N>

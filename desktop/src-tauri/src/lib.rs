@@ -308,16 +308,23 @@ async fn retry_prewarm(app: AppHandle) -> Result<(), String> {
 // 启动与守护
 // ---------------------------------------------------------------------------
 
-/// 服务日志文件路径: F:\ADR_data\logs\server.log (失败回落 %TEMP%\adr_server.log)。
-/// 追加写, 启动时打时间戳分隔行。
+/// 服务日志目录 (批次26): ADR_LOG_DIR > ADR_DATA_DIR\logs > %LOCALAPPDATA%\ADR\logs
+/// (均失败回落 %TEMP%\adr_server.log)。追加写, 启动时打时间戳分隔行。
 fn server_log_path() -> PathBuf {
-    let base = PathBuf::from(r"F:\ADR_data\logs");
-    let dir = if base.is_dir() || std::fs::create_dir_all(&base).is_ok() {
-        base
-    } else {
-        std::env::temp_dir()
-    };
-    dir.join("server.log")
+    let candidates: Vec<PathBuf> = [
+        std::env::var("ADR_LOG_DIR").ok().map(PathBuf::from),
+        std::env::var("ADR_DATA_DIR").ok().map(|d| PathBuf::from(d).join("logs")),
+        std::env::var("LOCALAPPDATA").ok().map(|d| PathBuf::from(d).join(r"ADR\logs")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    for base in candidates {
+        if std::fs::create_dir_all(&base).is_ok() {
+            return base.join("server.log");
+        }
+    }
+    std::env::temp_dir().join("adr_server.log")
 }
 
 /// 后台泵: 把服务 stdout/stderr 追加写入日志文件 (进程退出时 copy 结束)。
@@ -432,7 +439,7 @@ fn start_server(
         cmd.env("PYTHONPATH", pp);
     }
     // 服务日志落盘 (排错必需: 此前服务崩溃/卡死均无日志可查)
-    // 路径: F:\ADR_data\logs\server.log (失败回落 %TEMP%\adr_server.log)
+    // 路径见 server_log_path(): ADR_LOG_DIR > ADR_DATA_DIR\logs > %LOCALAPPDATA%\ADR\logs
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
     cmd.stdout(std::process::Stdio::piped());

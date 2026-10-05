@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Union
 
 from adr.core import get_logger
+from adr.core.config import adr_data_dir
 
 
 # 特殊 token (固定 ID,与 content_encoder padding_idx=0 对齐)
@@ -35,10 +36,10 @@ UNK_TOKEN = "<unk>"      # 3
 SP_TOKEN = "SP"          # 4 - 短停顿
 AP_TOKEN = "AP"          # 5 - 静音
 
-# 默认字典路径 (DiffSinger opencpop-extension.txt)
+# 默认字典路径 (DiffSinger opencpop-extension.txt; 批次26: 数据目录统一推导)
 DEFAULT_DICT_PATHS = [
     Path(__file__).resolve().parent.parent.parent / "third_party" / "DiffSinger" / "dictionaries" / "opencpop-extension.txt",
-    Path(r"F:\ADR_data\dictionaries\opencpop-extension.txt"),
+    adr_data_dir() / "dictionaries" / "opencpop-extension.txt",
     Path.home() / "BigVGAN" / "dictionaries" / "opencpop-extension.txt",
 ]
 

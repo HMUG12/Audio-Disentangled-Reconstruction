@@ -1,4 +1,4 @@
-"""ADR WebUI (Gradio 6+)。
+"""ADR WebUI (Gradio 6+) — legacy 控制台 (功能冻结: 只修 bug, 新功能进 server 控制台)。
 
 设计原则:
 1. 简洁克制的界面 — 无渐变/无表情符号/中性色,信息密度优先

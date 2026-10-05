@@ -51,6 +51,10 @@
     font-size: 12px; color: #7f92b5; cursor: pointer; }
   .exp input { accent-color: #2dd4bf; cursor: pointer; margin: 0; }
   .exp:hover { color: #a5b4d0; }
+  .exp-warn { display: none; margin-top: 8px; font-size: 11px; line-height: 1.55;
+    color: #fbbf24; background: #241d0c; border: 1px solid #4a3a14;
+    border-radius: 8px; padding: 7px 10px; }
+  .exp-warn.on { display: block; }
   .classic .ic { background: #0d3340; } .classic .go { color: #22d3ee; }
   .pro    .ic { background: #172a52; } .pro    .go { color: #60a5fa; }
   .easy   .ic { background: #0d3a2b; } .easy   .go { color: #34d399; }
@@ -96,6 +100,7 @@
       <label class="exp" title="勾选后引擎监听 0.0.0.0, 局域网设备可调用 TTS API (建议配合 API Key 鉴权)">
         <input type="checkbox"> 对外提供调用 (局域网)
       </label>
+      <div class="exp-warn">未配置 ADR_TTS_API_KEY 时, 局域网内所有设备均可无鉴权调用合成 API。建议在启动前设置环境变量。</div>
       <div class="go">进入 →</div>
     </div>
 
@@ -113,6 +118,7 @@
       <label class="exp" title="勾选后引擎监听 0.0.0.0, 局域网设备可调用 TTS API (建议配合 API Key 鉴权)">
         <input type="checkbox"> 对外提供调用 (局域网)
       </label>
+      <div class="exp-warn">未配置 ADR_TTS_API_KEY 时, 局域网内所有设备均可无鉴权调用合成 API。建议在启动前设置环境变量。</div>
       <div class="go">进入 →</div>
     </div>
 
@@ -131,6 +137,7 @@
       <label class="exp" title="勾选后引擎监听 0.0.0.0, 局域网设备可调用 TTS API (建议配合 API Key 鉴权)">
         <input type="checkbox"> 对外提供调用 (局域网)
       </label>
+      <div class="exp-warn">未配置 ADR_TTS_API_KEY 时, 局域网内所有设备均可无鉴权调用合成 API。建议在启动前设置环境变量。</div>
       <div class="go">进入 →</div>
     </div>
 
@@ -182,6 +189,10 @@ cards.forEach(c => {
   c.addEventListener("click", () => launch(c.dataset.mode, c));
   // 勾选框点击不触发卡片进入
   c.querySelector(".exp input").addEventListener("click", e => e.stopPropagation());
+  // expose 勾选 → 行内安全提示 (批次26 P2-a): 未配 key 时局域网无鉴权可调
+  const box = c.querySelector(".exp input");
+  const warn = c.querySelector(".exp-warn");
+  box.addEventListener("change", () => warn.classList.toggle("on", box.checked));
 });
 // 每次加载 (含从控制台纯导航返回) 通知壳更新托盘态
 window.__TAURI__ && window.__TAURI__.core.invoke("on_launcher_ready").catch(() => {});

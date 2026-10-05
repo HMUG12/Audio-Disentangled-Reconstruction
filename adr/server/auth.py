@@ -17,8 +17,9 @@ import json
 from urllib.parse import unquote
 
 # 监控探活豁免 (无敏感数据, 供 N.E.K.O / 负载均衡探活)
-# 控制台静态页豁免: 页面本身无数据, 启用 API key 时页面才能加载
-EXEMPT_PATHS = {"/api/adr/v1/health", "/", "/pro", "/easy"}
+# 控制台静态页豁免 (批次26 补 /call): 页面本身无数据, 启用 API key 时页面才能
+# 加载; 页面 JS 发起的 API 调用仍走鉴权 — 与 /pro /easy 语义一致。
+EXEMPT_PATHS = {"/api/adr/v1/health", "/", "/pro", "/easy", "/call"}
 
 
 class APIKeyMiddleware:

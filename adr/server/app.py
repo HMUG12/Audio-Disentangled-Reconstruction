@@ -23,59 +23,16 @@ from adr.server.auth import APIKeyMiddleware
 
 
 def _prewarm_gsv(default_profile: str | None) -> None:
-    """后台预热 GSV 引擎 (控制台/裸服务与 webui._prewarm_engines 同思路)。
+    """后台预热 GSV 引擎 — 委托 gsv_engine.prewarm (批次26)。
 
     没有预热时, 桌面壳拉起服务后的**首次合成**要现场加载全套模型
     (实测 ~1 分钟, 用户感知为"合成巨慢/显卡没动")。预热后服务起来
     几十秒内引擎就绪, 用户打开页面输入文字期间加载已完成。
-    失败不致命 (首次合成时仍会按需加载), 只打日志。
+    阶段状态机 (_LOADING/_STAGE) 内聚在 gsv_engine 模块内部管理。
     """
-    import logging
-
     from adr.models import gsv_engine
 
-    log = logging.getLogger("adr.server.prewarm")
-    gsv_engine._LOADING = True
-    gsv_engine._STAGE = "queued"
-    try:
-        gsv_engine._STAGE = "importing"  # import torch + GSV 模块 (最耗时可达 20s)
-        from adr.models.voice_library import list_voices, load_voice
-
-        prof_name = default_profile
-        if not prof_name:
-            voices = list_voices()
-            prof_name = voices[0] if voices else None
-        kw = {}
-        prof = None
-        if prof_name:
-            try:
-                prof = load_voice(prof_name)
-                kw = {"vits_weights": prof.get("vits_weights"),
-                      "t2s_weights": prof.get("t2s_weights")}
-                log.info("[prewarm] 用音色档案「%s」的权重预热", prof_name)
-            except Exception:
-                prof = None  # 档案损坏 → 退回纯预训练权重
-        gsv_engine._STAGE = "loading"    # 权重加载进显存
-        gsv_engine.get_gsv_engine().warmup(**{k: v for k, v in kw.items() if v})
-        log.info("[prewarm] GPT-SoVITS 引擎就绪")
-        # kernel JIT 预热: 否则首次合成再付 ~14s CUDA 编译 (只取首块)
-        try:
-            gsv_engine._STAGE = "kernel"
-            if prof:
-                for _ in gsv_engine.get_gsv_engine().synthesize_stream(
-                        "引擎预热。", prof["ref_audio"],
-                        vits_weights=kw.get("vits_weights"),
-                        split_method="cut0"):
-                    break
-                log.info("[prewarm] kernel 预热完成, 首次合成即秒级")
-        except Exception as e:
-            log.warning("[prewarm] kernel 预热失败 (不影响功能): %s", e)
-        gsv_engine._STAGE = "ready"
-    except Exception as e:
-        gsv_engine._STAGE = "failed"
-        log.warning("[prewarm] GSV 预热失败 (首次合成时将现场加载): %s", e)
-    finally:
-        gsv_engine._LOADING = False
+    gsv_engine.prewarm(default_profile)
 
 
 def create_app(engine=None) -> FastAPI:
@@ -107,7 +64,10 @@ def create_app(engine=None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.state.engine = engine  # None → 请求期惰性 get_gsv_engine()
+    # v2/v3_compat 的请求期引擎缓存 (批次26 注明): 生产模式下初始为 None,
+    # 首次合成时由 v2_compat/v3_compat 惰性赋值 get_gsv_engine() 并复用。
+    # /health 就绪判据已改用 gsv_engine 模块级三态, 不读此字段 (批次22)。
+    app.state.engine = engine
     app.state.default_profile = default_profile
     app.include_router(v2_compat.router)
     app.include_router(v3_compat.router)  # 批次19: N.E.K.O v3 面 (voices + stream-input WS)
