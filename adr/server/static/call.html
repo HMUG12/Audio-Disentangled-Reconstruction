@@ -110,6 +110,7 @@
       <div class="seg" id="epSeg">
         <button data-ep="native" class="on">原生 /api/adr/v1/tts</button>
         <button data-ep="v2">GSV 兼容 /api/v2/tts</button>
+        <button data-ep="openai">OpenAI /v1/audio/speech</button>
       </div>
 
       <label>音色档案 profile <span id="profReq" style="color:#f87171">*</span></label>
@@ -174,7 +175,8 @@
               <label>封装格式 media_type</label>
               <select id="mt">
                 <option value="wav" selected>wav</option>
-                <option value="raw">raw (裸 PCM)</option>
+                <option value="mp3">mp3 (OpenAI 默认)</option>
+                <option value="raw">raw / pcm (裸 PCM)</option>
                 <option value="ogg">ogg</option>
                 <option value="aac">aac</option>
               </select>
@@ -209,6 +211,25 @@
     </div>
 
     <div class="panel">
+      <h2>N.E.KO 外部调用 · 配置对照</h2>
+      <table>
+        <thead><tr><th style="width:32%">N.E.KO 设置项</th><th>填写内容</th><th style="width:56px"></th></tr></thead>
+        <tbody>
+          <tr><td>服务商类型</td><td colspan="2">OpenAI 兼容</td></tr>
+          <tr><td>API URL</td><td id="nekoUrl" style="word-break:break-all;color:#2dd4bf">—</td>
+              <td><button class="copy" data-copy="nekoUrl" style="margin:0">复制</button></td></tr>
+          <tr><td>模型 ID</td><td id="nekoModel" style="word-break:break-all;color:#2dd4bf">—</td>
+              <td><button class="copy" data-copy="nekoModel" style="margin:0">复制</button></td></tr>
+          <tr><td>API Key</td><td colspan="2">留空 (未设置 ADR_TTS_API_KEY 时本地免鉴权)</td></tr>
+          <tr><td>Voice ID</td><td colspan="2">留空 (模型 ID 已指定音色档案)</td></tr>
+        </tbody>
+      </table>
+      <div class="hint">模型 ID = ADR 音色档案名 (data/voices\ 下的目录名，左侧下拉选中的即会同步到这里)。
+        API URL 推荐填完整端点地址 (左表所示)；若 N.E.KO 保存/连通时报 404，改填服务器根地址
+        <b id="nekoBase" style="color:#2dd4bf">—</b> 再试——两种填法以能连通为准。</div>
+    </div>
+
+    <div class="panel">
       <h2>试听结果</h2>
       <audio id="au" controls></audio>
       <div id="meta">尚未合成。点左侧「合成试听」，右键音频可另存为文件。</div>
@@ -229,7 +250,7 @@ const STAGE_TXT = {
   loading: "引擎加载权重…", kernel: "引擎预热内核…", failed: "引擎预热失败 (合成时重试)",
 };
 
-let endpoint = "native";   // native | v2
+let endpoint = "native";   // native | v2 | openai
 let codeLang = "curl";     // curl | python | js
 let profiles = [];
 
@@ -247,6 +268,7 @@ $("epSeg").onclick = e => {
   [...$("epSeg").children].forEach(x => x.classList.toggle("on", x === b));
   $("refRow").style.display = endpoint === "v2" ? "" : "none";
   $("profReq").textContent = endpoint === "native" ? "*" : "(推荐)";
+  renderNekoCard();
   renderCode();
 };
 
@@ -285,6 +307,7 @@ $("prof").onchange = () => {
   const o = $("prof").selectedOptions[0];
   $("ptext").value = o?.dataset.prompt || "";
   if (o?.dataset.ref) $("ref").value = o.dataset.ref;
+  renderNekoCard();
   renderCode();
 };
 
@@ -305,15 +328,31 @@ function buildBody() {
     media_type: $("mt").value,
     streaming_mode: +$("sm").value,
   };
+  const t2s = $("t2s").value.trim(), vits = $("vits").value.trim();
   if (endpoint === "native") {
     b.profile = p || null;
     b.streaming_mode = +$("sm").value === 0 ? false : true; // native 仅 bool
+  } else if (endpoint === "openai") {
+    // OpenAI 兼容请求体: model/input/response_format/speed/stream (+ADR 扩展)
+    const o = {
+      input: b.text,
+      response_format: b.media_type === "raw" ? "pcm" : b.media_type,
+      speed: b.speed_factor,
+      stream: b.streaming_mode !== 0,
+      text_lang: b.text_lang, prompt_lang: b.prompt_lang,
+      prompt_text: b.prompt_text,
+      top_k: b.top_k, top_p: b.top_p, temperature: b.temperature,
+      seed: b.seed, text_split_method: b.text_split_method,
+    };
+    if (p) o.model = p;
+    if (t2s) o.t2s_weights = t2s;
+    if (vits) o.vits_weights = vits;
+    return o;
   } else {
     if (p) b.profile = p;
     const ref = $("ref").value.trim();
     if (ref) b.ref_audio_path = ref;
   }
-  const t2s = $("t2s").value.trim(), vits = $("vits").value.trim();
   if (t2s) b.t2s_weights = t2s;
   if (vits) b.vits_weights = vits;
   return b;
@@ -323,13 +362,19 @@ function buildBody() {
 const j = o => JSON.stringify(o, null, 2);
 function renderCode() {
   const base = location.origin;
-  const url = endpoint === "native" ? base + "/api/adr/v1/tts" : base + "/api/v2/tts";
+  const url = endpoint === "native" ? base + "/api/adr/v1/tts"
+            : endpoint === "openai" ? base + "/v1/audio/speech"
+            : base + "/api/v2/tts";
   const body = buildBody();
+  const ext = endpoint === "openai"
+    ? (body.response_format === "pcm" ? "raw" : body.response_format || "mp3")
+    : (body.media_type || "wav");
+  renderNekoCard();
   let code = "";
   if (codeLang === "curl") {
-    code = `curl -X POST "${url}" \\\n  -H "Content-Type: application/json" \\\n  -d '${j(body)}' \\\n  --output out.wav`;
+    code = `curl -X POST "${url}" \\\n  -H "Content-Type: application/json" \\\n  -d '${j(body)}' \\\n  --output out.${ext}`;
   } else if (codeLang === "python") {
-    code = `import requests\n\nr = requests.post(\n    "${url}",\n    json=${j(body).split("\n").join("\n    ")},\n)\nr.raise_for_status()\nopen("out.wav", "wb").write(r.content)\nprint("已保存 out.wav,", len(r.content), "bytes")`;
+    code = `import requests\n\nr = requests.post(\n    "${url}",\n    json=${j(body).split("\n").join("\n    ")},\n)\nr.raise_for_status()\nopen("out.${ext}", "wb").write(r.content)\nprint("已保存 out.${ext},", len(r.content), "bytes")`;
   } else {
     code = `const resp = await fetch("${url}", {\n  method: "POST",\n  headers: { "Content-Type": "application/json" },\n  body: JSON.stringify(${j(body)}),\n});\nif (!resp.ok) throw new Error(await resp.text());\nconst blob = await resp.blob();\ndocument.querySelector("audio").src = URL.createObjectURL(blob);`;
   }
@@ -352,6 +397,25 @@ $("copy").onclick = async () => {
   setTimeout(() => $("copy").textContent = "复制代码", 1500);
 };
 
+/* ---- N.E.KO 配置对照卡: URL 跟随当前源, 模型 ID 跟随档案下拉 ---- */
+function renderNekoCard() {
+  const base = location.origin;
+  if (!$("nekoUrl")) return;
+  $("nekoUrl").textContent = base + "/v1/audio/speech";
+  $("nekoBase").textContent = base;
+  const p = $("prof").value;
+  $("nekoModel").textContent = p || "音色档案名 (左侧下拉选择后自动同步)";
+}
+document.querySelectorAll(".copy[data-copy]").forEach(b => {
+  b.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText($(b.dataset.copy).textContent);
+      b.textContent = "已复制 ✓";
+    } catch { b.textContent = "复制失败"; }
+    setTimeout(() => b.textContent = "复制", 1500);
+  };
+});
+
 /* ---- 合成试听: 记录 TTFB / 总耗时 / 日志 ---- */
 function addLog(row) {
   const tr = document.createElement("tr");
@@ -369,7 +433,11 @@ $("go").onclick = async () => {
   if (endpoint === "v2" && !body.profile && !body.ref_audio_path) {
     $("meta").textContent = "⚠ GSV 兼容端点需要档案或 ref_audio_path"; return;
   }
-  const url = endpoint === "native" ? "/api/adr/v1/tts" : "/api/v2/tts";
+  if (endpoint === "openai" && !body.model) {
+    $("meta").textContent = "⚠ OpenAI 端点需要选择音色档案 (model)"; return;
+  }
+  const url = endpoint === "native" ? "/api/adr/v1/tts"
+            : endpoint === "openai" ? "/v1/audio/speech" : "/api/v2/tts";
   const btn = $("go");
   btn.disabled = true; btn.textContent = "⟳ 合成中…";
   $("meta").textContent = "合成中… (流式模式下音频完整下载后播放)";
@@ -382,7 +450,7 @@ $("go").onclick = async () => {
     const ttfb = Math.round(performance.now() - t0);
     if (!r.ok) {
       const errJ = await r.json().catch(() => ({}));
-      throw new Error(errJ.message || errJ.detail || `HTTP ${r.status}`);
+      throw new Error(errJ.message || errJ.error?.message || errJ.detail || `HTTP ${r.status}`);
     }
     const blob = await r.blob();
     const total = Math.round(performance.now() - t0);
@@ -392,13 +460,13 @@ $("go").onclick = async () => {
     $("meta").innerHTML = `✔ 合成完成 · 首包 <b>${ttfb} ms</b> · 总耗时 <b>${total} ms</b> · 音频 <b>${kb}</b>` +
       (blob.size < 2000 ? '<br>⚠ 音频异常小, 可能合成失败' : "");
     addLog({ t: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
-             ep: endpoint === "native" ? "native" : "v2", sm: body.streaming_mode,
+             ep: endpoint, sm: endpoint === "openai" ? (body.stream ? "流式" : "整段") : body.streaming_mode,
              ttfb: ttfb + "ms", total: total + "ms", size: kb, cls: "ok", status: "成功" });
   } catch (e) {
     const total = Math.round(performance.now() - t0);
     $("meta").innerHTML = `✘ 合成失败: ${e.message}`;
     addLog({ t: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
-             ep: endpoint === "native" ? "native" : "v2", sm: body.streaming_mode,
+             ep: endpoint, sm: endpoint === "openai" ? (body.stream ? "流式" : "整段") : body.streaming_mode,
              ttfb: "—", total: total + "ms", size: "—", cls: "err", status: e.message.slice(0, 40) });
   } finally {
     btn.disabled = false; btn.textContent = "✦ 合成试听";

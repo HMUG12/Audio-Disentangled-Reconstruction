@@ -25,13 +25,14 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from adr.models import voice_library
+from adr.server import tts_cache
 from adr.server.audio_codec import pack_audio, to_int16, wave_header_chunk
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2", tags=["tts"])
 
-MEDIA_TYPES = {"wav", "raw", "ogg", "aac"}
+MEDIA_TYPES = {"wav", "mp3", "raw", "ogg", "aac"}
 
 
 class TTS_Request(BaseModel):
@@ -110,7 +111,7 @@ def _check_params(req: dict):
     if media_type not in MEDIA_TYPES:
         return JSONResponse(status_code=400,
                             content={"message": f"unsupported media_type: {media_type}, "
-                                                f"must be one of wav/raw/ogg/aac"})
+                                                f"must be one of wav/mp3/raw/ogg/aac"})
     req["media_type"] = media_type
     return None
 
@@ -137,6 +138,7 @@ def _stream_generator(engine, req: dict, media_type: str):
             top_k=req.get("top_k", 15),
             top_p=req.get("top_p", 1.0),
             temperature=req.get("temperature", 1.0),
+            speed_factor=req.get("speed_factor", 1.0),
         ):
             if first and mt == "wav":
                 yield wave_header_chunk(sample_rate=sr)
@@ -186,6 +188,10 @@ async def tts_handle(req: dict, request: Request) -> Response:
             return StreamingResponse(
                 _stream_generator(engine, req, media_type),
                 media_type=f"audio/{media_type}")
+        cache_key = tts_cache.make_key(req)
+        cached = tts_cache.get(cache_key)
+        if cached is not None:
+            return Response(cached, media_type=f"audio/{media_type}")
         audio, sr = await asyncio.to_thread(
             engine.synthesize,
             req["text"], req["ref_audio_path"],
@@ -202,6 +208,7 @@ async def tts_handle(req: dict, request: Request) -> Response:
             temperature=req.get("temperature", 1.0),
         )
         buf = pack_audio(BytesIO(), to_int16(audio), sr, media_type)
+        tts_cache.put(cache_key, buf.getvalue())
         return Response(buf.getvalue(), media_type=f"audio/{media_type}")
     except Exception as e:
         return JSONResponse(status_code=400,
