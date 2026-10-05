@@ -346,3 +346,15 @@
 - [x] **全量 pytest** ✅: tests/ 全套 **264 passed + 1 skipped (0:03:15)** — **环境坑 (本批次重大发现): `D:\pyhon\Lib\site-packages` 写入被系统级封锁 (疑似杀软/Defender 策略), librosa 模块级 `@jit(cache=True)` 触发 numba `ensure_cache_path` 的 `TemporaryFile` 在 PermissionError 下 `_mkstemp_inner` 无限重试 → 满核假死 (test_bigvgan 卡死 2.5h+, 服务进程亦受影响); 修复: `NUMBA_CACHE_DIR=E:\adr_numba_cache` 把 numba 缓存重定向到可写盘 (UserProvidedCacheLocator 为 locator 链首), **pytest 与服务启动 bat 两侧都必须设置**; basetemp 迁移 F 盘被清 → E 盘根被沙箱拦 → 落 `%TEMP%`**
 - [x] **实弹验证 (12444 重启批次 21 代码)** ✅: WMI `Invoke-CimMethod Win32_Process Create` 直接填 bat 路径拉起 (Start-Process 直起进程树被回收 — 批次 19 已知坑; `cmd /c` 模式被沙箱拦截, bat 路径可过); prewarm 全流程完成 (`[prewarm] kernel 预热完成, 首次合成秒级`); health 的 `engine_ready:false` 为 native 端点判据误报 (`state.engine is not None` 生产恒 false, 真实就绪看 console.py `gsv_engine.is_ready()`); GET /v1/models 列出 yui的声音 (共 3 档案); POST /v1/audio/speech wav 非流式 RIFF 合法 **单句 5.7s**; 同 body 二发命中缓存 **14ms (≈400x)** 字节级一致; 默认格式 audio/mp3 (3.7s); 流式 chunked audio/wav 首块 44B 头 (RIFF size=0 为流式预期); `/call` 对照卡渲染正确 (URL/模型ID 动态填充)
 - 待用户: N.E.KO 设置填法 — 服务商类型选 **OpenAI 兼容**, API URL 填 `http://127.0.0.1:12444/v1/audio/speech` (或根地址 `http://127.0.0.1:12444`), 模型ID 填 **yui的声音** (与档案名一致), API Key / Voice ID 留空; call.html 控制台顶栏可一键复制
+
+### 批次 22 (2026-10-05): engine_ready 真实判据 + 合成缓存持久化落盘
+
+> 用户推送批次 21 后圈定两项优化: engine_ready 误报修复 + 缓存持久化 (服务重启缓存不丢)。
+
+- [x] **native `/health` 就绪判据修复** ✅: 原判 `app.state.engine is not None` — 生产模式下引擎走模块级延迟加载, 该字段恒 None → N.E.KO 健康检查误判服务不可用 (批次 21 实弹 38/40 次误报的根因)。改用 `gsv_engine.is_ready()/is_loading()/stage()` 模块级三态 (与 console.py 同源, 只读不触发加载), health 返回 `engine_ready/engine_loading/engine_stage` 三字段
+- [x] **tts_cache 磁盘持久化** ✅: `_cache` value 改 `(bytes, 盘上文件名|None)` — `(b"", fname)` 表示磁盘条目延迟到首次 get 才读入; 首次 get/put 触发 `_disk_load_locked()` 惰性扫描缓存目录 (mtime 降序重建, 超上限旧文件直接删); put 落盘 `.tmp` + `os.replace` 原子替换, OSError 退化为纯内存不报错; LRU 逐出同步 unlink 盘上文件; `clear()` = 内存+磁盘全清。目录 `data/tts_cache/` (`ADR_TTS_CACHE_DIR` 覆盖, 测试隔离用), 文件名 `<key>.<media_type>` — 跨重启、跨进程命中
+- [x] **v2_compat put 传后缀**: `tts_cache.put(..., ext=media_type)` — 盘上文件带正确音频扩展名
+- [x] **测试 50→52** ✅: autouse fixture 加 `ADR_TTS_CACHE_DIR → tmp_path` (防跨用例盘上泄漏); 新增 `test_cache_persists_across_restart` (手动清内存态+复位 `_loaded` 模拟重启, 引擎不重跑、字节一致) + `test_cache_persist_evict_removes_file` (LRU 逐出后盘上仅剩 1 文件)
+- [x] **全量 pytest** ✅: tests/ 全套 **266 passed + 1 skipped (0:03:12)**
+- [x] **实弹验证 (12444 重启批次 22 代码)** ✅: health 三态 `engine_ready:true / engine_loading:false / engine_stage:"ready"` (prewarm 后, 误报修复生效); 非流式冷合成 **6.36s** 且 `data/tts_cache/29266549….wav` (359724B) 落盘; 杀进程重启 (prewarm ~40s ready) 后同 body 再发 **0.02s 命中** (≈318x), 字节数与盘上文件一致 — 持久化全链路 (落盘/惰性扫描/跨进程命中) 验证通过
+- 备注: 环境坑复盘 — WQL `Name='D:\\pyhon\\python.exe'` 反斜杠转义导致旧 PID 查找落空 (WQL 字符串里 `\` 不转义, 应写 `Name='D:\pyhon\python.exe'` 或直接 CommandLine like); PowerShell `Invoke-WebRequest -OutFile` 与 `-PassThru` 组合触发 NullReferenceException (下载本身成功, 勿混用)

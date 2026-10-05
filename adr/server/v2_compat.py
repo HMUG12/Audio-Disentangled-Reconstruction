@@ -208,7 +208,7 @@ async def tts_handle(req: dict, request: Request) -> Response:
             temperature=req.get("temperature", 1.0),
         )
         buf = pack_audio(BytesIO(), to_int16(audio), sr, media_type)
-        tts_cache.put(cache_key, buf.getvalue())
+        tts_cache.put(cache_key, buf.getvalue(), ext=media_type)
         return Response(buf.getvalue(), media_type=f"audio/{media_type}")
     except Exception as e:
         return JSONResponse(status_code=400,
