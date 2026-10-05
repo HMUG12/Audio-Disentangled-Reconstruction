@@ -187,12 +187,13 @@ async function launch(mode, card) {
 }
 cards.forEach(c => {
   c.addEventListener("click", () => launch(c.dataset.mode, c));
-  // 勾选框点击不触发卡片进入
-  c.querySelector(".exp input").addEventListener("click", e => e.stopPropagation());
-  // expose 勾选 → 行内安全提示 (批次26 P2-a): 未配 key 时局域网无鉴权可调
+  // 勾选框点击不触发卡片进入; call 卡无勾选框 → 可选链防空 (批次27 复审 ISSUE-1:
+  // 旧写法 null.addEventListener 抛 TypeError 中止整个 script, 拖死托盘复位与状态条轮询)
   const box = c.querySelector(".exp input");
+  box?.addEventListener("click", e => e.stopPropagation());
+  // expose 勾选 → 行内安全提示 (批次26 P2-a): 未配 key 时局域网无鉴权可调
   const warn = c.querySelector(".exp-warn");
-  box.addEventListener("change", () => warn.classList.toggle("on", box.checked));
+  if (box && warn) box.addEventListener("change", () => warn.classList.toggle("on", box.checked));
 });
 // 每次加载 (含从控制台纯导航返回) 通知壳更新托盘态
 window.__TAURI__ && window.__TAURI__.core.invoke("on_launcher_ready").catch(() => {});
