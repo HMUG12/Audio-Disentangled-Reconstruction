@@ -1,7 +1,7 @@
 """BigVGAN 单元测试 (M2 B 步骤验收)。
 
 依赖:
-- F:/ADR_data/bigvgan/ 完整源码 + 权重
+- 数据目录下 bigvgan/ 完整源码 + 权重 (ADR_DATA_DIR 推导, 批次28 复审 P7)
 
 跳过条件:
 - BigVGAN 路径不存在 (用 skip)
@@ -14,9 +14,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from adr.core.config import adr_data_dir
+
 
 # BigVGAN 路径 (可在 conftest 或环境变量覆盖)
-BIGVGAN_PATH = Path(r"F:/ADR_data/bigvgan")
+BIGVGAN_PATH = adr_data_dir() / "bigvgan"
 
 
 def make_synthetic_wav(
