@@ -296,3 +296,16 @@
 - [x] **N.E.K.O 直连验证 10/10 PASS** ✅: 模拟 api_neko (GSV api_v2) 消费方打 `/api/v2` — POST/GET 非流式 wav (RIFF 校验)、streaming_mode=1/2、media_type=raw、非法 media_type/ref 不存在的 400 错误契约、`set_sovits_weights` 热换 (yui e24) + 热换后合成 + 恢复预训练底模。结论: **N.E.K.O 零改造, settings.toml 指向 ADR 服务地址即可用** (ref_audio_path 填本机路径, 或 ADR 扩展 profile 参数); v3 队列/WS 未实现但 N.E.K.O 不消费
 - 验证: py_compile 4 文件 OK; pytest tests/test_server_api.py 33 全绿 (F 盘 basetemp 绕开沙箱 Temp 权限); `adr doctor` CLI 实测 (8 ok 1 警告 → --fix 后 1 fixed); cargo build 通过; 新壳 explorer 中转重启后 /api/v2 冒烟 200 RIFF + doctor API 200。运维注意: 杀壳不清服务子进程 (孤儿 python 会与新服务并存抢显存), 需手动 Stop-Process
 
+
+### 批次 19 (2026-10-05): N.E.K.O v3 WS 兼容层 + 壳服务日志落盘 + 电音换绑 e16
+
+> 用户反馈: ①"相似度到了但质量会有电音和杂音" ②"现在 neko 启动了, 但不能被使用" (附 N.E.K.O 仓库与 tts-pipeline 文档链接)。批次 18 结论"N.E.K.O 零改造直连"被推翻 — 那只对 api_v2 面成立, N.E.K.O 主程序实际消费 v3 WS。
+
+- [x] **N.E.K.O 真实消费面定案 (源码级)** ✅: `main_logic/tts_client/workers/gptsovits.py` — ①`GET /api/v3/voices` 拉音色列表 (`[{id,name,description,version}]`, N.E.K.O 为 id 加 `gsv:` 前缀); ②**WS 双工** `ws://{host}/api/v3/tts/stream-input` (http base_url 自动转 ws, 配置走 `tts_custom` 槽); ③**每个 binary 帧 = 完整 WAV** (44B 头, 采样率在 24:28, PCM 从 44 起), N.E.K.O 自行抽 PCM 并 soxr 重采样 48k — `media_type` 无关紧要; ④服务端 JSON: `ready/sentence/sentence_done/flushed/done/error`; ⑤**done 仅在收到 `end` 后发送** (排障时两次误判为服务端 bug, 实为测试脚本不发 end 的协议错误)
+- [x] **v3 兼容层 `adr/server/v3_compat.py`** ✅: `GET /api/v3/voices` (=_default + 音色库全档案); `WS /api/v3/tts/stream-input` — init(text_lang/speed_factor/seed 等 overrides 透传)/text(整段)/append(碎片按标点切句, `_SENTENCE_SPLITS` 与 api_neko 逐字对齐)/flush/end 四指令; 逐句合成 = threading 引擎同步生成器 + `asyncio.Queue(64)` + `call_soon_threadsafe` 桥接, 每帧 `wave_header_chunk + to_int16` 完整 WAV; `_default` 解析 default_profile 或首档案; 未知 voice 回 error; app.py 挂载
+- [x] **端到端终验 5/5 PASS** ✅ (`neko_v3_final.py`): voices n=4 含 _default+yui / text+end 全流程 (5 帧 32kHz WAV 4.8s 音频) / append+flush+end 切句 (10 帧 8.1s) / _default 解析 / 未知 voice error。调试 print 已移除 (错误路径保留 logger)
+- [x] **壳服务日志落盘** ✅ (`desktop/src-tauri/src/lib.rs` +41): Popen stdout/stderr piped + 后台线程 `std::io::copy` 追加写 `F:\ADR_data\logs\server.log` (失败回落 %TEMP%), 每次启动写 `===== [server ts] stream open =====` 分隔 — 本轮排障立功 (AR 进度条/first_package_delay/v3 全链路可见)
+- [x] **电音/杂音第一刀: e24→e16 换绑** ✅: 门禁曲线 e16=0.818 达标早停, 但档案 meta 绑的是第一次训练跑满 24 轮的 e24 (早停门禁上线前产物, 无逐轮打分监控区 → 过拟合电音嫌疑)。meta.json `vits_weights` 换绑 `yui的声音_e16_s400.pth`; meta 每请求实时读取无需重启即生效。**待用户试听判定, 若仍有电音再深挖 (super_sampling/32k→48k 重采样链路/流式 PCM 拼接)**
+- [x] **测试夹具跟上 3s 防护** ✅: 批次 18 `_materialize_ref` 拒收 <3s 后, `test_voice_library.py` 夹具 0.1s 全零静音被拒 → 换 4s 440Hz 正弦波 (全零会被去静音裁空), 3 passed
+- 验证: py_compile OK; 新壳 explorer 中转重启后 5/5 PASS; pytest test_voice_library 3 绿 (test_server_api 批次 18 已 33 绿)。**运维坑: Start-Process 直起壳两次 3 分钟内自行退出 (无崩溃事件, 疑沙箱回收), explorer.exe 中转 (等同用户双击) 稳定 — 壳生命周期验证一律 explorer 中转**
+- N.E.K.O 接入指引 (用户操作): N.E.K.O 设置 → 自定义 TTS (tts_custom) → base_url 填 ADR 服务地址 (如 `http://127.0.0.1:12444`) → 音色下拉自动出现 `gsv:` 前缀档案; ADR 侧引擎预热的冷加载已由 lifespan 预热兜底

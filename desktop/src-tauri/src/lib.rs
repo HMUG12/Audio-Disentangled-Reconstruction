@@ -308,6 +308,34 @@ async fn retry_prewarm(app: AppHandle) -> Result<(), String> {
 // 启动与守护
 // ---------------------------------------------------------------------------
 
+/// 服务日志文件路径: F:\ADR_data\logs\server.log (失败回落 %TEMP%\adr_server.log)。
+/// 追加写, 启动时打时间戳分隔行。
+fn server_log_path() -> PathBuf {
+    let base = PathBuf::from(r"F:\ADR_data\logs");
+    let dir = if base.is_dir() || std::fs::create_dir_all(&base).is_ok() {
+        base
+    } else {
+        std::env::temp_dir()
+    };
+    dir.join("server.log")
+}
+
+/// 后台泵: 把服务 stdout/stderr 追加写入日志文件 (进程退出时 copy 结束)。
+fn pump_server_log<R: std::io::Read>(mut reader: R, path: PathBuf) {
+    use std::io::Write;
+    let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&path)
+    else {
+        return;
+    };
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let _ = writeln!(file, "\n===== [server {ts}] stream open =====");
+    let _ = std::io::copy(&mut reader, &mut file);
+    let _ = writeln!(file, "\n===== [server {ts}] stream closed =====");
+}
+
 /// launch_console 的阻塞实现: 杀旧 → 置模式 → 启动+探活+导航 → 交给守护线程。
 fn launch_blocking(app: AppHandle, mode: String, expose: bool) -> Result<String, String> {
     let window = app.get_webview_window("main");
@@ -403,8 +431,12 @@ fn start_server(
     if let Some(pp) = &pythonpath {
         cmd.env("PYTHONPATH", pp);
     }
+    // 服务日志落盘 (排错必需: 此前服务崩溃/卡死均无日志可查)
+    // 路径: F:\ADR_data\logs\server.log (失败回落 %TEMP%\adr_server.log)
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -413,6 +445,15 @@ fn start_server(
             return None;
         }
     };
+    let log_path = server_log_path();
+    if let Some(out) = child.stdout.take() {
+        let p = log_path.clone();
+        std::thread::spawn(move || pump_server_log(out, p));
+    }
+    if let Some(err) = child.stderr.take() {
+        let p = log_path.clone();
+        std::thread::spawn(move || pump_server_log(err, p));
+    }
     state.pid.store(child.id(), Ordering::Relaxed);
     *state.base_url.lock().unwrap() = Some(base.clone());
 
