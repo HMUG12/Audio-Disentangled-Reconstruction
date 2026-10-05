@@ -83,6 +83,49 @@ pub fn run() {
                 prewarm_done: AtomicBool::new(false),
             });
 
+            // 主窗口: 代码创建 (替代 tauri.conf.json windows), 以便挂 on_download —
+            // WebView2 对网页 a[download] 默认静默取消下载 (控制台"下载音频"失败根因),
+            // 必须显式注册下载事件并把产物落盘到系统下载目录。
+            let initial: tauri::Url = format!("{TAURI_ORIGIN}/prewarm.html")
+                .parse()
+                .expect("初始 URL 非法");
+            tauri::webview::WebviewWindowBuilder::new(
+                app,
+                "main",
+                tauri::WebviewUrl::External(initial),
+            )
+            .title("ADR Studio")
+            .inner_size(1280.0, 820.0)
+            .min_inner_size(960.0, 600.0)
+            .center()
+            .on_download(|webview, event| match event {
+                tauri::webview::DownloadEvent::Requested { destination, .. } => {
+                    // blob: 下载建议名可能缺失, 统一落系统下载目录; 文件名优先取
+                    // WebView2 建议名 (含 a[download] 属性), 缺失时用时间戳兜底
+                    let name = destination
+                        .file_name()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| {
+                            let ts = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_millis())
+                                .unwrap_or(0);
+                            format!("adr_audio_{ts}.wav")
+                        });
+                    let dir = webview
+                        .app_handle()
+                        .path()
+                        .download_dir()
+                        .unwrap_or_else(|_| std::env::temp_dir());
+                    *destination = dir.join(name).into();
+                    true // 允许下载
+                }
+                tauri::webview::DownloadEvent::Finished { .. } => true,
+                _ => true, // non_exhaustive 枚举兜底
+            })
+            .build()?;
+
             // 系统托盘
             let show_i = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
             let home_i = MenuItem::with_id(app, "home", "返回启动器", true, None::<&str>)?;

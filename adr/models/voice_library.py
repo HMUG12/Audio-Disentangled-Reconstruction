@@ -19,6 +19,61 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 VOICES_DIR = REPO_ROOT / "data" / "voices"
 
 
+def _trim_silence(wav, sr: int, top_db: float = 30.0):
+    """首尾静音裁剪 (纯 numpy, 同 librosa.effects.trim 思路, 免重导入)。"""
+    import numpy as np
+    frame = max(1, int(0.025 * sr))
+    n = len(wav) // frame
+    if n < 4:
+        return wav
+    db = 20 * np.log10(
+        np.sqrt((wav[: n * frame].reshape(n, frame) ** 2).mean(axis=1)) + 1e-8)
+    loud = np.where(db > db.max() - top_db)[0]
+    if len(loud) == 0:
+        return wav
+    return wav[loud[0] * frame: (loud[-1] + 1) * frame]
+
+
+def _materialize_ref(src: str, dst: Path) -> dict:
+    """ref 落盘 + 时长兜底 (批次18)。
+
+    GSV 合成硬限制 ref 3~10s (TTS.py:815)。此前入库只 copy 不校验,
+    超长 ref 直接产出"建档即踩坑"档案 (批次17 事故根源)。
+    - ≤10s: 原样 copy
+    - >10s: 去首尾静音后取前 8s (留安全边) 重采样写 PCM_16
+    - <3s / 无法读取: 报错拒绝 (音频内容不足, 无法自动修复)
+    返回 {"action": "copy"|"clipped", "duration_s", "orig_s"?}。
+    """
+    import numpy as np
+    import soundfile as sf
+    try:
+        info = sf.info(src)
+    except Exception as e:
+        raise ValueError(f"参考音频无法读取 (损坏或格式不支持): {e}") from e
+    dur = info.frames / info.samplerate
+    if dur < 3.0:
+        raise ValueError(f"参考音频仅 {dur:.1f}s, 至少需要 3s 干净人声")
+    if dur <= 10.0:
+        shutil.copy2(src, dst)
+        return {"action": "copy", "duration_s": round(dur, 2)}
+
+    wav, sr = sf.read(src, dtype="float32")
+    if wav.ndim > 1:
+        wav = wav.mean(axis=1)
+    wav = _trim_silence(wav, sr)[: int(8.0 * sr)]
+    if len(wav) < int(3.0 * sr):
+        # 极端: 去静音后不足 3s (几乎全静音), 兜底取原始前 8s
+        wav, sr = sf.read(src, dtype="float32")
+        if wav.ndim > 1:
+            wav = wav.mean(axis=1)
+        wav = wav[: int(8.0 * sr)]
+    sf.write(str(dst), wav, sr, subtype="PCM_16")
+    print(f"[voice] ref 超长已自动裁剪: {dur:.1f}s -> {len(wav)/sr:.1f}s "
+          f"(GSV 合成限 3~10s)", flush=True)
+    return {"action": "clipped", "duration_s": round(len(wav) / sr, 2),
+            "orig_s": round(dur, 2)}
+
+
 def save_voice(
     name: str,
     ref_audio: str,
@@ -29,14 +84,14 @@ def save_voice(
     rvc_index: Optional[str] = None,     # D1: faiss 索引路径
     style: str = "",                     # 批次7: 默认说话风格/人设描述
 ) -> Path:
-    """保存音色档案, 返回档案目录。"""
+    """保存音色档案, 返回档案目录。ref 超长自动裁剪 (见 _materialize_ref)。"""
     name = name.strip().replace("/", "_").replace("\\", "_")
     if not name:
         raise ValueError("音色名不能为空")
     vdir = VOICES_DIR / name
     vdir.mkdir(parents=True, exist_ok=True)
     dst = vdir / "ref.wav"
-    shutil.copy2(ref_audio, dst)
+    _materialize_ref(ref_audio, dst)
     meta = {
         "name": name,
         "prompt_text": prompt_text,

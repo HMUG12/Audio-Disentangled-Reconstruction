@@ -286,3 +286,13 @@
 - [x] **复测通过** ✅: 服务 (壳 explorer 中转重启, 端口动态 13496) ready 后 `POST /tts` → **HTTP 200**, 213KB, 4.0s; 产物 WAV PCM_16 32kHz 单声道 3.34s 有效
 - 注: 复测前一次服务进程在合成请求时崩溃 (curl 56 连接重置, 无日志可查, 疑似偶发); explorer 中转重启后同请求正常, 不再复现, 观察即可。附带坑: 探活轮询应按 python 子进程 pid 过滤 netstat (壳 pid 无监听端口); 终端直起 python 跑 librosa 导入会被火绒冻结 (改纯 soundfile 方案绕开)
 
+### 批次 18 (2026-10-05): 下载修复 + 上传兜底 + adr doctor + N.E.K.O 直连验证
+
+> 用户三需求: ①音频无法下载 + 上传超限要兜底 ②排错自动检测程序 ③N.E.K.O 适配 (协商定案: 先端到端验证直连)。优化方向 (压时间/提GPU占用/降显存内存) 待后续讨论。
+
+- [x] **壳下载修复** ✅ (`desktop/src-tauri`): 根因 = WebView2 对网页 `a[download]` 默认静默取消下载, 壳未注册下载事件。把 main 窗口从 tauri.conf.json 迁到 lib.rs setup 内 `WebviewWindowBuilder` 创建并挂 `on_download` — Requested 时统一改写 destination 到系统下载目录 (文件名取 WebView2 建议名, blob 缺名时时间戳兜底)。坑: Tauri 2.12 `center()` 无参; `DownloadEvent` 是 non_exhaustive 需 wildcard 分支
+- [x] **上传兜底三层** ✅: ①`/train/upload` 加真伪/时长探测 (soundfile 优先, 失败回落 ffprobe; 均无则放行不阻塞)、500MB 大小上限、2h 时长防呆 (超限删文件+413 指引, 训练素材不自动裁 — 裁剪丢数据须用户决定)、损坏文件 400; ②`voice_library.save_voice` 加 `_materialize_ref` — ref ≤10s copy / >10s 去静音裁 8s / <3s 或损坏报错拒绝, 顺带修掉 `save_voice_auto` 整段建档 10~15s 产出超长 ref 的隐藏 bug; ③前端上传响应透出 `duration_s` (超 30 分钟 toast 提醒) + 错误 detail 透传
+- [x] **adr doctor 排错程序** ✅ (`adr/core/doctor.py`): 10 项检测 — 设备/GPU、关键依赖、ffmpeg/ffprobe、4 档 preset、GSV 预训练 6 关键文件、音色档案完整性 (ref 时长 3~10s + meta 权重路径)、STOP 残留、磁盘空间、端口/服务探活; `--fix` 自动修复 (ref 超长就地裁 8s、STOP 清理)。CLI `adr doctor` + API `GET /system/doctor?fix=` + pro.html 总览页"一键诊断/自动修复"面板。分层合规: 只依赖 core, 不 import models。坑: STOP 实际在 `third_party/gpt_sovits/logs/<exp>/`, 非仓库根 logs
+- [x] **N.E.K.O 直连验证 10/10 PASS** ✅: 模拟 api_neko (GSV api_v2) 消费方打 `/api/v2` — POST/GET 非流式 wav (RIFF 校验)、streaming_mode=1/2、media_type=raw、非法 media_type/ref 不存在的 400 错误契约、`set_sovits_weights` 热换 (yui e24) + 热换后合成 + 恢复预训练底模。结论: **N.E.K.O 零改造, settings.toml 指向 ADR 服务地址即可用** (ref_audio_path 填本机路径, 或 ADR 扩展 profile 参数); v3 队列/WS 未实现但 N.E.K.O 不消费
+- 验证: py_compile 4 文件 OK; pytest tests/test_server_api.py 33 全绿 (F 盘 basetemp 绕开沙箱 Temp 权限); `adr doctor` CLI 实测 (8 ok 1 警告 → --fix 后 1 fixed); cargo build 通过; 新壳 explorer 中转重启后 /api/v2 冒烟 200 RIFF + doctor API 200。运维注意: 杀壳不清服务子进程 (孤儿 python 会与新服务并存抢显存), 需手动 Stop-Process
+
