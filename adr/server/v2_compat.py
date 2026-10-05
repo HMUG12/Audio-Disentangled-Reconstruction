@@ -60,11 +60,11 @@ class TTS_Request(BaseModel):
     super_sampling: bool = False
     overlap_length: int = 2
     min_chunk_length: int = 16
-    # ── ADR 扩展 ──
-    profile: str = None        # 音色档案名 (data/voices/<name>)
-    voice: str = None          # profile 别名
-    t2s_weights: str = None    # 请求级热换 (GPT/语义, 优先于档案)
-    vits_weights: str = None   # 请求级热换 (SoVITS/声学, 优先于档案)
+    # ── ADR 扩展 ── (显式 null 视同未传, 部分客户端会序列化全字段)
+    profile: str | None = None        # 音色档案名 (data/voices/<name>)
+    voice: str | None = None          # profile 别名
+    t2s_weights: str | None = None    # 请求级热换 (GPT/语义, 优先于档案)
+    vits_weights: str | None = None   # 请求级热换 (SoVITS/声学, 优先于档案)
 
 
 def _get_engine(request: Request):
@@ -134,6 +134,9 @@ def _stream_generator(engine, req: dict, media_type: str):
             vits_weights=req.get("vits_weights"),
             split_method=req.get("text_split_method") or "cut3",
             head_seed=req.get("seed", -1),
+            top_k=req.get("top_k", 15),
+            top_p=req.get("top_p", 1.0),
+            temperature=req.get("temperature", 1.0),
         ):
             if first and mt == "wav":
                 yield wave_header_chunk(sample_rate=sr)

@@ -309,3 +309,25 @@
 - [x] **测试夹具跟上 3s 防护** ✅: 批次 18 `_materialize_ref` 拒收 <3s 后, `test_voice_library.py` 夹具 0.1s 全零静音被拒 → 换 4s 440Hz 正弦波 (全零会被去静音裁空), 3 passed
 - 验证: py_compile OK; 新壳 explorer 中转重启后 5/5 PASS; pytest test_voice_library 3 绿 (test_server_api 批次 18 已 33 绿)。**运维坑: Start-Process 直起壳两次 3 分钟内自行退出 (无崩溃事件, 疑沙箱回收), explorer.exe 中转 (等同用户双击) 稳定 — 壳生命周期验证一律 explorer 中转**
 - N.E.K.O 接入指引 (用户操作): N.E.K.O 设置 → 自定义 TTS (tts_custom) → base_url 填 ADR 服务地址 (如 `http://127.0.0.1:12444`) → 音色下拉自动出现 `gsv:` 前缀档案; ADR 侧引擎预热的冷加载已由 lifespan 预热兜底
+
+
+### 批次 20 (2026-10-05): 电音三重根因定案 + O1-O5 性能优化落地
+
+> 用户反馈: "还是会有电音, 还有语音不够自然与流畅, 喘气不自然。还有单长句时间久, 还可优化。现在你需要 1 解决音质问题, 2 按你和我提出的进行优化优化。"
+
+- [x] **音质三重根因 (A/B 实验矩阵定案, `output/ab_tone/` 7 wav)** ✅:
+  - 根因① 训练素材 = **同一段素材 2 份拷贝** (有效≈1 句话), 24 epoch = 纯背诵零泛化 → 电音根本因。e24→e16 换绑 (批次 19) 治标不治本
+  - 根因② ASR 咬字全对 → 电音不在文本层, 在**声学层** (过拟合 + 采样发散)
+  - 根因③ `prompt_text` 为空 → 韵律发散: 6_无pt 12.1s vs 4_e16 9.0s (**+34% 拖长音**); epoch 越高语速越快 = 过拟合旁证; 保守采样 (temp0.3/top_p0.8) 回归自然节奏 9.8s
+- [x] **采样参数化三面 (治发散)** ✅:
+  - `v2_compat.py`: 请求模型加 `top_k/top_p/temperature` 可选字段 (修 Pydantic v2 显式 null 422 的 4 个 ADR 扩展字段 `str | None`), `_stream_generator` 透传
+  - `gsv_engine.py`: `synthesize_stream` 签名加三采样参数; **新增 `_split_long(text, max_len=40)`** — 有句号整段交给 GSV 自切, 无句号长段按逗号预切 (≥40 字) / 硬切 (≥55 字), 治"单长句时间久" (GSV 内部 cut 依赖标点, 无标点长段整段一次 AR decode → 线性膨胀 + 发散陡增)
+  - `v3_compat.py`: `_produce` 读 `voice["sampling"]` 透传 (N.E.K.O WS 链路自动继承档案配方)
+  - `voice_library.py`: `save_voice` 读旧 meta 保留手工 `sampling` 字段
+  - yui 档案 meta.json: 补 `prompt_text` + `"sampling": {top_k:15, top_p:0.8, temperature:0.3}`
+- [x] **_split_long 单测 4 路径通过** ✅: 有句号→整段返回 / 有逗号 ≥40 字→逗号处切 / 无标点 ≥55 字→硬切 / 短句→不切
+- [x] **O1 batch_size 显存自适应** ✅: `gsv_finetune.py --batch-size auto` (默认) 四档分选 — ≥11GB→6 / ≥7.5GB→4 / ≥4.5GB→2 / <4.5GB→1+`ADR_MAX_CLIP_SEC=10`; 实测锚点 8GB@bs4 峰值 7.8GB, 4GB@bs1 ~3.1-3.5GB。webui 训练页加"显存配方"三选 Radio (auto/4gb/8gb), auto 不传参走脚本内分档
+- [x] **O3 bf16 混合精度** ✅ (Ampere+ 降显存 30~40%): `apply_compat_patches.py` 4 补丁 — `ADR_S2_BF16=1` 且 `torch.cuda.is_bf16_supported()` 时 s2_train autocast dtype=bfloat16 + GradScaler 关 (bf16 免 loss scale); 主权重始终 fp32 产物格式不变; 老卡回落 fp16 零行为变化。`gsv_finetune.py` 按 `is_bf16_supported()` 自动注 env。应用结果 4 ok / 19 skip / 0 fail, s2_train.py py_compile 通过。**坑: patch() 的 marker 必须是 new 的字面子串 (assert 自检), 行尾注释携带 marker 与存量风格一致**
+- [x] **O2/O4/O5 结项 (评估入档)** ✅: O2 DataLoader workers — `ADR_S2_NUM_WORKERS` 批次 5 已有 (Windows workers=0 实测 553s→235s); O4 音频懒加载缓行 — 当前 2 切片素材内存收益≈0, W3 10s 截断已治显存大头, 大素材场景再议; O5 首包延迟 — W1 lifespan 预热 (25.3s→2.7s) + head_seed 已做, 剩余无高收益项
+- [x] **服务重启 + 全链验证** ✅: 12444 = PID 4312 (explorer 中转, 独立于壳); `load_voice('yui的声音')` 读出 prompt_text/sampling/ref; v2 profile 实弹 PASS (371KB wav 5.9s 32kHz mono 合法); 服务日志 118 行零 ERROR; 批次 19 遗留 v3 `voice_id not found` 未再出现。孤儿壳 27740 (服务子进程已死) 已 taskkill, 防用户重启壳时双服务抢显存
+- 待用户: ①试听 `output/ab_tone/` — 重点 5_保守采样 vs 4_e16、7_重启验证; ②**素材增补是喘气/自然度根本改善的前提** — ≥1 分钟干净多句录音 (理想 3-10 分钟), 切片 3-10s; ③N.E.K.O 再报 voice not found 时音色名需与档案名一致

@@ -258,10 +258,11 @@ def build_ui(share: bool = False, inbrowser: bool = True) -> "gr.Blocks":
                     ft_exp = gr.Textbox(label="音色名 (训练标识)", value="my_voice")
                     ft_recipe = gr.Radio(
                         choices=[
-                            ("4GB 低配 (bs1 + 10s 截断, 推荐)", "4gb"),
+                            ("自动 (按显存分档, 推荐)", "auto"),
+                            ("4GB 低配 (bs1 + 10s 截断)", "4gb"),
                             ("8GB 标准 (bs4)", "8gb"),
                         ],
-                        value="4gb",
+                        value="auto",
                         label="显存配方",
                     )
                     ft_epochs = gr.Slider(
@@ -738,6 +739,7 @@ def _run_gsv_finetune(
     """声音克隆微调回调 — gsv_finetune.py 子进程 + 可选 train_gate.py 并行早停。
 
     配方:
+      auto: O1 按显存分档 (≥11GB→6 / ≥7.5GB→4 / ≥4.5GB→2 / 更低→1+10s截断), 默认
       8gb: bs4 (8GB 显存实测峰值 ~7.8GB)
       4gb: bs1 + 10s clip 截断 (实测训练自身 ~3.1-3.5GB, 补丁 #16/#17/#18)
     门禁走 CPU (--cpu): 离线打分不与训练抢显存, 5 句均值 ≥0.80 发 STOP 早停。
@@ -763,11 +765,13 @@ def _run_gsv_finetune(
         sys.executable, "-u", str(script), audio_path,
         "--exp", exp,
         "--s2-epochs", str(epochs),
-        "--batch-size", "1" if recipe == "4gb" else "4",
         "--skip-s1",  # s1 全量微调 ~50min 且降音色相似度 (实测结论)
     ]
     if recipe == "4gb":
-        cmd += ["--max-clip-sec", "10"]
+        cmd += ["--batch-size", "1", "--max-clip-sec", "10"]
+    elif recipe == "8gb":
+        cmd += ["--batch-size", "4"]
+    # recipe == "auto": 不传 --batch-size, 脚本内 O1 按显存自动分档
     if bind_voice:
         cmd += ["--bind-voice", bind_voice]
 
@@ -793,8 +797,7 @@ def _run_gsv_finetune(
             log_buf.append(f"[!] 门禁启动失败 (不影响训练): {e}")
 
     log_buf.append(f"[CMD] {' '.join(cmd)}")
-    log_buf.append(f"[配置] exp={exp} 配方={recipe} (bs={'1' if recipe == '4gb' else '4'}"
-                   f"{', clip≤10s' if recipe == '4gb' else ''}) s2轮数={epochs} "
+    log_buf.append(f"[配置] exp={exp} 配方={recipe} s2轮数={epochs} "
                    f"门禁={'开' if gate_on else '关'}"
                    + (f" 绑定档案={bind_voice}" if bind_voice else ""))
     log_buf.append("=" * 50)

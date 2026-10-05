@@ -153,6 +153,7 @@ async def tts_ws_stream_input(websocket: WebSocket):
 
         def _produce():
             try:
+                samp = voice.get("sampling") or {}
                 for chunk, sr in _engine().synthesize_stream(
                     text, voice["ref_audio"],
                     prompt_text=voice.get("prompt_text") or "",
@@ -162,6 +163,9 @@ async def tts_ws_stream_input(websocket: WebSocket):
                     vits_weights=voice.get("vits_weights"),
                     split_method=overrides.get("text_split_method") or "cut3",
                     head_seed=overrides.get("seed", -1),
+                    top_k=samp.get("top_k", 15),
+                    top_p=samp.get("top_p", 1.0),
+                    temperature=samp.get("temperature", 1.0),
                 ):
                     frame = wave_header_chunk(sample_rate=sr) + \
                         to_int16(chunk).tobytes()
