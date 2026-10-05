@@ -23,13 +23,13 @@ import torch
 import torch.nn as nn
 
 from adr.core import get_logger, register
+from adr.core.config import adr_data_dir
 from adr.vocoder.base import BaseVocoder, VocoderConfig
 
 
-# BigVGAN 源码搜索路径 (M1 默认 F:\\ADR_data\\bigvgan)
+# BigVGAN 源码搜索路径 (批次26: 数据目录统一从 adr_data_dir 推导)
 BIGVGAN_DIR_CANDIDATES = [
-    Path(r"F:/ADR_data/bigvgan"),
-    Path(r"F:\ADR_data\bigvgan"),
+    adr_data_dir() / "bigvgan",
     Path(__file__).parent.parent.parent / "third_party" / "BigVGAN",
     Path.home() / "BigVGAN",
 ]
@@ -71,7 +71,7 @@ class BigVGANVocoder(BaseVocoder):
     """BigVGAN v2 声码器封装 (M1)。
 
     用法:
-        vocoder = BigVGANVocoder.from_pretrained(r"F:/ADR_data/bigvgan")
+        vocoder = BigVGANVocoder.from_pretrained("<BigVGAN 权重目录>")
         wav = vocoder.infer(mel)  # (B, T_wav) 真实音频
     """
 

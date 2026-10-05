@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from adr.core import get_logger
+from adr.core.config import adr_data_dir
 
 
 @dataclass
@@ -166,18 +167,21 @@ class PretrainedHub:
         self.log.info(f"  ✓ Downloaded {name} ({target.stat().st_size // 1024 // 1024} MB)")
         return target
 
+    def search_paths(self) -> list[Path]:
+        """本地权重搜索路径 (批次26: 数据目录统一从 adr_data_dir 推导)。"""
+        return [
+            self.cache_dir,
+            adr_data_dir() / "bigvgan",
+            adr_data_dir() / "wavlm",
+        ]
+
     def search_local(self) -> list[tuple[str, Path]]:
         """扫描本地已有的预训练权重 (不限于 ADR 注册的)。
 
         用于发现用户已下载但 ADR 未注册的权重。
         """
         results = []
-        search_paths = [
-            self.cache_dir,
-            Path("F:/ADR_data/bigvgan"),  # 用户已知路径
-            Path("F:/ADR_data/wavlm"),
-        ]
-        for base in search_paths:
+        for base in self.search_paths():
             if not base.exists():
                 continue
             for pt_file in base.rglob("*.pt"):

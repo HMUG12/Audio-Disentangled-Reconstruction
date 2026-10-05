@@ -364,6 +364,13 @@ def test_auth_missing_key_401(auth_client):
     assert r.json() == {"message": "unauthorized"}
 
 
+def test_auth_static_pages_exempt(auth_client):
+    """静态控制台页豁免 (/ /pro /easy /call): 页面无数据, 设 key 后壳导航不被拦 (批次26)。"""
+    for path in ("/", "/pro", "/easy", "/call"):
+        r = auth_client.get(path)
+        assert r.status_code == 200, path
+
+
 def test_auth_wrong_key_401(auth_client):
     r = auth_client.get("/api/v2/tts",
                         params={"text": "hi", "ref_audio_path": "a.wav"},

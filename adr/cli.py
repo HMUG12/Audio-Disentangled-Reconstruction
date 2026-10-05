@@ -1,6 +1,6 @@
-"""ADR 命令行入口。
+"""ADR 命令行入口: 数据处理 / 训练 / 推理 / 模型管理 / 服务与 WebUI 启动。
 
-完整功能在 Day 5 实现,Day 1 先提供 stub 让 console_scripts 可用。
+运行 `adr --help` 查看全部子命令; 各子模块细节见 adr/ 包内对应实现。
 """
 
 from __future__ import annotations
@@ -269,13 +269,13 @@ def infer(ref: str, text: str, output: str, checkpoint: str | None, n_timesteps:
 @main.command()
 @click.option("--format", "fmt", default="gguf", help="导出格式 (gguf/awq/onnx)")
 def export(fmt: str) -> None:
-    """量化导出 (M3 完整实现)。"""
+    """量化导出 (预留接口, 尚未实现)。"""
     from adr.core import get_logger, setup_logging
 
     setup_logging(level="INFO")
     log = get_logger("adr.cli")
-    log.warning(f"export to {fmt} is a Day 1 stub.")
-    log.info("Full implementation by M3 (end of M2).")
+    log.warning(f"export --format {fmt} 尚未实现 (预留接口)。")
+    log.info("量化训练可用: adr train --qlora; 导出需求请跟踪后续版本。")
 
 
 @main.group()
@@ -394,9 +394,8 @@ def model_search() -> None:
     if not results:
         click.echo("[!] No local pretrained weights found.")
         click.echo("    Searched paths:")
-        click.echo(f"      - {hub.cache_dir}")
-        click.echo("      - F:/ADR_data/bigvgan")
-        click.echo("      - F:/ADR_data/wavlm")
+        for p in hub.search_paths():
+            click.echo(f"      - {p}")
     else:
         click.echo("Found local pretrained weights:")
         click.echo("-" * 78)
@@ -483,7 +482,6 @@ def train(
     if use_lora:
         import torch
         from adr.training.lora import LoRAConfig, apply_lora
-        # 注意: 本文件定义了 list 子命令遮蔽内置 list, 这里用解包代替 list()
         lora_cfg = LoRAConfig(
             rank=lora_rank,
             alpha=lora_alpha,
@@ -563,7 +561,7 @@ def train(
 @click.option("--share", is_flag=True, help="生成公网分享链接")
 @click.option("--no-browser", is_flag=True, help="启动后不自动打开浏览器")
 def webui(host: str, port: int, share: bool, no_browser: bool) -> None:
-    """启动 WebUI (Day 10 完整实现, 当前为骨架)。"""
+    """启动 legacy WebUI (Gradio, 功能冻结期: 只修 bug 不加新功能)。"""
     from adr.core import get_logger, setup_logging
 
     setup_logging(level="INFO")

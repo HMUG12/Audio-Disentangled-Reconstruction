@@ -15,15 +15,24 @@
 from __future__ import annotations
 
 import contextlib
-import hashlib
-import json
+import logging
 import os
 import sys
 import threading
-from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+# 批次26: 段缓存拆至 gsv_runtime, 此处 re-export 保持既有访问面不变
+# (tests 直接用 gsv_engine._SEG_CACHE / _seg_cache_clear 等)
+from adr.models.gsv_runtime import (  # noqa: F401
+    _SEG_CACHE,
+    _seg_cache_clear,
+    _seg_cache_enabled,
+    _seg_cache_get,
+    _seg_cache_key,
+    _seg_cache_put,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 GSV_DIR = REPO_ROOT / "third_party" / "gpt_sovits"
@@ -475,71 +484,6 @@ class GSVEngine:
         return audio, int(sr)
 
 
-# ---------------------------------------------------------------------------
-# 批次23: 流式句级缓存 (进程内内存 LRU, 不落盘)
-# ---------------------------------------------------------------------------
-# 服务层整体缓存 (tts_cache, 批次22) 兜底跨重启; 这里按"段"缓存 int16 PCM —
-# 同文本重复播报/跨请求重发时已合成句子直接回放, 跳过 GPU 前向。PCM 体积大
-# 且 GPU 前向才是瓶颈, 内存 LRU 性价比最高。key 不含 seed (播报一致性, 同
-# 文本不同采样轮次返回相同音频, 与批次21整体缓存语义一致)。
-_SEG_CACHE: "OrderedDict[str, tuple[bytes, int]]" = OrderedDict()
-_SEG_LOCK = threading.Lock()
-_SEG_BYTES = 0   # 当前缓存占用量 (int16 PCM 字节)
-
-
-def _seg_cache_enabled() -> bool:
-    return os.environ.get("ADR_SEG_CACHE", "1") != "0"
-
-
-def _seg_cache_key(seg: str, ref_audio: str, prompt_text: str,
-                   text_lang: str, prompt_lang: str, split_method: str,
-                   top_k: int, top_p: float, temperature: float,
-                   speed_factor: float,
-                   t2s_weights: Optional[str], vits_weights: Optional[str]) -> str:
-    payload = json.dumps(
-        [seg, ref_audio, prompt_text, text_lang, prompt_lang, split_method,
-         top_k, top_p, temperature, speed_factor, t2s_weights, vits_weights],
-        ensure_ascii=False)
-    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
-
-
-def _seg_cache_get(key: str):
-    with _SEG_LOCK:
-        item = _SEG_CACHE.get(key)
-        if item is not None:
-            _SEG_CACHE.move_to_end(key)   # LRU 触碰
-        return item
-
-
-def _seg_cache_put(key: str, pcm: bytes, sr: int):
-    global _SEG_BYTES
-    try:
-        max_items = max(0, int(os.environ.get("ADR_SEG_CACHE_MAX", "128")))
-    except ValueError:
-        max_items = 128
-    try:
-        max_bytes = max(0, int(os.environ.get("ADR_SEG_CACHE_MB", "256"))) * 1024 * 1024
-    except ValueError:
-        max_bytes = 256 * 1024 * 1024
-    if max_items <= 0 or max_bytes <= 0:
-        return
-    with _SEG_LOCK:
-        _SEG_CACHE[key] = (pcm, sr)
-        _SEG_BYTES += len(pcm)
-        # 双上限逐出 (条数/字节); 单段超上限时把自己弹空, 自然不缓存
-        while _SEG_CACHE and (len(_SEG_CACHE) > max_items
-                              or _SEG_BYTES > max_bytes):
-            _, (old_pcm, _) = _SEG_CACHE.popitem(last=False)
-            _SEG_BYTES -= len(old_pcm)
-
-
-def _seg_cache_clear():
-    global _SEG_BYTES
-    with _SEG_LOCK:
-        _SEG_CACHE.clear()
-        _SEG_BYTES = 0
-
-
 _ENGINE: Optional[GSVEngine] = None
 _LOADING = False   # 后台预热进行中 (服务启动期, 供控制台显示引擎三态)
 _STAGE = ""        # 预热细分阶段: queued/importing/loading/kernel/failed (供前端实时显示)
@@ -578,3 +522,57 @@ def get_gsv_engine() -> GSVEngine:
     if _ENGINE is None:
         _ENGINE = GSVEngine()
     return _ENGINE
+
+
+def prewarm(default_profile: str | None = None) -> None:
+    """后台预热入口 (批次26): 阻塞调用, 放后台线程跑。
+
+    状态机 queued→importing→loading→kernel→ready/failed 由本函数独占管理
+    (_LOADING/_STAGE 只在模块内部读写, 外部经 is_loading()/stage() 只读观察)。
+    服务端 (server/app.py) 启动线程调用; 桌面壳 prewarm 页面轮询 stage() 显示。
+    失败不致命 (首次合成时仍会按需加载), 只打日志。
+    """
+    global _LOADING, _STAGE
+    log = logging.getLogger("adr.models.gsv_engine")
+    _LOADING = True
+    _STAGE = "queued"
+    try:
+        _STAGE = "importing"  # import torch + GSV 模块 (最耗时可达 20s)
+        from adr.models.voice_library import list_voices, load_voice
+
+        prof_name = default_profile
+        if not prof_name:
+            voices = list_voices()
+            prof_name = voices[0] if voices else None
+        kw: dict = {}
+        prof = None
+        if prof_name:
+            try:
+                prof = load_voice(prof_name)
+                kw = {"vits_weights": prof.get("vits_weights"),
+                      "t2s_weights": prof.get("t2s_weights")}
+                log.info("[prewarm] 用音色档案「%s」的权重预热", prof_name)
+            except Exception:
+                prof = None  # 档案损坏 → 退回纯预训练权重
+        _STAGE = "loading"    # 权重加载进显存
+        eng = get_gsv_engine()
+        eng.warmup(**{k: v for k, v in kw.items() if v})
+        log.info("[prewarm] GPT-SoVITS 引擎就绪")
+        # kernel JIT 预热: 否则首次合成再付 ~14s CUDA 编译 (只取首块)
+        try:
+            _STAGE = "kernel"
+            if prof:
+                for _ in eng.synthesize_stream(
+                        "引擎预热。", prof["ref_audio"],
+                        vits_weights=kw.get("vits_weights"),
+                        split_method="cut0"):
+                    break
+                log.info("[prewarm] kernel 预热完成, 首次合成即秒级")
+        except Exception as e:
+            log.warning("[prewarm] kernel 预热失败 (不影响功能): %s", e)
+        _STAGE = "ready"
+    except Exception as e:
+        _STAGE = "failed"
+        log.warning("[prewarm] GSV 预热失败 (首次合成时将现场加载): %s", e)
+    finally:
+        _LOADING = False

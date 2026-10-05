@@ -17,6 +17,25 @@ from typing import Any, Literal, Optional
 import yaml
 
 
+def adr_data_dir() -> Path:
+    """ADR 外部数据目录 (预训练权重/词典/日志等大文件, 不入仓库)。
+
+    优先级: ADR_DATA_DIR 环境变量 > F:/ADR_data (历史约定, 存在即沿用) >
+    平台用户目录 (Windows: %LOCALAPPDATA%/ADR/data; 其他: ~/.adr/data)。
+    (批次26: 消除散落各处的盘符硬编码, 统一从这里推导)
+    """
+    env = os.environ.get("ADR_DATA_DIR", "").strip()
+    if env:
+        return Path(env)
+    legacy = Path("F:/ADR_data")
+    if legacy.is_dir():
+        return legacy
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local"
+        return Path(base) / "ADR" / "data"
+    return Path.home() / ".adr" / "data"
+
+
 # ===== 数据配置 =====
 @dataclass
 class DataConfig:
