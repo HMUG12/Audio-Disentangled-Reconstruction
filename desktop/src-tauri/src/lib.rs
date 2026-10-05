@@ -308,17 +308,40 @@ async fn retry_prewarm(app: AppHandle) -> Result<(), String> {
 // 启动与守护
 // ---------------------------------------------------------------------------
 
-/// 服务日志目录 (批次26): ADR_LOG_DIR > ADR_DATA_DIR\logs > %LOCALAPPDATA%\ADR\logs
-/// (均失败回落 %TEMP%\adr_server.log)。追加写, 启动时打时间戳分隔行。
+/// 与 adr/core/config.py adr_data_dir() 同序推导 (批次27 复审 ISSUE-2 对齐):
+/// ADR_DATA_DIR > F:/ADR_data (legacy, 存在即沿用) > %LOCALAPPDATA%\ADR\data。
+/// 返回 None 表示交由 Python 侧默认 (~/.adr/data), 不注入子进程。
+/// 空串环境变量视为未设置 (批次27 复审 ISSUE-4: PathBuf("") 会落到进程 CWD)。
+fn adr_data_dir() -> Option<PathBuf> {
+    if let Ok(v) = std::env::var("ADR_DATA_DIR") {
+        if !v.trim().is_empty() {
+            return Some(PathBuf::from(v));
+        }
+    }
+    let legacy = PathBuf::from("F:/ADR_data");
+    if legacy.is_dir() {
+        return Some(legacy);
+    }
+    std::env::var("LOCALAPPDATA")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .map(|la| PathBuf::from(la).join(r"ADR\data"))
+}
+
+/// 服务日志目录 (批次26, 批次27 重构): ADR_LOG_DIR > <数据目录>\logs
+/// (均失败回落 %TEMP%\adr_server.log)。数据目录经 adr_data_dir() 与 Python 同源 —
+/// 老机器 (F:\ADR_data) 日志随数据落 F: 盘, 新机器落 %LOCALAPPDATA%\ADR\data\logs。
+/// 追加写, 启动时打时间戳分隔行。
 fn server_log_path() -> PathBuf {
-    let candidates: Vec<PathBuf> = [
-        std::env::var("ADR_LOG_DIR").ok().map(PathBuf::from),
-        std::env::var("ADR_DATA_DIR").ok().map(|d| PathBuf::from(d).join("logs")),
-        std::env::var("LOCALAPPDATA").ok().map(|d| PathBuf::from(d).join(r"ADR\logs")),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(v) = std::env::var("ADR_LOG_DIR") {
+        if !v.trim().is_empty() {
+            candidates.push(PathBuf::from(v));
+        }
+    }
+    if let Some(d) = adr_data_dir() {
+        candidates.push(d.join("logs"));
+    }
     for base in candidates {
         if std::fs::create_dir_all(&base).is_ok() {
             return base.join("server.log");
@@ -438,8 +461,13 @@ fn start_server(
     if let Some(pp) = &pythonpath {
         cmd.env("PYTHONPATH", pp);
     }
+    // 批次27 复审 ISSUE-2: 注入数据目录, 保证子进程 Python (config.adr_data_dir()
+    // 优先读此环境变量) 与壳的目录推导永远同源
+    if let Some(d) = adr_data_dir() {
+        cmd.env("ADR_DATA_DIR", &d);
+    }
     // 服务日志落盘 (排错必需: 此前服务崩溃/卡死均无日志可查)
-    // 路径见 server_log_path(): ADR_LOG_DIR > ADR_DATA_DIR\logs > %LOCALAPPDATA%\ADR\logs
+    // 路径见 server_log_path(): ADR_LOG_DIR > <adr_data_dir()>\logs
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
     cmd.stdout(std::process::Stdio::piped());

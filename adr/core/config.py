@@ -28,7 +28,8 @@ def adr_data_dir() -> Path:
     if env:
         return Path(env)
     legacy = Path("F:/ADR_data")
-    if legacy.is_dir():
+    # F: 盘是 Windows 历史约定; 非 Windows 上 "F:/..." 是相对路径, 加平台守卫 (批次27 复审 ISSUE-3)
+    if os.name == "nt" and legacy.is_dir():
         return legacy
     if os.name == "nt":
         base = os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local"

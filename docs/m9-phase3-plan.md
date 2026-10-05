@@ -394,3 +394,23 @@
   - **P2-b** gsv_engine 510 行多职责 → 修复: 段缓存拆 `gsv_runtime.py` (排队计数是实例状态留类内)
   - **P2-c** 三套 UI 并存 (legacy Gradio webui / FastAPI 控制台 / 壳页面) → 定主线 = 壳 + 控制台; webui 头部加 legacy 冻结声明
   - **P3** cli export stub + 过时 docstring / auth.py `/call` 豁免语义注释 / app.py `app.state.engine` 存疑 → 顺手清理
+
+### 批次 26 (2026-10-05): 架构 review 修复 (P1/P2/P3 逐项) — commit b641ac9
+
+> 按批次 25 清单逐项修复; 全量回归通过 + 服务实弹验证 (health `engine_stage` 预热状态机生效) 后入库。 (本节为批次 27 补记 — 当批遗漏落盘)
+
+- [x] **P1-a** gsv_engine 公开 `prewarm(default_profile)` 状态机 (queued→importing→loading→kernel→ready/failed), `app.py _prewarm_gsv` 改 13 行纯委托 — 不再跨模块直写 `_LOADING/_STAGE` 私有变量
+- [x] **P1-b** 数据目录推导: `config.adr_data_dir()` (ADR_DATA_DIR env > F:/ADR_data legacy 存在即沿用 > %LOCALAPPDATA%/ADR/data > ~/.adr/data); hub.search_paths / bigvgan / phoneme_dict / lib.rs 日志路径全部接入, 消除盘符硬编码
+- [x] **P2-b** 段缓存拆分新模块 `gsv_runtime.py` (五函数 + _SEG_CACHE 原样搬入), gsv_engine 顶部 re-export 保持兼容
+- [x] **P2-a** `server/__main__.py` 监听 0.0.0.0/:: 且无 ADR_TTS_API_KEY 时 stderr 醒目警告; launcher 三卡 expose 勾选 → 行内黄色警示 (.exp-warn)
+- [x] **P2-c/P3** webui legacy 冻结声明 / cli 文案与 export stub 清理 / app.state.engine 注释澄清; 顺手修真 bug: **auth.py EXEMPT_PATHS 补 `/call`** (设 key 后桌面壳 call 导航被 401 拦截) + 回归用例 test_auth_static_pages_exempt
+
+### 批次 27 (2026-10-05): 批次 26 复审 — 4 问题全修复闭环
+
+> 复审对象 b641ac9 全量 diff, 双子代理交叉验证 (ISSUE-1/2 均 2/2 确认; ISSUE-3/4 单代理提出按信息级收录); 用户选定修复全部。
+
+- [x] **ISSUE-1 (高, 批次15 预存)** launcher.html 唯一 script 块的 forEach 对 `.exp input` 无空值保护: call 卡 (无勾选框) 第 4 次迭代 `null.addEventListener` 抛未捕获 TypeError 中止整个脚本 → **`on_launcher_ready` (托盘复位) 与引擎状态条 3s 轮询自批次 15 起从未执行** (历史"实弹正常"实为 pro/call 页状态显示, launcher #eng 从未被独立验证; 四卡点击进入不受影响 — 异常发生在 click 监听注册之后)。修复: querySelector 结果可选链 `box?.addEventListener` + change 监听判空
+- [x] **ISSUE-2 (低)** Rust/Python 数据目录推导不一致: lib.rs 新增 `adr_data_dir()` 与 config.py 同序 (env > F: legacy > %LOCALAPPDATA%\ADR\data), `server_log_path()` 重构为 ADR_LOG_DIR > \<数据目录\>\logs (老机器日志随数据回 F: 盘); `start_server` 向子进程注入 ADR_DATA_DIR 保证壳与 Python 永远同源
+- [x] **ISSUE-3 (信息)** config.py F: legacy 分支加 `os.name == "nt"` 守卫 (非 Windows 上 "F:/..." 是相对路径, 理论误配 cwd)
+- [x] **ISSUE-4 (信息)** lib.rs 环境变量空串过滤 (ADR_LOG_DIR/ADR_DATA_DIR="" 视为未设置, 防 PathBuf("") 把日志落进程 CWD)
+- [x] **验证** ✅: cargo check 通过; adr_data_dir 实弹三态 (no-env→F:\ADR_data / env 覆盖 / 空串回落 legacy); launcher 唯一 script 块语法核对; 全量 pytest **276 passed + 1 skipped**
