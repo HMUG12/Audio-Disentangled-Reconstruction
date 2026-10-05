@@ -28,6 +28,14 @@ def test_force_preset_8gb():
     assert cfg.x_pad == 3
 
 
+def test_force_preset_cpu_no_half():
+    """CPU + 强制档位 → is_half 必须 False (批次28 复审 P6)。"""
+    cfg = setup_device(device="cpu", force_preset="4gb", verbose=False)
+    assert cfg.device == "cpu"
+    assert cfg.is_half is False
+    assert cfg.precision == VRAM_PRESETS["4gb"]["precision"]
+
+
 def test_device_summary_format():
     """设备摘要格式正确 (含能力分级)。"""
     cfg = DeviceConfig(device="cpu", gpu_name="Test", gpu_vram_gb=8.0)

@@ -308,12 +308,13 @@ def test_sovits_freeze():
 
 
 def test_model_loading_local_bigvgan():
-    """尝试加载用户已有的 BigVGAN 权重 (如 F:/ADR_data/bigvgan)。"""
+    """尝试加载用户已有的 BigVGAN 权重 (数据目录, ADR_DATA_DIR 推导)。"""
     from pathlib import Path
 
+    from adr.core.config import adr_data_dir
     from adr.vocoder.bigvgan import BigVGANVocoder
 
-    bigvgan_dir = Path("F:/ADR_data/bigvgan")
+    bigvgan_dir = Path(adr_data_dir()) / "bigvgan"
     if not (bigvgan_dir / "bigvgan_generator.pt").exists():
         pytest.skip("BigVGAN weights not available locally")
 

@@ -1,12 +1,20 @@
-"""下载 WavLM-base 与 BigVGAN-base 预训练权重到 F:\\ADR_data\\。"""
+"""下载 WavLM-base 与 BigVGAN-base 预训练权重到数据目录。
+
+用法: python scripts/download_pretrained.py [wavlm|bigvgan|all]
+目录由 adr.core.config.adr_data_dir() 推导 (ADR_DATA_DIR > F:/ADR_data legacy
+> %LOCALAPPDATA%\\ADR\\data), 不再硬编码 F: 盘 (批次28 复审 P4);
+mkdir 移入 __main__, import 本模块不再有目录副作用。
+"""
 import os
 import sys
 from pathlib import Path
 
-WAVLM_DIR = Path(r"F:\ADR_data\wavlm")
-BIGVGAN_DIR = Path(r"F:\ADR_data\bigvgan")
-WAVLM_DIR.mkdir(parents=True, exist_ok=True)
-BIGVGAN_DIR.mkdir(parents=True, exist_ok=True)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from adr.core.config import adr_data_dir
+
+WAVLM_DIR = adr_data_dir() / "wavlm"
+BIGVGAN_DIR = adr_data_dir() / "bigvgan"
 
 
 def dl_wavlm():
@@ -36,6 +44,8 @@ def dl_bigvgan():
 
 
 if __name__ == "__main__":
+    WAVLM_DIR.mkdir(parents=True, exist_ok=True)
+    BIGVGAN_DIR.mkdir(parents=True, exist_ok=True)
     which = sys.argv[1] if len(sys.argv) > 1 else "all"
     if which in ("wavlm", "all"):
         try:

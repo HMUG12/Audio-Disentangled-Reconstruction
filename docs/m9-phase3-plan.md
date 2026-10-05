@@ -414,3 +414,17 @@
 - [x] **ISSUE-3 (信息)** config.py F: legacy 分支加 `os.name == "nt"` 守卫 (非 Windows 上 "F:/..." 是相对路径, 理论误配 cwd)
 - [x] **ISSUE-4 (信息)** lib.rs 环境变量空串过滤 (ADR_LOG_DIR/ADR_DATA_DIR="" 视为未设置, 防 PathBuf("") 把日志落进程 CWD)
 - [x] **验证** ✅: cargo check 通过; adr_data_dir 实弹三态 (no-env→F:\ADR_data / env 覆盖 / 空串回落 legacy); launcher 唯一 script 块语法核对; 全量 pytest **276 passed + 1 skipped**
+
+### 批次 28 (2026-10-05): 全库 gate check 复审 — 6 问题修复 (P5 保留)
+
+> 复审对象 0ff14fe 全库 (双扫描代理 + 双验证代理交叉核实, 8 条候选 → 7 条收录, 1 条误报剔除); 用户选定修复范围 P1/P2/P3/P4/P6/P7, **P5 按用户选择保留不修**。
+
+- [x] **P1 (高)** loading.html 「返回启动器」invoke 的 `back_to_launcher` 未注册 → generate_handler rejected promise 无 catch, 逃生按钮点击无任何反应 → lib.rs 新增命令 (对齐托盘 home 逻辑: kill_current + 托盘 tooltip + navigate) 并注册; loading.html 补 `.catch` 降级为页面直接导航
+- [x] **P2 (高)** start_server 探活失败分支无条件清 pid/base_url: 180s 探活窗口内新 launch_console 接管时会把接管方状态清掉 → 清状态动作包进 `pid == child.id()` 所有权校验 (对齐 supervise 让位规则); kill_tree/wait 保留 (本进程必须收割自己 spawn 的子进程)
+- [x] **P3 (中)** adr_data_dir 推导链零测试覆盖 → test_config.py 补 6 用例: env 覆盖 / 纯空白 env 忽略 / Windows legacy F: 优先 / F: 缺失回落 LOCALAPPDATA / LOCALAPPDATA 空回落 ~/AppData/Local / posix 直落 ~/.adr/data; 钉 config 模块视角的 os.name (真实 os.name 不动 — 3.13 pathlib 按 os.name 解析 flavour, Windows 伪装 posix 会拒实例化) + F: 盘 is_dir 探测, 跨机器可复现
+- [x] **P4 (中)** download_pretrained.py 模块顶层硬编码 `F:\ADR_data` 且 import 即 mkdir (副作用 + 平台耦合) → 目录改由 adr_data_dir() 推导, sys.path 引导对齐 scripts 惯例, mkdir 移入 `__main__`
+- [x] **P6 (中)** device.py force_preset 分支 is_half 缺 CPU 守卫 (device+force_preset 组合时 CPU 被置 fp16) → `and cfg.device != "cpu"` (对齐 detect_device L161); test_device.py 补 CPU+4gb 用例
+- [x] **P7 (信息)** 外围 F: 盘残留清理: test_bigvgan/test_models 的 bigvgan 路径迁 adr_data_dir() (skip 兜底保留); 删除死脚本 verify_e2e_pipeline.py (import 的 adr.configs/adr.model/adr.data.opencpop 均已迁 _legacy, ModuleNotFoundError, 无 CI/测试引用)
+- [x] **P5 (中, 保留)** lib.rs adr_data_dir() legacy 分支缺 `cfg!(windows)` 守卫 — 用户选择不修: 壳仅发布 Windows (nsis), 非 Windows 不构成可达路径
+- [x] **误报裁决** (未收录) "skip_prewarm 失败后踢回启动器": prewarm.html `#acts` 初始 display:none, 仅 `stage === "failed"` 显示 skip 按钮, 彼时 prewarm_flow 两处 eval_prewarm("failed") 后均已 return → L599 导航不可达, Rust 侧推断不成立
+- [x] **验证** ✅: cargo check 通过; 全量 pytest 回归通过 (276+1 基线 + 新增 7 用例)

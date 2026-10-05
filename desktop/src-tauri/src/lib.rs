@@ -182,7 +182,8 @@ pub fn run() {
             on_launcher_ready,
             engine_status,
             skip_prewarm,
-            retry_prewarm
+            retry_prewarm,
+            back_to_launcher
         ])
         .on_window_event(|window, event| {
             // 关窗 = 隐藏到托盘; 真正退出走托盘菜单 (保证 sidecar 被清理)
@@ -302,6 +303,19 @@ async fn retry_prewarm(app: AppHandle) -> Result<(), String> {
     })
     .await
     .map_err(|e| format!("内部任务失败: {e}"))
+}
+
+/// loading 页「返回启动器」按钮: 停服务 + 导航回 launcher (批次28 复审 P1,
+/// 逻辑对齐托盘 home 菜单项)。未注册时 invoke 会 rejected, 前端需自行 catch 兜底。
+#[tauri::command]
+fn back_to_launcher(app: AppHandle) {
+    let state: State<ServerState> = app.state();
+    kill_current(&state);
+    if let Some(t) = app.tray_by_id("adr-tray") {
+        let _ = t.set_tooltip(Some("ADR Studio — 引擎已停止"));
+    }
+    let window = app.get_webview_window("main");
+    navigate(&window, &format!("{TAURI_ORIGIN}/launcher.html"));
 }
 
 // ---------------------------------------------------------------------------
@@ -497,8 +511,12 @@ fn start_server(
     if !wait_healthy(&base, health_path, window) {
         kill_tree(child.id());
         let _ = child.wait();
-        state.pid.store(0, Ordering::Relaxed);
-        *state.base_url.lock().unwrap() = None;
+        // 所有权校验 (批次28 复审 P2, 对齐 supervise 让位规则):
+        // 探活 180s 内 pid 可能被新的 launch_console 接管, 此时不能清掉接管方的状态
+        if state.pid.load(Ordering::Relaxed) == child.id() {
+            state.pid.store(0, Ordering::Relaxed);
+            *state.base_url.lock().unwrap() = None;
+        }
         update_status(window, "启动超时, 请检查 Python 环境 (180s 探活超时)");
         return None;
     }

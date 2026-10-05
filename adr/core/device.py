@@ -206,7 +206,8 @@ def setup_device(
             cfg.batch_size = params["batch_size"]
             cfg.max_mel_frames = params["max_mel_frames"]
             cfg.precision = params["precision"]
-            cfg.is_half = params["precision"] in ("fp16", "bf16")
+            # CPU 不吃半精度 (批次28 复审 P6, 对齐 detect_device 的守卫)
+            cfg.is_half = params["precision"] in ("fp16", "bf16") and cfg.device != "cpu"
             cfg.use_gradient_checkpointing = params["use_gradient_checkpointing"]
             cfg.use_flash_attn = params["use_flash_attn"]
 
