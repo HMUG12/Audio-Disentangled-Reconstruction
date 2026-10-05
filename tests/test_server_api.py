@@ -65,9 +65,10 @@ class FakeEngine:
 
 
 @pytest.fixture(autouse=True)
-def _clean_tts_cache(monkeypatch):
-    """tts_cache 是模块级全局: 每用例前清空防跨用例泄漏 (批次21)。"""
+def _clean_tts_cache(monkeypatch, tmp_path):
+    """tts_cache 是模块级全局: 每用例前清空 + 落盘目录隔离防跨用例泄漏 (批次21/22)。"""
     monkeypatch.delenv("ADR_TTS_CACHE", raising=False)
+    monkeypatch.setenv("ADR_TTS_CACHE_DIR", str(tmp_path / "tts_cache"))
     tts_cache.clear()
     yield
     tts_cache.clear()
@@ -557,6 +558,33 @@ def test_cache_failed_synth_not_stored(client, engine):
     engine.fail = False
     assert client.post("/api/v2/tts", json=body).status_code == 200
     assert len(engine.synth_calls) == 2
+
+
+def test_cache_persists_across_restart(client, engine):
+    """落盘持久化 (批次22): 合成结果写盘; 模拟重启 (内存态清零) 后仍命中。"""
+    body = {"text": "hi", "ref_audio_path": "a.wav"}
+    r1 = client.post("/api/v2/tts", json=body)
+    assert r1.status_code == 200
+    files = list(tts_cache._dir().iterdir())
+    assert len(files) == 1 and files[0].suffix == ".wav"
+    # 模拟进程重启: 内存态清零, _loaded 复位, 盘上副本保留
+    with tts_cache._lock:
+        tts_cache._cache.clear()
+        tts_cache._total_bytes = 0
+        tts_cache._loaded = False
+    r2 = client.post("/api/v2/tts", json=body)
+    assert r2.status_code == 200
+    assert r1.content == r2.content
+    assert len(engine.synth_calls) == 1  # 引擎没有重跑
+
+
+def test_cache_persist_evict_removes_file(client, engine, monkeypatch):
+    """LRU 逐出同步删盘上副本 (限额 1 条, 盘上只剩最新)。"""
+    monkeypatch.setenv("ADR_TTS_CACHE_MAX", "1")
+    client.post("/api/v2/tts", json={"text": "hi", "ref_audio_path": "a.wav"})
+    client.post("/api/v2/tts", json={"text": "yo", "ref_audio_path": "a.wav"})
+    names = [p.name for p in tts_cache._dir().iterdir()]
+    assert len(names) == 1
 
 
 def test_v2_stream_speed_factor_passthrough(client, engine):

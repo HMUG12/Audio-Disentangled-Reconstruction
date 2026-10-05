@@ -26,12 +26,18 @@ _API_VERSION = "1.0"
 @router.get("/health", summary="服务状态")
 async def health(request: Request):
     state = request.app.state
+    # 真实就绪判据 (批次22): 原先判 app.state.engine is not None, 生产模式
+    # 恒 false — N.E.KO 健康检查会误判服务不可用。改用引擎模块级状态
+    # (不触发加载), 与 console 的 engine_stage 三态同源。
+    from adr.models import gsv_engine as _gsv
     return {
         "status": "ok",
         "service": "adr-tts",
         "api_version": _API_VERSION,
         "engine": "adr",
-        "engine_ready": getattr(state, "engine", None) is not None,
+        "engine_ready": _gsv.is_ready(),
+        "engine_loading": _gsv.is_loading(),
+        "engine_stage": _gsv.stage(),
         "default_profile": getattr(state, "default_profile", None),
         "weights": {
             "t2s": getattr(state, "t2s_weights", None),
