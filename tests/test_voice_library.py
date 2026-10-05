@@ -7,8 +7,10 @@ from adr.models.voice_library import list_voices, load_voice, save_voice
 
 
 def _mk_wav(tmp_path, name="ref.wav"):
+    # 4s 正弦波: 建档防护要求 3~10s 且全零静音会被去静音裁空
     p = tmp_path / name
-    sf.write(str(p), np.zeros(1600, dtype="float32"), 16000)
+    t = np.linspace(0, 4, 64000, endpoint=False, dtype="float32")
+    sf.write(str(p), (0.3 * np.sin(2 * np.pi * 440 * t)).astype("float32"), 16000)
     return str(p)
 
 

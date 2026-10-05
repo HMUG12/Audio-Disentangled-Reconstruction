@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from adr.server import console, native, v2_compat
+from adr.server import console, native, v2_compat, v3_compat
 from adr.server.auth import APIKeyMiddleware
 
 
@@ -110,6 +110,7 @@ def create_app(engine=None) -> FastAPI:
     app.state.engine = engine  # None → 请求期惰性 get_gsv_engine()
     app.state.default_profile = default_profile
     app.include_router(v2_compat.router)
+    app.include_router(v3_compat.router)  # 批次19: N.E.K.O v3 面 (voices + stream-input WS)
     app.include_router(native.router)
     app.include_router(console.router)  # 批次14: 控制台 API (状态/训练/模型)
     console.register_pages(app)         # 批次14: 静态控制台页 (/, /pro, /easy)
