@@ -33,6 +33,38 @@ def run(cmd: str, env: dict = None, desc: str = ""):
         raise RuntimeError(f"步骤失败 ({desc}): exit={r.returncode}")
 
 
+def _pick_ref(candidates, fallback: str, exp: str) -> str:
+    """从切片中挑一段 3~10s 的当建档 ref; 无合格切片则取第一个裁到 8s。
+
+    实测事故: 文件名排序的第一个切片可能超 10s (yui 首切片 10.5s), 直接建档后
+    Clone 合成抛 "参考音频在3~10秒范围外" → tts failed。GSV 硬限制 3~10s,
+    与 train_gate._clip_ref 同源踩坑, 上限取 9.5s 留重采样帧数安全边。
+    """
+    import soundfile as sf
+    ok = []
+    for p in candidates:
+        try:
+            i = sf.info(str(p))
+            dur = i.frames / i.samplerate
+        except Exception:
+            continue
+        if 3.0 <= dur <= 9.5:
+            ok.append((abs(dur - 7.0), p))  # 优先最接近 7s 的切片
+    if ok:
+        ok.sort()
+        return str(ok[0][1].resolve())
+    # 切片全超长/过短 (或无切片, fallback=原始长录音): 去静音裁 8s 落盘
+    import librosa
+    src = candidates[0] if candidates else fallback
+    y, sr = librosa.load(str(src), sr=None, mono=True)
+    y, _ = librosa.effects.trim(y, top_db=30)
+    y = y[: int(8.0 * sr)]
+    out = GSV / "output" / f"bind_ref_{exp}.wav"
+    sf.write(str(out), y, sr)
+    print(f"[bind] 无 3~10s 合格切片, 已裁剪: {Path(src).name} -> {out.name} (8s)", flush=True)
+    return str(out)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("audio", help="原始音频 (mp3/wav)")
@@ -199,10 +231,10 @@ def main():
                                       encoding="utf-8")
                     print(f"[bind] 档案「{args.bind_voice}」已绑定最新权重: {ws[-1].name}")
                 else:
-                    # 首次训练用户无档案: 用本次切片的第一个干净切片当 ref 自动建档
+                    # 首次训练用户无档案: 用本次切片当 ref 自动建档
                     # (切片已静音修剪, 免 GPU 探测; t2s 留空 = 预训练 s1, 与 skip-s1 训练一致)
                     slices = sorted((GSV / "output" / "slicer_opt" / exp).glob("*.wav"))
-                    ref = str(slices[0].resolve()) if slices else audio
+                    ref = _pick_ref(slices, audio, exp)
                     save_voice(args.bind_voice, ref, "",
                                vits_weights=str(ws[-1].resolve()))
                     print(f"[bind] 已新建档案「{args.bind_voice}」(ref={Path(ref).name}, "
