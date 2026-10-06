@@ -4,7 +4,8 @@
 - /tts GET+POST、/set_gpt_weights、/set_sovits_weights
 - streaming_mode 分支语义逐字复制 (含 Python 中 bool True == 1 落分支 1 的行为)
 - 流式 WAV 字节格式: 首块 44B WAV 头 + 后续裸 s16le PCM
-- 错误格式: JSONResponse(400, {"message": ...})
+- 错误格式: JSONResponse(400, {"message": ..., "code": ...})
+  (批次35: code 为稳定错误码, 增量字段; 既有 message 逐字保留)
 
 ADR 扩展 (GSV 协议外, 向后兼容):
 - profile / voice: 引用 ADR 音色档案 (data/voices/<name>), 自动解析
@@ -28,6 +29,7 @@ from adr.core.exceptions import (
     ProfileInvalidError,
     ProfileNotFoundError,
     SynthesisParamsError,
+    error_code,
 )
 from adr.server import tts_cache
 from adr.server.audio_codec import pack_audio, to_int16
@@ -89,7 +91,9 @@ def _resolve_profile(request: Request, req: dict):
         try:
             meta = SynthesisService.load_profile(profile)
         except (ProfileInvalidError, ProfileNotFoundError) as e:
-            return JSONResponse(status_code=400, content={"message": str(e)})
+            # 批次35: code 增量字段 (既有 message 逐字保留, wire 兼容)
+            return JSONResponse(status_code=400,
+                                content={"message": str(e), "code": error_code(e)})
         req.update(SynthesisService.profile_fill(
             meta,
             ref_audio_path=req.get("ref_audio_path"),
@@ -109,7 +113,8 @@ def _check_params(req: dict):
         req["media_type"] = SynthesisService.validate_params(
             req.get("text"), req.get("ref_audio_path"), req.get("media_type"))
     except SynthesisParamsError as e:
-        return JSONResponse(status_code=400, content={"message": str(e)})
+        return JSONResponse(status_code=400,
+                            content={"message": str(e), "code": error_code(e)})
     return None
 
 
@@ -170,7 +175,8 @@ async def tts_handle(req: dict, request: Request) -> Response:
         return JSONResponse(
             status_code=400,
             content={"message": "the value of streaming_mode must be 0, 1, 2, 3(int) "
-                                "or true/false(bool)"})
+                                "or true/false(bool)",
+                     "code": "invalid_params"})
     streaming = streaming or return_fragment
     engine = _get_engine(request)
 
@@ -204,7 +210,8 @@ async def tts_handle(req: dict, request: Request) -> Response:
         return Response(buf.getvalue(), media_type=f"audio/{media_type}")
     except Exception as e:
         return JSONResponse(status_code=400,
-                            content={"message": "tts failed", "Exception": str(e)})
+                            content={"message": "tts failed", "Exception": str(e),
+                                     "code": error_code(e)})
 
 
 # ─── TTS 端点 ───
@@ -310,7 +317,8 @@ async def set_gpt_weights(request: Request, weights_path: str = None):
     try:
         if weights_path in ["", None]:
             return JSONResponse(status_code=400,
-                                content={"message": "gpt weight path is required"})
+                                content={"message": "gpt weight path is required",
+                                         "code": "invalid_params"})
         # Track B: 安全预检, 恶意 pickle 在进入引擎加载前即被拒 (400)
         await asyncio.to_thread(_validate_weights_file, weights_path)
         engine = _get_engine(request)
@@ -318,7 +326,8 @@ async def set_gpt_weights(request: Request, weights_path: str = None):
     except Exception as e:
         return JSONResponse(status_code=400,
                             content={"message": "change gpt weight failed",
-                                     "Exception": str(e)})
+                                     "Exception": str(e),
+                                     "code": error_code(e)})
     request.app.state.t2s_weights = weights_path
     return JSONResponse(status_code=200, content={"message": "success"})
 
@@ -328,7 +337,8 @@ async def set_sovits_weights(request: Request, weights_path: str = None):
     try:
         if weights_path in ["", None]:
             return JSONResponse(status_code=400,
-                                content={"message": "sovits weight path is required"})
+                                content={"message": "sovits weight path is required",
+                                         "code": "invalid_params"})
         # Track B: 安全预检, 恶意 pickle 在进入引擎加载前即被拒 (400)
         await asyncio.to_thread(_validate_weights_file, weights_path)
         engine = _get_engine(request)
@@ -336,6 +346,7 @@ async def set_sovits_weights(request: Request, weights_path: str = None):
     except Exception as e:
         return JSONResponse(status_code=400,
                             content={"message": "change sovits weight failed",
-                                     "Exception": str(e)})
+                                     "Exception": str(e),
+                                     "code": error_code(e)})
     request.app.state.vits_weights = weights_path
     return JSONResponse(status_code=200, content={"message": "success"})

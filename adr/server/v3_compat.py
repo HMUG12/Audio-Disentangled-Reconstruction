@@ -11,7 +11,8 @@ WS 帧契约 (N.E.K.O _extract_pcm_from_wav): 每个 binary 帧是**完整 WAV**
 无关, binary 帧恒为 WAV。
 
 服务端 JSON 消息: ready/sentence/sentence_done/flushed/done/error
-(字段与 api_neko routers/tts_v3.py 逐字对齐; task_id 为会话内自增计数)。
+(字段与 api_neko routers/tts_v3.py 逐字对齐; task_id 为会话内自增计数;
+批次35: error 帧统一携带 "code" 稳定错误码, 增量字段, 既有 message 保留)。
 
 差异 (与 api_neko v3): ADR 无推理任务队列, 逐句串行合成 (engine 单例本就
 串行); overrides 的 media_type 被忽略 (帧恒为 WAV)。
@@ -26,6 +27,11 @@ from typing import Optional
 
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 
+from adr.core.exceptions import (
+    ProfileInvalidError,
+    ProfileNotFoundError,
+    error_code,
+)
 from adr.models import voice_library
 from adr.services import SynthesisService
 
@@ -84,19 +90,17 @@ class _TextBuffer:
 def _resolve_voice(voice_id: str, app) -> Optional[dict]:
     """voice_id → 档案 dict {ref_audio, prompt_text, t2s_weights, vits_weights}。
 
-    "_default" → app.state.default_profile 或第一个档案; 找不到返回 None。
+    "_default" → app.state.default_profile 或第一个档案; 无档案可用返回 None。
+    批次35: 非法名/不存在改类型化上报 — ProfileInvalidError/ProfileNotFoundError
+    原样抛出, init 分支捕获回 error 帧; 仅"默认解析无档案"仍静默 None。
     """
     name = (voice_id or "").strip() or "_default"
     if name == "_default":
         name = (getattr(app.state, "default_profile", None)
                 or (voice_library.list_voices() or [None])[0])
-    if not name:
-        return None
-    # 批次34: 名称安全 + 加载收口至 SynthesisService; 失败静默 None (批次35 修)
-    try:
-        return SynthesisService.load_profile(name)
-    except Exception:
-        return None
+        if not name:
+            return None
+    return SynthesisService.load_profile(name)
 
 
 @router.get("/voices", summary="音色列表 (N.E.K.O 自定义音色源)")
@@ -208,7 +212,8 @@ async def tts_ws_stream_input(websocket: WebSocket):
             except Exception as e:
                 if not cancel.is_set():
                     logger.exception("v3 stream synth failed")
-                    loop.call_soon_threadsafe(_put, ("__err__", str(e)))
+                    loop.call_soon_threadsafe(
+                        _put, ("__err__", str(e), error_code(e)))
             finally:
                 if gen is not None:
                     gen.close()  # 触发生成器 finally → 引擎锁释放 (线程内安全)
@@ -217,26 +222,26 @@ async def tts_ws_stream_input(websocket: WebSocket):
         threading.Thread(target=_produce, daemon=True,
                          name=f"adr-v3-tts-{task_id}").start()
 
-        n, err = 0, None
+        n, err, code = 0, None, None
         try:
             while True:
                 if chan_full.is_set():
                     # 队列曾满: 立即报 busy, 不阻塞不堆积 (生产者随后自行停止)
                     await _safe_send_json(
-                        {"type": "error",
-                         "message": "busy: synthesis queue full"})
+                        {"type": "error", "message": "busy: synthesis queue full",
+                         "code": "busy"})
                     return
                 item = await chan.get()
                 if item is None:
                     break
                 if isinstance(item, tuple):
-                    err = item[1]
+                    err, code = item[1], item[2]
                     break
                 await _safe_send_bytes(item)
                 n += 1
             logger.debug("v3 task#%s done frames=%s err=%s", task_id, n, err)
             if err:
-                await _safe_send_json({"type": "error", "message": err})
+                await _safe_send_json({"type": "error", "message": err, "code": code})
             else:
                 await _safe_send_json({"type": "sentence_done", "task_id": task_id,
                                        "chunks_sent": n})
@@ -248,17 +253,32 @@ async def tts_ws_stream_input(websocket: WebSocket):
             try:
                 data = await asyncio.wait_for(websocket.receive_json(), timeout=300.0)
             except asyncio.TimeoutError:
-                await _safe_send_json({"type": "error", "message": "session timeout"})
+                await _safe_send_json({"type": "error", "message": "session timeout",
+                                       "code": "session_timeout"})
                 break
 
             cmd = data.get("cmd", "")
 
             if cmd == "init":
                 vid = data.get("voice_id", "_default")
-                v = _resolve_voice(vid, app)
+                # 批次35: 类型化上报 — 非法名回精确 message; not found 消息逐字
+                # 保留 (N.E.K.O 消费); code 均为增量字段
+                try:
+                    v = _resolve_voice(vid, app)
+                except ProfileInvalidError as e:
+                    await _safe_send_json(
+                        {"type": "error", "message": str(e),
+                         "code": error_code(e)})
+                    break
+                except ProfileNotFoundError:
+                    await _safe_send_json(
+                        {"type": "error", "message": f"voice_id '{vid}' not found",
+                         "code": "profile_not_found"})
+                    break
                 if v is None:
                     await _safe_send_json(
-                        {"type": "error", "message": f"voice_id '{vid}' not found"})
+                        {"type": "error", "message": f"voice_id '{vid}' not found",
+                         "code": "profile_not_found"})
                     break
                 voice = v
                 session_voice_id = vid
@@ -272,7 +292,8 @@ async def tts_ws_stream_input(websocket: WebSocket):
             elif cmd == "text":
                 if voice is None:
                     await _safe_send_json(
-                        {"type": "error", "message": "not initialized, send init first"})
+                        {"type": "error", "message": "not initialized, send init first",
+                         "code": "not_initialized"})
                     continue
                 text_data = (data.get("data") or "").strip()
                 if text_data:
@@ -281,7 +302,8 @@ async def tts_ws_stream_input(websocket: WebSocket):
             elif cmd == "append":
                 if voice is None:
                     await _safe_send_json(
-                        {"type": "error", "message": "not initialized, send init first"})
+                        {"type": "error", "message": "not initialized, send init first",
+                         "code": "not_initialized"})
                     continue
                 text_buffer.append(data.get("data") or "")
                 for sentence in text_buffer.extract_sentences():
@@ -303,14 +325,16 @@ async def tts_ws_stream_input(websocket: WebSocket):
                 break
 
             else:
-                await _safe_send_json({"type": "error", "message": f"unknown cmd: {cmd}"})
+                await _safe_send_json({"type": "error", "message": f"unknown cmd: {cmd}",
+                                       "code": "unknown_cmd"})
 
     except WebSocketDisconnect:
         pass
     except Exception as e:
         logger.exception("v3 stream-input error")
         try:
-            await _safe_send_json({"type": "error", "message": str(e)})
+            await _safe_send_json({"type": "error", "message": str(e),
+                                   "code": error_code(e)})
         except Exception:
             pass
     finally:
