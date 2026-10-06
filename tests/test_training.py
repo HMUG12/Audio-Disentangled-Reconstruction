@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import random
 import tempfile
 from pathlib import Path
 
@@ -75,6 +76,70 @@ def test_dataset_split():
     train_ds, val_ds = ds.split(val_ratio=0.2, seed=42)
     assert len(train_ds) + len(val_ds) == 10
     assert len(val_ds) >= 1
+    # speaker_ids 与 ref 池随 split 重建
+    assert len(train_ds.speaker_ids) == len(train_ds)
+    assert len(train_ds._ref_pools) == len(train_ds)
+
+
+def test_dataset_ref_mel_pool_avoids_shortcut():
+    """ref_mel 应取同说话人异样本, 切断 ref→target 的抄写捷径。"""
+    from adr.training.dataset import VoiceCloneDataset
+
+    samples = [_make_dummy_sample(i) for i in range(4)]
+    ds = VoiceCloneDataset(samples=samples)
+
+    # 池不含自身
+    for i in range(4):
+        assert i not in ds._ref_pools[i]
+        assert len(ds._ref_pools[i]) == 3
+
+    # __getitem__ 挂 _ref_mel (浅拷贝), 原样本对象不被修改
+    s = ds[0]
+    assert s._ref_mel is not None
+    assert s._ref_mel is not samples[0].mel
+    assert not hasattr(samples[0], "_ref_mel")
+
+    # collate 后 ref_mel 不等于 target_mel (异样本)
+    batch = ds.collate([ds[i] for i in range(4)])
+    rT = batch.ref_mel.shape[-1]
+    assert not torch.allclose(batch.ref_mel[0], batch.target_mel[0, :, :rT])
+
+
+def test_dataset_multi_speaker_pools():
+    """多说话人分组: 池只含同说话人的异样本。"""
+    from adr.training.dataset import VoiceCloneDataset
+
+    samples = [_make_dummy_sample(i) for i in range(4)]
+    ds = VoiceCloneDataset(samples=samples, speaker_ids=["a", "a", "b", "b"])
+    assert ds._ref_pools[0] == [1]
+    assert ds._ref_pools[1] == [0]
+    assert ds._ref_pools[2] == [3]
+    assert ds._ref_pools[3] == [2]
+
+
+def test_dataset_ref_mel_single_sample_fallback(caplog):
+    """单样本说话人: 无异样本可用 → 回退同样本 + warning。"""
+    from adr.training.dataset import VoiceCloneDataset
+
+    samples = [_make_dummy_sample(0)]
+    with caplog.at_level("WARNING", logger="adr.training.dataset"):
+        ds = VoiceCloneDataset(samples=samples)
+    assert ds._ref_pools[0] == []
+    assert any("捷径" in r.message for r in caplog.records)
+
+    # 回退: ref 取自身前半段
+    batch = ds.collate([ds[0]])
+    rT = batch.ref_mel.shape[-1]
+    assert torch.allclose(batch.ref_mel[0], batch.target_mel[0, :, :rT])
+
+
+def test_dataset_speaker_ids_length_mismatch():
+    """speaker_ids 长度与样本数不符应报错。"""
+    from adr.training.dataset import VoiceCloneDataset
+
+    samples = [_make_dummy_sample(i) for i in range(3)]
+    with pytest.raises(ValueError, match="不一致"):
+        VoiceCloneDataset(samples=samples, speaker_ids=["a", "b"])
 
 
 def test_dataset_from_npz_dir(tmp_path):
@@ -122,7 +187,7 @@ def test_scheduler_construction():
 
 
 def test_gradient_checkpointing():
-    """测试 gradient checkpointing 开关。"""
+    """测试 gradient checkpointing 开关: 包装所有 TransformerEncoderLayer。"""
     from adr.models.sovits import SoVITS, SoVITSConfig
     from adr.training.grad_ckpt import (
         enable_gradient_checkpointing,
@@ -133,12 +198,66 @@ def test_gradient_checkpointing():
         hidden_dim=64, n_layers=2, n_heads=4, ffn_dim=128,
         vocab_size=607, content_dim=32, timbre_dim=32,
     ))
+    # decoder(2) + content_encoder(4) = 6 个 TransformerEncoderLayer
+    n_layers = sum(
+        1 for m in model.modules()
+        if isinstance(m, torch.nn.TransformerEncoderLayer)
+    )
     n = enable_gradient_checkpointing(model, enabled=True)
     assert is_gradient_checkpointing_enabled(model)
-    assert n >= 0
+    assert n == n_layers
+    # 幂等: 重复开启不重复包装
+    n2 = enable_gradient_checkpointing(model, enabled=True)
+    assert n2 == 0
     # 关掉
-    enable_gradient_checkpointing(model, enabled=False)
+    n3 = enable_gradient_checkpointing(model, enabled=False)
+    assert n3 == n_layers
     assert not is_gradient_checkpointing_enabled(model)
+
+
+def _sovits_forward_backward_hook_count(model) -> int:
+    """跑一次 forward+backward, 返回 decoder 第一层 linear1 的 forward 调用次数。"""
+    counts = {"n": 0}
+    linear1 = model.decoder.layers[0].linear1
+    hook = linear1.register_forward_hook(
+        lambda m, i, o: counts.__setitem__("n", counts["n"] + 1)
+    )
+    try:
+        B, T_p, T_mel = 2, 8, 16
+        batch = {
+            "phoneme_ids": torch.randint(4, 100, (B, T_p)),
+            "phoneme_mask": torch.ones(B, T_p, dtype=torch.bool),
+            "ref_mel": torch.randn(B, 80, 8) * 0.1,
+            "target_mel": torch.randn(B, 80, T_mel) * 0.1,
+            "target_durations": torch.full((B, T_p), 2, dtype=torch.long),
+            "f0": torch.rand(B, T_mel) * 200 + 80,
+        }
+        model.zero_grad(set_to_none=True)
+        out = model(batch)
+        out["loss"].backward()
+    finally:
+        hook.remove()
+    return counts["n"]
+
+
+def test_gradient_checkpointing_recompute():
+    """证明 checkpointing 真生效: 开启后 backward 期间重计算 → linear1 forward 被调用 2 次。"""
+    from adr.models.sovits import SoVITS, SoVITSConfig
+    from adr.training.grad_ckpt import enable_gradient_checkpointing
+
+    model = SoVITS(SoVITSConfig(
+        hidden_dim=64, n_layers=2, n_heads=4, ffn_dim=128,
+        vocab_size=607, content_dim=32, timbre_dim=32,
+    ))
+    model.train()
+
+    # 关闭: 只有主 forward 1 次
+    enable_gradient_checkpointing(model, enabled=False)
+    assert _sovits_forward_backward_hook_count(model) == 1
+
+    # 开启: 主 forward 1 次 + backward 重计算 1 次 = 2 次
+    enable_gradient_checkpointing(model, enabled=True)
+    assert _sovits_forward_backward_hook_count(model) == 2
 
 
 def test_trainer_smoke():
@@ -285,3 +404,135 @@ def test_callbacks_invoke():
     assert state["on_epoch_start"] == 3
     assert state["on_epoch_end"] == 3
     assert state["on_train_end"] == 1
+
+
+def test_sovits_mel_loss_padding_mask():
+    """mel loss 应按 target_mel_mask 只对有效帧计算, padding 帧不贡献损失。"""
+    from adr.models.sovits import SoVITS, SoVITSConfig
+
+    model = SoVITS(SoVITSConfig(
+        hidden_dim=64, n_layers=2, n_heads=4, ffn_dim=128,
+        vocab_size=607, content_dim=32, timbre_dim=32,
+    ))
+    model.eval()  # 固定 dropout, 保证两次 forward 可比
+
+    B, T_p, T_mel = 2, 8, 16
+    base = {
+        "phoneme_ids": torch.randint(4, 100, (B, T_p)),
+        "phoneme_mask": torch.ones(B, T_p, dtype=torch.bool),
+        "ref_mel": torch.randn(B, 80, 8) * 0.1,
+        "target_durations": torch.full((B, T_p), 2, dtype=torch.long),
+        "f0": torch.rand(B, T_mel) * 200 + 80,
+    }
+    target = torch.randn(B, 80, T_mel) * 0.1
+    mask = torch.ones(B, T_mel, dtype=torch.bool)
+    mask[1, 8:] = False  # 第二个样本后半是 padding
+
+    with torch.no_grad():
+        out1 = model({**base, "target_mel": target, "target_mel_mask": mask})
+        # padding 区改成极端值: 有 mask 时 loss 不应变化
+        polluted = target.clone()
+        polluted[1, :, 8:] = 100.0
+        out2 = model({**base, "target_mel": polluted, "target_mel_mask": mask})
+    assert torch.allclose(out1["loss"], out2["loss"], rtol=1e-5)
+
+    # 对照: 无 mask 时走 F.l1_loss, 污染帧会推高 loss
+    with torch.no_grad():
+        out3 = model({**base, "target_mel": polluted})
+    assert out3["loss"] > out2["loss"]
+
+
+def test_yaml_train_section_mapping(configs_dir, caplog):
+    """vram_*.yaml 的 train 嵌套键显式映射到 TrainerConfig; 未映射键 warning。"""
+    import yaml
+    from adr.training.trainer import TrainerConfig, apply_yaml_to_trainer_config
+
+    with open(configs_dir / "vram_8gb.yaml", encoding="utf-8") as f:
+        yaml_cfg = yaml.safe_load(f)
+
+    cfg = TrainerConfig()
+    with caplog.at_level("WARNING", logger="adr.training"):
+        applied = apply_yaml_to_trainer_config(yaml_cfg, cfg)
+
+    # 旧 hasattr 循环会静默丢弃的嵌套键, 现在正确映射
+    assert cfg.batch_size == 4
+    assert cfg.grad_accum_steps == 4
+    assert cfg.lr == 2.0e-4
+    assert cfg.epochs == 10
+    assert cfg.amp_dtype == "fp16"
+    assert cfg.use_gradient_checkpointing is True
+    assert "gradient_accumulation_steps->grad_accum_steps" in applied
+
+    # 未映射键汇总 warning (use_qlora 故意不映射, 由 CLI 标志控制)
+    all_msgs = " ".join(r.message for r in caplog.records)
+    assert "未映射" in all_msgs
+    for key in ("use_flash_attn", "use_qlora", "save_every_n_steps"):
+        assert key in all_msgs
+    assert cfg.weight_decay == 0.01  # yaml 中无该键, 不被触碰
+
+
+def test_scheduler_total_steps_divides_grad_accum():
+    """total_steps 按 optimizer 更新次数计 (除以 grad_accum, 向上取整)。"""
+    from adr.models.sovits import SoVITS, SoVITSConfig
+    from adr.training import Trainer, TrainerConfig
+    from adr.training.dataset import VoiceCloneDataset
+
+    model = SoVITS(SoVITSConfig(
+        hidden_dim=32, n_layers=2, n_heads=2, ffn_dim=64,
+        vocab_size=607, content_dim=16, timbre_dim=16,
+    ))
+    samples = [_make_dummy_sample(i) for i in range(4)]
+    ds = VoiceCloneDataset(samples=samples)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config = TrainerConfig(
+            epochs=2, batch_size=2, grad_accum_steps=2,
+            lr=2e-4, warmup_steps=1,
+            use_amp=False, use_gradient_checkpointing=False,
+            output_dir=tmp_dir, val_ratio=0.0,
+        )
+        trainer = Trainer(model=model, train_data=ds, config=config)
+        # 4 样本 / batch 2 → 2 batches/epoch; grad_accum=2 → 1 次优化/epoch → 总 2 步
+        metrics = trainer.fit()
+
+    base_lr = 2e-4
+    final_lr = metrics["train/lr"]
+    # 2 个优化步 = total_steps → cosine 走完 → lr = base * min_lr_ratio (0.1)
+    # 旧实现 total_steps=4 (未除以 grad_accum) 会停在 ~0.775*base
+    assert abs(final_lr - base_lr * 0.1) <= 0.02 * base_lr * 0.1
+
+
+def test_trainer_seed_full_and_deterministic():
+    """Trainer 构造时补全 random/numpy/cuda 种子 + cudnn deterministic 开关。"""
+    from adr.models.sovits import SoVITS, SoVITSConfig
+    from adr.training import Trainer, TrainerConfig
+    from adr.training.dataset import VoiceCloneDataset
+
+    model = SoVITS(SoVITSConfig(
+        hidden_dim=32, n_layers=2, n_heads=2, ffn_dim=64,
+        vocab_size=607, content_dim=16, timbre_dim=16,
+    ))
+    samples = [_make_dummy_sample(i) for i in range(4)]
+    ds = VoiceCloneDataset(samples=samples)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config = TrainerConfig(
+            epochs=1, batch_size=2, use_amp=False,
+            use_gradient_checkpointing=False,
+            output_dir=tmp_dir, val_ratio=0.0,
+            seed=123, deterministic=True,
+        )
+        trainer = Trainer(model=model, train_data=ds, config=config)
+
+    assert torch.backends.cudnn.deterministic is True
+    assert torch.backends.cudnn.benchmark is False
+
+    # numpy/random 种子生效: 构造后 RNG 状态与重设 seed 后首个取值一致
+    # (说明 seed 被正确设定且构造过程中无隐式消耗)
+    v_np = np.random.rand()
+    np.random.seed(123)
+    assert v_np == np.random.rand()
+
+    v_py = random.random()
+    random.seed(123)
+    assert v_py == random.random()

@@ -8,7 +8,7 @@
 
 用法:
     >>> from adr.training.lora import LoRAConfig, apply_lora, get_lora_state_dict
-    >>> config = LoRAConfig(rank=8, alpha=16, target_modules=["q_proj", "v_proj"])
+    >>> config = LoRAConfig(rank=8, alpha=16, target_modules=["out_proj", "linear1", "linear2"])
     >>> model = apply_lora(model, config)
     >>> # 训练: 只 LoRA 参数 requires_grad=True
     >>> # 保存: 只保存 LoRA 权重
@@ -35,13 +35,15 @@ class LoRAConfig:
         rank: 低秩矩阵的秩 (越小越省显存,通常 4-64)
         alpha: 缩放因子 (通常 = rank 或 2*rank)
         dropout: LoRA dropout (默认 0.0)
-        target_modules: 目标模块名 (子串匹配 Linear 层)
+        target_modules: 目标模块名 (子串匹配 Linear 层,
+            默认为 SoVITS 实际层名: decoder/content_encoder 的
+            self_attn.out_proj / linear1 / linear2 + 模型级 out_proj)
         exclude_modules: 排除模块名
     """
     rank: int = 8
     alpha: int = 16
     dropout: float = 0.0
-    target_modules: List[str] = field(default_factory=lambda: ["q_proj", "v_proj"])
+    target_modules: List[str] = field(default_factory=lambda: ["out_proj", "linear1", "linear2"])
     exclude_modules: List[str] = field(default_factory=list)
 
 
@@ -234,10 +236,14 @@ def apply_lora(
     if not targets:
         already_lora = any(isinstance(m, LoRALinear) for m in model.modules())
         if already_lora:
-            # 模型已注入 LoRA (幂等调用), 跳过告警
+            # 模型已注入 LoRA (幂等调用), 跳过重复应用
             log.info("  模型已注入 LoRA,跳过重复应用")
         else:
-            log.warning(f"  target_modules={config.target_modules} 没匹配到任何 Linear,检查名字")
+            # 一个都没匹配到说明 target_modules 与模型层名错配, 训练会退化为全模型微调
+            raise ValueError(
+                f"LoRA target_modules={config.target_modules} 没匹配到任何 Linear 层, "
+                f"请检查模块名 (可打印 model.named_modules() 确认)"
+            )
 
     # 2. 替换
     for name, linear in targets:
@@ -381,7 +387,7 @@ def try_apply_peft(
     try:
         from peft import LoraConfig, get_peft_model
 
-        target_modules = target_modules or ["q_proj", "v_proj"]
+        target_modules = target_modules or LoRAConfig().target_modules
         peft_config = LoraConfig(
             r=rank,
             lora_alpha=alpha,

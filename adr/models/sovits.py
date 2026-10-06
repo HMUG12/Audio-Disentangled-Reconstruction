@@ -302,7 +302,18 @@ class SoVITS(BaseBackbone):
         if target_mel is not None:
             # 截断到相同长度
             min_T = min(pred_mel.size(-1), target_mel.size(-1))
-            mel_loss = F.l1_loss(pred_mel[..., :min_T], target_mel[..., :min_T])
+            # padding mask: 只对有效帧计算 mel loss (mask 形状 (B, T), 广播到 n_mels 维)
+            target_mel_mask = batch.get("target_mel_mask")
+            if target_mel_mask is not None:
+                mask = target_mel_mask[..., :min_T]
+                mel_loss = (
+                    (pred_mel[..., :min_T] - target_mel[..., :min_T])
+                    .abs()
+                    .masked_select(mask.unsqueeze(1))
+                    .mean()
+                )
+            else:
+                mel_loss = F.l1_loss(pred_mel[..., :min_T], target_mel[..., :min_T])
             loss = loss + mel_loss
 
         # 时长损失 (训练时)

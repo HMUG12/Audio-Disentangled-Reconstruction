@@ -519,12 +519,11 @@ def train(
     if config:
         try:
             import yaml
+            from adr.training.trainer import apply_yaml_to_trainer_config
             with open(config, encoding="utf-8") as f:
                 yaml_cfg = yaml.safe_load(f)
-            for k, v in yaml_cfg.items():
-                if hasattr(cfg, k):
-                    setattr(cfg, k, v)
-            log.info(f"  Config loaded: {config}")
+            applied = apply_yaml_to_trainer_config(yaml_cfg, cfg, log=log)
+            log.info(f"  Config loaded: {config} ({len(applied)} 项已映射)")
         except Exception as e:
             log.warning(f"  Failed to load config: {e}")
 
