@@ -41,6 +41,20 @@ def _warn_unauthenticated_listen(addr: str) -> None:
     )
 
 
+def _print_banner(addr: str, port: int) -> None:
+    """启动横幅: 标明这是 ADR TTS 服务而非 GSV 官方 API, 排障时便于区分
+    (NEKO 日志只显示 "GPT-SoVITS 连接失败", 需要能确认对端到底是谁)。"""
+    print(
+        "=" * 64,
+        "  ADR TTS 服务 (语音克隆) — 兼容 GPT-SoVITS api_v2/v3 协议",
+        f"  监听地址: http://{addr}:{port}",
+        f"  NEKO 对接: GPT-SoVITS 模式, API 地址填 http://127.0.0.1:{port} 即可",
+        "  音色下拉 = ADR 语音档案 (GET /api/v3/voices 自动返回)",
+        "=" * 64,
+        sep="\n", flush=True,
+    )
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="ADR TTS 服务 (GSV api_v2 兼容层 + ADR 原生档案 API)")
@@ -50,6 +64,7 @@ def main():
                     help="监听地址 (默认 0.0.0.0)")
     args = ap.parse_args()
     _warn_unauthenticated_listen(args.addr)
+    _print_banner(args.addr, args.port)
     uvicorn.run(create_app(), host=args.addr, port=args.port)
 
 

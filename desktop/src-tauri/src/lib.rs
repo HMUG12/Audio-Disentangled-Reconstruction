@@ -443,14 +443,28 @@ fn start_server(
     window: &Option<WebviewWindow>,
     state: &State<ServerState>,
 ) -> Option<(Child, Instant)> {
-    let Some(port) = free_tcp_port() else {
-        update_status(window, "端口分配失败, 正在重试…");
-        return None;
-    };
     let (python, cwd, pythonpath) = resolve_runtime();
-    let base = format!("http://127.0.0.1:{port}");
     // 调用模式: 0.0.0.0 对局域网开放 API; 默认仅本机 (webview 与探活都走 127.0.0.1)
     let host = if state.expose.load(Ordering::Relaxed) { "0.0.0.0" } else { "127.0.0.1" };
+    // pro/easy 承载 TTS 服务: 优先绑定 9881 (NEKO GPT-SoVITS provider 默认端口, 零配置直连);
+    // 9881 被占用则回退随机端口并提示。legacy 是 Gradio WebUI, 不承载 TTS, 恒用随机端口。
+    let (port, using_preferred) = if mode != "legacy"
+        && probe_fixed_port(ADR_PREFERRED_PORT, host)
+    {
+        (ADR_PREFERRED_PORT, true)
+    } else {
+        let Some(p) = free_tcp_port() else {
+            update_status(window, "端口分配失败, 正在重试…");
+            return None;
+        };
+        (p, false)
+    };
+    if mode != "legacy" && !using_preferred {
+        update_status(window, &format!(
+            "9881 被其他程序占用, 本次改用端口 {port} (NEKO 侧需手动填写该端口)"
+        ));
+    }
+    let base = format!("http://127.0.0.1:{port}");
 
     let mut cmd = Command::new(&python);
     match mode {
@@ -776,6 +790,15 @@ fn find_repo_root() -> PathBuf {
         }
     }
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// NEKO GPT-SoVITS provider 默认 API 端口 (adr.server 默认端口一致, 零配置直连)。
+const ADR_PREFERRED_PORT: u16 = 9881;
+
+/// 探测固定端口当前能否绑定 (绑定后立即释放), 绑定地址与监听 host 一致。
+/// 探测与 uvicorn 实际绑定间的 TOCTOU 竞态可接受 (壳守护失败会报错并拉起重试)。
+fn probe_fixed_port(port: u16, host: &str) -> bool {
+    TcpListener::bind((host, port)).is_ok()
 }
 
 /// 取一个随机空闲 TCP 端口 (绑定后立即释放, 与 uvicorn 绑定间的竞态可忽略)。

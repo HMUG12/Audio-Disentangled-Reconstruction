@@ -428,3 +428,16 @@
 - [x] **P5 (中, 保留)** lib.rs adr_data_dir() legacy 分支缺 `cfg!(windows)` 守卫 — 用户选择不修: 壳仅发布 Windows (nsis), 非 Windows 不构成可达路径
 - [x] **误报裁决** (未收录) "skip_prewarm 失败后踢回启动器": prewarm.html `#acts` 初始 display:none, 仅 `stage === "failed"` 显示 skip 按钮, 彼时 prewarm_flow 两处 eval_prewarm("failed") 后均已 return → L599 导航不可达, Rust 侧推断不成立
 - [x] **验证** ✅: cargo check 通过; 全量 pytest 回归通过 (276+1 基线 + 新增 7 用例)
+
+### 批次 29 (2026-10-05): NEKO 对接连不上 — 根因修复 (壳端口随机 → 固定 9881 优先)
+
+> 用户报 "连接 NEKO 无法使用, 调用控制台有异常"。四步闭环: Review → 官方文档/仓库核对 → 修复 → 复 Review。
+
+- **根因定案**: NEKO 日志时间线 (21:44 拒连 → 六次 WS 403 + GET 404 → 用户放弃切免费版) + Starlette 语义 (WS 升级打到无 websocket 路由的路径 → 403; GET 不存在路径 → 404) 证明当时 9881 上是无 v3 面的异服务 (真 GSV api_v2 一类); ADR 服务实际在壳 pro/easy 模式 `free_tcp_port()` 随机端口 (或 OpenAI 面 12444), NEKO GSV 默认 9881 从未连上 ADR
+- **排除链**: NEKO worker/连通测试源码与 ADR v3_compat 路径/协议/帧格式完全对齐 (排除协议不一致); app.py 已注册 v3_compat (排除缺路由); editable finder MAPPING 指向当前仓库 (排除旧副本); Glob 确认唯一仓库 (排除多副本)
+- **实弹验证**: 当前 ADR server 9881 完整模拟 NEKO 序列全链通过 (GET /api/v3/voices 200 四档案 → WS init→ready→append→2×WAV 32kHz→done)
+- **官方文档核对**: project-neko.online + 仓库源码确认 GPT-SoVITS 是第一优先 TTS provider, worker 走 /api/v3/voices + /api/v3/tts/stream-input 双工协议, 与本地副本一致
+- [x] **修复-a (lib.rs)**: start_server pro/easy 模式优先探测绑定 9881 (常量 ADR_PREFERRED_PORT, 探测 bind 地址与 host/expose 一致), 可绑则 drop 后用 9881 — NEKO 零配置直连; 被占回退 free_tcp_port() 并 update_status 提示实际端口; legacy 恒随机 (Gradio WebUI 不承载 TTS); 探测与 uvicorn 绑定间 TOCTOU 竞态可接受 (壳守护失败报错拉起)
+- [x] **修复-b (__main__.py)**: 新增 `_print_banner` 启动横幅标识 "ADR TTS 服务 (非 GSV 官方)" + NEKO 对接提示 — 排障时区分对端 (NEKO 日志只报 "GPT-SoVITS 连接失败", 需确认 9881 上是谁); stdout 经壳 pump_server_log 落 server.log
+- [x] **验证** ✅: cargo check 通过 (零警告); py_compile 通过; banner 实弹确认落 stdout; NEKO 探针全链二次通过; 临时探针脚本已清理
+- **NEKO 侧使用指引**: GPT-SoVITS 模式 API 地址保持默认 http://127.0.0.1:9881 即可; 音色下拉自动出现 ADR 档案; 若壳启动提示 "9881 被占用" 则改填提示的端口
