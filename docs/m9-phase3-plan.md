@@ -640,3 +640,14 @@
 
 > 四批并行子代理 (39/40/41a/41b, 文件域互不重叠) + 主线程 diff review + 分批 commit。40 汇报丢失但改动落盘完整, 经逐文件 diff review 验收。全量验证: **403 passed + 1 skipped (零失败), cargo check 零错误**。Commits: 38补丁 455406a → 39 ea96b64 → 40 2f033a0 → 41a d6477dd → 41b a2572d6。Review 报告的 P0×2 (批次38) + P1×8 (批次39/40) + P2×12 + P3×14 (批次41a/41b) 全部闭环, 余项转入批次 42 v1.0.0 打包。
 - **后续批次**: 42 v1.0.0 — 版本四面统一 + tauri build 安装包 + git tag
+
+### 批次 42 (2026-10-06): v1.0.0 打包 — 版本统一 + NSIS 安装包 + tag
+
+> 全项目 Review (批次 38–41) 闭环后的发布批次。
+
+- [x] **版本四面统一 → 1.0.0**: pyproject.toml / adr.__init__.__version__ / desktop Cargo.toml / tauri.conf.json / package.json (+package-lock.json 两处 + Cargo.lock 随动); `import adr; adr.__version__ == "1.0.0"` 验证; cargo check 以 v1.0.0 重编译通过
+- [x] **NSIS 构建**: npx tauri-cli 2.12.1 build (cargo 不在 PATH — npx 子进程继承前需 `$env:PATH` 前置 `C:\Users\Admin\.cargo\bin`); release 编译 + makensis 打包一次通过
+- [x] **产物** (复制至 dist/): `ADR Studio_1.0.0_x64-setup.exe` (1.62 MiB, NSIS 安装包, WebView2 系统组件按需) + `adr-desktop.exe` (4.17 MiB, 便携主程序); Python 服务侧按既有设计由壳运行时托管 (sidecar), 不入安装包
+- [x] **git tag**: `v1.0.0` (annotated, 指向 6c1027f) — 未推送远端, 待用户确认后 push
+- [x] **发布门禁**: 全量 pytest **403 passed + 1 skipped 零失败** (批后基线); cargo check 零警告零错误; Review 分级报告 P0×2 / P1×8 / P2×12 / P3×14 全部修复闭环
+- **收尾**: 批次 38–42 共 7 个 commit (455406a→999c24f→6c1027f + tag), v1.0.0 发布就绪
