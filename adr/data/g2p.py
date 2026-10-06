@@ -9,9 +9,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import List, Optional
 
 from adr.core import get_logger
+
+
+@lru_cache(maxsize=1)
+def _load_g2pw():
+    """模块级加载 g2pW 模型 (全进程只构造一次; ImportError 不缓存)。"""
+    from g2pW import G2PW
+    return G2PW()
 
 
 @dataclass
@@ -65,8 +73,8 @@ class G2P:
     def _pinyin_convert(self, text: str) -> List[str]:
         """中文转拼音 (pypinyin)。"""
         self._ensure_pypinyin()
-        # 过滤非中文字符
-        text = "".join(c for c in text if "\u4e00" <= c <= "\u9fff" or c in " ,.!?;:")
+        # 过滤非中文字符; 保留 ASCII (英文 token 不丢弃, 与推理端分布一致)
+        text = "".join(c for c in text if "\u4e00" <= c <= "\u9fff" or c.isascii())
 
         if self.config.with_tone:
             style = self._Style.TONE3
@@ -74,19 +82,22 @@ class G2P:
             style = self._Style.NORMAL
 
         result = self._lazy_pinyin(text, style=style)
-        # 过滤空字符串
-        return [p for p in result if p.strip()]
+        # 过滤空串; ASCII 段被 pypinyin 整体透传 (如 ' hello world'),
+        # 按空白切分为词级 token
+        tokens: List[str] = []
+        for p in result:
+            tokens.extend(p.split())
+        return tokens
 
     def _g2pw_convert(self, text: str) -> List[str]:
         """g2pW 转换 (需要额外安装 g2pW)。"""
         try:
-            from g2pW import G2PW
+            model = _load_g2pw()
         except ImportError:
             self.log.warning("g2pW not installed, falling back to pypinyin")
             self.config.backend = "pypinyin"
             return self._pinyin_convert(text)
 
-        model = G2PW()
         result = model(text)
         # 提取 phonemes
         phonemes = []

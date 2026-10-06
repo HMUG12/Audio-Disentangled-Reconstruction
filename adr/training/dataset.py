@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import copy
 import random
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from adr.core import get_logger
 from adr.data.pipeline import TrainSample
 
 
@@ -161,9 +163,13 @@ def collate_samples(
             T = s.mel.shape[-1]
             target_mel[i, :, :T] = s.mel
             target_mel_mask[i, :T] = True
-            # ref_mel 取前半段 (简化)
-            rT = min(T, ref_mel_T)
-            ref_mel[i, :, :rT] = s.mel[:, :rT]
+            # ref_mel: 训练时用同说话人异样本 (防模型从 ref_mel 抄 target 的捷径),
+            # 无池时回退取自身前半段 (简化)
+            ref_src = getattr(s, "_ref_mel", None)
+            if ref_src is None:
+                ref_src = s.mel
+            rT = min(ref_src.shape[-1], ref_mel_T)
+            ref_mel[i, :, :rT] = ref_src[:, :rT]
         if s.f0 is not None and len(s.f0) > 0:
             T = min(len(s.f0), max_mel_len)
             f0[i, :T] = s.f0[:T]
@@ -199,6 +205,7 @@ class VoiceCloneDataset(Dataset):
         npz_dir: Optional[Union[str, Path]] = None,
         samples: Optional[List[TrainSample]] = None,
         max_samples: Optional[int] = None,
+        speaker_ids: Optional[Sequence[str]] = None,
     ):
         if samples is not None:
             self.samples = samples
@@ -213,6 +220,16 @@ class VoiceCloneDataset(Dataset):
         # 构音素词典
         self.phoneme_to_id = self._build_phoneme_dict(self.samples)
         self.id_to_phoneme = {v: k for k, v in self.phoneme_to_id.items()}
+
+        # 说话人 id (None 则视为单一说话人); 用于 ref_mel 池防捷径泄漏
+        if speaker_ids is None:
+            speaker_ids = ["default"] * len(self.samples)
+        if len(speaker_ids) != len(self.samples):
+            raise ValueError(
+                f"speaker_ids 长度 ({len(speaker_ids)}) 与样本数 ({len(self.samples)}) 不一致"
+            )
+        self.speaker_ids = list(speaker_ids)
+        self._ref_pools = self._build_ref_pools()
 
     @staticmethod
     def _load_npz_dir(npz_dir: Union[str, Path]) -> List[TrainSample]:
@@ -258,8 +275,35 @@ class VoiceCloneDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
+    def _build_ref_pools(self) -> List[List[int]]:
+        """按说话人分组构建 ref_mel 候选池 (池中不含自身, 防模型抄同一样本的答案)。"""
+        log = get_logger("adr.training.dataset")
+        groups: dict[str, List[int]] = {}
+        for i, (s, spk) in enumerate(zip(self.samples, self.speaker_ids)):
+            if s.mel is None:
+                continue
+            groups.setdefault(spk, []).append(i)
+
+        pools: List[List[int]] = [[] for _ in self.samples]
+        for spk, idxs in groups.items():
+            if len(idxs) < 2:
+                log.warning(
+                    f"  speaker '{spk}' 仅 {len(idxs)} 个有效 mel 样本, ref_mel 无异样本可用, "
+                    f"将回退为同样本 (存在捷径泄漏风险, 建议每说话人至少 2 条)"
+                )
+            for i in idxs:
+                pools[i] = [j for j in idxs if j != i]
+        return pools
+
     def __getitem__(self, idx: int) -> TrainSample:
-        return self.samples[idx]
+        s = self.samples[idx]
+        pool = self._ref_pools[idx]
+        if pool:
+            # 同说话人随机异样本的 mel 作为 ref, 切断 ref→target 的抄写捷径
+            ref = self.samples[random.choice(pool)]
+            s = copy.copy(s)
+            s._ref_mel = ref.mel
+        return s
 
     def collate(self, batch: Sequence[TrainSample]) -> CollatedBatch:
         return collate_samples(batch, phoneme_to_id=self.phoneme_to_id)
@@ -275,11 +319,15 @@ class VoiceCloneDataset(Dataset):
 
         train_ds = VoiceCloneDataset.__new__(VoiceCloneDataset)
         train_ds.samples = [self.samples[i] for i in train_idx]
+        train_ds.speaker_ids = [self.speaker_ids[i] for i in train_idx]
+        train_ds._ref_pools = train_ds._build_ref_pools()
         train_ds.phoneme_to_id = self.phoneme_to_id
         train_ds.id_to_phoneme = self.id_to_phoneme
 
         val_ds = VoiceCloneDataset.__new__(VoiceCloneDataset)
         val_ds.samples = [self.samples[i] for i in val_idx]
+        val_ds.speaker_ids = [self.speaker_ids[i] for i in val_idx]
+        val_ds._ref_pools = val_ds._build_ref_pools()
         val_ds.phoneme_to_id = self.phoneme_to_id
         val_ds.id_to_phoneme = self.id_to_phoneme
 

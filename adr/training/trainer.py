@@ -18,11 +18,13 @@
 from __future__ import annotations
 
 import math
+import random
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Union
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -76,6 +78,7 @@ class TrainerConfig:
     # 设备
     device: str = "auto"            # auto / cpu / cuda
     seed: int = 42
+    deterministic: bool = False     # cudnn 确定性模式 (牺牲速度换可复现)
 
 
 class Trainer:
@@ -107,7 +110,16 @@ class Trainer:
         else:
             self.device = torch.device(self.config.device)
 
-        torch.manual_seed(self.config.seed)
+        # 完整种子设定 (torch / random / numpy / cuda) + cudnn 确定性开关
+        seed = self.config.seed
+        torch.manual_seed(seed)
+        random.seed(seed)
+        np.random.seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        if self.config.deterministic:
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
 
         # 模型
         self.model = model.to(self.device)
@@ -172,7 +184,8 @@ class Trainer:
             use_8bit=self.config.use_8bit_optimizer,
         )
         self.optimizer = build_optimizer(self.model, opt_config)
-        total_steps = len(self.train_loader) * self.config.epochs
+        # optimizer 只在梯度累积边界步进, scheduler 总步数按有效更新次数计 (向上取整)
+        total_steps = math.ceil(len(self.train_loader) / self.config.grad_accum_steps) * self.config.epochs
         self.scheduler = build_scheduler(self.optimizer, opt_config, total_steps=total_steps)
 
         # AMP
@@ -312,6 +325,7 @@ class Trainer:
                 "phoneme_mask": batch.phoneme_mask.to(self.device),
                 "ref_mel": batch.ref_mel.to(self.device),
                 "target_mel": batch.target_mel.to(self.device),
+                "target_mel_mask": batch.target_mel_mask.to(self.device),
                 "target_durations": batch.target_durations.to(self.device),
                 "f0": batch.f0.to(self.device),
             }
@@ -383,6 +397,7 @@ class Trainer:
                 "phoneme_mask": batch.phoneme_mask.to(self.device),
                 "ref_mel": batch.ref_mel.to(self.device),
                 "target_mel": batch.target_mel.to(self.device),
+                "target_mel_mask": batch.target_mel_mask.to(self.device),
                 "target_durations": batch.target_durations.to(self.device),
                 "f0": batch.f0.to(self.device),
             }
@@ -489,3 +504,55 @@ class Trainer:
         """从 YAML 配置构造 (M2 完整实现)。"""
         config = TrainerConfig(**kwargs)
         return cls(model=model, train_data=train_data, config=config)
+
+
+# ============================================================
+# YAML → TrainerConfig 显式映射 (vram_*.yaml 的 train 节)
+# ============================================================
+YAML_TRAIN_KEY_MAP: dict = {
+    "batch_size": "batch_size",
+    "gradient_accumulation_steps": "grad_accum_steps",
+    "learning_rate": "lr",
+    "num_epochs": "epochs",
+    "weight_decay": "weight_decay",
+    "warmup_steps": "warmup_steps",
+    "max_grad_norm": "grad_clip",
+    "use_gradient_checkpointing": "use_gradient_checkpointing",
+    "precision": "amp_dtype",
+    "save_every_n_epochs": "save_every_n_epochs",
+    "log_every_n_steps": "log_every_n_steps",
+}
+
+_AMP_DTYPE_ALIASES = {"fp16": "fp16", "float16": "fp16", "bf16": "bf16", "bfloat16": "bf16"}
+
+
+def apply_yaml_to_trainer_config(yaml_cfg: dict, cfg: "TrainerConfig", log=None) -> List[str]:
+    """把 YAML 配置的 train 节显式映射到 TrainerConfig。
+
+    - 仅处理顶层 'train' 子节 (若不存在则视 yaml_cfg 本身为 train 节)
+    - 映射表之外的键不静默丢弃: 汇总后单条 warning
+    - 不映射 use_qlora (由 CLI --lora/--qlora 标志控制, 避免 yaml 覆盖 CLI)
+
+    Returns:
+        实际应用的 "yaml键->配置字段" 列表
+    """
+    log = log or get_logger("adr.training")
+    train_cfg = yaml_cfg.get("train", yaml_cfg) if isinstance(yaml_cfg, dict) else {}
+    applied: List[str] = []
+    unmapped: List[str] = []
+    for key, value in train_cfg.items():
+        field_name = YAML_TRAIN_KEY_MAP.get(key)
+        if field_name is None:
+            unmapped.append(key)
+            continue
+        if field_name == "amp_dtype":
+            norm = _AMP_DTYPE_ALIASES.get(str(value).lower())
+            if norm is None:
+                unmapped.append(key)
+                continue
+            value = norm
+        setattr(cfg, field_name, value)
+        applied.append(f"{key}->{field_name}")
+    if unmapped:
+        log.warning(f"  YAML 训练配置中未映射的键已忽略: {unmapped}")
+    return applied

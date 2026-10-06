@@ -273,6 +273,58 @@ def test_target_modules_exclude():
     assert n_lora == 1  # 只有 layers.0.v_proj
 
 
+def test_lora_default_targets_match_sovits():
+    """默认 target_modules 应匹配 SoVITS 的 Linear 层 (不再用 HF 风格 q_proj/v_proj)。"""
+    from adr.models.sovits import SoVITS, SoVITSConfig
+    from adr.training.lora import LoRAConfig, apply_lora, LoRALinear
+
+    model = SoVITS(SoVITSConfig(
+        hidden_dim=64, n_layers=2, n_heads=4, ffn_dim=128,
+        vocab_size=607, content_dim=32, timbre_dim=32,
+    ))
+
+    # 默认配置即可注入 (fail-fast 会在匹配 0 个时抛错)
+    apply_lora(model, LoRAConfig(rank=4, alpha=8))
+    n_lora = sum(1 for m in model.modules() if isinstance(m, LoRALinear))
+    assert n_lora > 0
+
+    # decoder 的 ffn 已被替换; out_proj (模型级输出投影) 已被替换
+    assert isinstance(model.decoder.layers[0].linear1, LoRALinear)
+    assert isinstance(model.out_proj, LoRALinear)
+
+    # 只有 LoRA 参数可训练
+    n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    assert n_trainable > 0
+    for m in model.modules():
+        if isinstance(m, LoRALinear):
+            assert m.weight.requires_grad is False
+
+
+def test_apply_lora_fail_fast_on_zero_targets():
+    """target_modules 与模型层名错配 (注入 0 个) 且模型无已有 LoRA 时应 fail-fast。"""
+    from adr.training.lora import LoRAConfig, apply_lora
+
+    model = TinyTransformer(dim=16, n_layers=1)
+    config = LoRAConfig(rank=4, alpha=8, target_modules=["nonexistent_layer"])
+    with pytest.raises(ValueError, match="没匹配到任何 Linear"):
+        apply_lora(model, config)
+
+
+def test_apply_lora_idempotent_on_lora_model():
+    """已注入 LoRA 的模型再次 apply (注入 0 个新目标) 不报错 (Trainer 二次注入路径)。"""
+    from adr.training.lora import LoRAConfig, apply_lora, LoRALinear
+
+    model = TinyTransformer(dim=16, n_layers=1)
+    config = LoRAConfig(rank=4, alpha=8, target_modules=["q_proj", "v_proj"])
+    apply_lora(model, config)
+    n_lora = sum(1 for m in model.modules() if isinstance(m, LoRALinear))
+    assert n_lora == 2
+
+    # 幂等: 二次 apply 相同目标, LoRALinear 不是 nn.Linear 子类 → 匹配 0 个 → info 跳过
+    apply_lora(model, config)
+    assert sum(1 for m in model.modules() if isinstance(m, LoRALinear)) == n_lora
+
+
 # ============================================================
 # 显存节省
 # ============================================================
