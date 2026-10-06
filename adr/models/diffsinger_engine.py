@@ -56,14 +56,20 @@ class DiffSingerEngine:
         """进入 v1 代码上下文 (sys.path + cwd)。"""
         code_dir = str(self.config.code_dir)
         old_cwd = os.getcwd()
-        added = code_dir not in sys.path
-        if added:
-            sys.path.insert(0, code_dir)
-        os.chdir(code_dir)
-        try:
-            yield
-        finally:
-            os.chdir(old_cwd)
+        # 复用 GSV 引擎的 _CHDIR_LOCK (批次40): chdir 是进程级全局状态,
+        # 与 GSV/RVC 的 chdir 窗口必须互斥, 否则 A 引擎的 yield 窗口
+        # 可能跑在 B 引擎恢复后的工作目录里; RLock 可重入。
+        # 函数内导入, 避免模块顶部拉起 GSV 依赖链。
+        from adr.models.gsv_engine import _CHDIR_LOCK
+        with _CHDIR_LOCK:
+            added = code_dir not in sys.path
+            if added:
+                sys.path.insert(0, code_dir)
+            os.chdir(code_dir)
+            try:
+                yield
+            finally:
+                os.chdir(old_cwd)
 
     def _lazy_init(self):
         if self._infer is not None:

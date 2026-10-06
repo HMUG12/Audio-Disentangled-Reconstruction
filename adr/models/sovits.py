@@ -213,22 +213,19 @@ class SoVITS(BaseBackbone):
             durations: (B, T_phoneme) int, 每帧重复次数
             max_len: 输出最大长度
         """
-        B, T, D = x.shape
+        B, _, D = x.shape
         if max_len is None:
             max_len = int(durations.sum(dim=1).max().item())
 
+        # 向量化 (批次40): repeat_interleave 一次展开整条序列, 消除推理热路径
+        # 逐元素 .item() 的 GPU→CPU 同步风暴。负数/0 时长 clamp 到 0 等价原
+        # "d <= 0 跳过"; 超出 max_len 截断等价原 "end = min(pos + d, max_len)"。
+        durs = durations.long().clamp(min=0)
         output = torch.zeros(B, max_len, D, device=x.device, dtype=x.dtype)
         for b in range(B):
-            pos = 0
-            for t in range(T):
-                d = int(durations[b, t].item())
-                if d <= 0:
-                    continue
-                end = min(pos + d, max_len)
-                output[b, pos:end] = x[b, t:t+1].expand(end - pos, -1)
-                pos = end
-                if pos >= max_len:
-                    break
+            expanded = torch.repeat_interleave(x[b], durs[b], dim=0)  # (sum_d, D)
+            expanded = expanded[:max_len]
+            output[b, :expanded.size(0)] = expanded
         return output
 
     def _inject_f0(

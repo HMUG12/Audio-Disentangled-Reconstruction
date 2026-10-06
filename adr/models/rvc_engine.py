@@ -29,18 +29,24 @@ class RVCEngine:
     @contextlib.contextmanager
     def _rvc_context(self):
         old_cwd = os.getcwd()
-        if str(RVC_DIR) not in sys.path:
-            sys.path.insert(0, str(RVC_DIR))
-        # 环境变量须在 infer.* import 前设置 (其 utils 在 import 时捕获)
-        os.environ.setdefault("weight_root", str(RVC_DIR / "assets" / "weights"))
-        os.environ.setdefault("rmvpe_root", str(RVC_DIR / "assets" / "rmvpe"))
-        os.environ.setdefault("index_root", str(RVC_DIR / "logs"))
-        os.environ.setdefault("outside_index_root", str(RVC_DIR / "logs"))
-        os.chdir(RVC_DIR)
-        try:
-            yield
-        finally:
-            os.chdir(old_cwd)
+        # 复用 GSV 引擎的 _CHDIR_LOCK (批次40): chdir 是进程级全局状态,
+        # 与 GSV/DiffSinger 的 chdir 窗口必须互斥, 否则 A 引擎的 yield
+        # 窗口可能跑在 B 引擎恢复后的工作目录里; RLock 可重入。
+        # 函数内导入, 避免模块顶部拉起 GSV 依赖链。
+        from adr.models.gsv_engine import _CHDIR_LOCK
+        with _CHDIR_LOCK:
+            if str(RVC_DIR) not in sys.path:
+                sys.path.insert(0, str(RVC_DIR))
+            # 环境变量须在 infer.* import 前设置 (其 utils 在 import 时捕获)
+            os.environ.setdefault("weight_root", str(RVC_DIR / "assets" / "weights"))
+            os.environ.setdefault("rmvpe_root", str(RVC_DIR / "assets" / "rmvpe"))
+            os.environ.setdefault("index_root", str(RVC_DIR / "logs"))
+            os.environ.setdefault("outside_index_root", str(RVC_DIR / "logs"))
+            os.chdir(RVC_DIR)
+            try:
+                yield
+            finally:
+                os.chdir(old_cwd)
 
     def convert(
         self,

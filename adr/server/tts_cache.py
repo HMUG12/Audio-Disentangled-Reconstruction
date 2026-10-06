@@ -41,8 +41,10 @@ _KEY_FIELDS = (
 )
 
 _lock = threading.Lock()
-# key -> (bytes, 盘上文件名 | None)。bytes 为 b"" 且有文件名 = 磁盘条目未读入
-_cache: "OrderedDict[str, tuple[bytes, str | None]]" = OrderedDict()
+# key -> (bytes, 盘上文件名 | None, 记账字节数)。bytes 为 b"" 且有文件名 = 磁盘条目未读入
+# 记账字节数为条目真实大小: 磁盘条目按落盘文件 size (os.path.getsize) 记,
+# 内存条目按 len(data) 记; 逐出/剔除一律按记录值回减, 防 _total_bytes 漂移
+_cache: "OrderedDict[str, tuple[bytes, str | None, int]]" = OrderedDict()
 _total_bytes = 0
 _loaded = False  # 缓存目录是否已扫描重建 (惰性, 首次 get/put 触发)
 
@@ -72,7 +74,7 @@ def make_key(req: dict) -> str:
 def _disk_load_locked() -> None:
     """惰性扫描缓存目录重建内存 LRU (服务重启后缓存仍可用)。
 
-    按 mtime 新→旧回填: 盘上只登记 (b"", 文件名), 字节延迟到首次
+    按 mtime 新→旧回填: 盘上只登记 (b"", 文件名, size), 字节延迟到首次
     get 再读 — 启动零读盘; 超出条数/字节上限的旧文件直接删。
     盘上文件就是 put 时写下的完整字节, st_size == len(data), 统计口径一致。
     """
@@ -86,38 +88,45 @@ def _disk_load_locked() -> None:
                  if p.is_file() and not p.name.endswith(".tmp")]
     except OSError:
         return
-    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    max_b, max_n = _max_bytes(), _max_entries()
+    # 一次 stat 同时取 mtime + size; 并发下文件可能刚被逐出删除
+    # (stat 抛 FileNotFoundError), 容错跳过当作不存在
+    statted: list[tuple[float, int, Path]] = []
     for p in files:
         try:
-            size = p.stat().st_size
+            st = p.stat()
         except OSError:
             continue
+        statted.append((st.st_mtime, st.st_size, p))
+    statted.sort(key=lambda t: t[0], reverse=True)
+    max_b, max_n = _max_bytes(), _max_entries()
+    for _, size, p in statted:
         if len(_cache) >= max_n or _total_bytes + size > max_b:
             p.unlink(missing_ok=True)  # 超限旧文件: 删盘上副本
             continue
         if p.stem in _cache:
             continue
-        _cache[p.stem] = (b"", p.name)
+        _cache[p.stem] = (b"", p.name, size)
         _total_bytes += size
 
 
 def get(key: str) -> bytes | None:
     if not enabled():
         return None
+    global _total_bytes
     with _lock:
         _disk_load_locked()
         item = _cache.get(key)
         if item is None:
             return None
-        data, fname = item
+        data, fname, size = item
         if not data and fname is not None:  # 磁盘条目: 首次命中读入
             try:
                 data = (_dir() / fname).read_bytes()
             except OSError:
                 del _cache[key]  # 盘上文件已丢: 视为未命中
+                _total_bytes -= size  # 按记录值回减, 防账目漂移
                 return None
-            _cache[key] = (data, fname)
+            _cache[key] = (data, fname, size)
         _cache.move_to_end(key)  # 命中即续期
         return data
 
@@ -136,24 +145,31 @@ def put(key: str, data: bytes, ext: str = "bin") -> None:
         _disk_load_locked()
         # 落盘 (盘不可写则退化为纯内存, 不影响服务)
         fname: str | None = f"{key}.{ext}"
+        size = len(data)
         try:
             d = _dir()
             d.mkdir(parents=True, exist_ok=True)
             tmp = d / (key + ".tmp")
             tmp.write_bytes(data)
             os.replace(tmp, d / fname)
+            # 记录真实落盘大小作为记账值 (与磁盘重建扫描口径一致);
+            # 极端并发下文件刚被清理会 FileNotFoundError, 退回内存字节数
+            try:
+                size = os.path.getsize(d / fname)
+            except OSError:
+                size = len(data)
         except OSError:
             fname = None
         old = _cache.get(key)
         if old is not None:
-            _total_bytes -= len(old[0])
+            _total_bytes -= old[2]  # 按旧条目记录值回减
             del _cache[key]
-        _cache[key] = (data, fname)
-        _total_bytes += len(data)
+        _cache[key] = (data, fname, size)
+        _total_bytes += size
         while _cache and (_total_bytes > _max_bytes()
                           or len(_cache) > _max_entries()):
-            _, (old_data, old_name) = _cache.popitem(last=False)  # LRU 逐出最旧
-            _total_bytes -= len(old_data)
+            _, (_, old_name, old_size) = _cache.popitem(last=False)  # LRU 逐出最旧
+            _total_bytes -= old_size  # 按记录值回减 (磁盘条目 data=b"", 不能用 len)
             if old_name is not None:
                 (_dir() / old_name).unlink(missing_ok=True)
 

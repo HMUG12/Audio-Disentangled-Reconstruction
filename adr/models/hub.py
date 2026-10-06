@@ -127,13 +127,16 @@ class PretrainedHub:
         # 用 urllib 下载
         import urllib.request
 
+        # 原子下载 (批次40): 先写同目录 .part 临时文件, 校验全部通过后
+        # os.replace 原子改名; 失败只清理 .part, 不误删已存在的旧文件
+        part = target.with_suffix(target.suffix + ".part")
         try:
             with urllib.request.urlopen(info.url, timeout=60) as resp:
                 total = int(resp.headers.get("Content-Length", 0))
                 downloaded = 0
                 chunk_size = 1024 * 1024  # 1MB
 
-                with open(target, "wb") as f:
+                with open(part, "wb") as f:
                     while True:
                         chunk = resp.read(chunk_size)
                         if not chunk:
@@ -145,24 +148,34 @@ class PretrainedHub:
                             bar = "#" * int(pct / 2) + "-" * (50 - int(pct / 2))
                             print(f"\r  [{bar}] {pct:.1f}% ({downloaded // 1024 // 1024} MB)", end="")
                 print()
-        except Exception as e:
-            if target.exists():
-                target.unlink()
-            raise RuntimeError(f"Download failed: {e}") from e
 
-        # 验证 SHA256 (如果有)
-        if info.sha256:
-            sha = hashlib.sha256()
-            with open(target, "rb") as f:
-                for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                    sha.update(chunk)
-            actual = sha.hexdigest()
-            if actual != info.sha256:
-                target.unlink()
+            # 完整性核对: 响应头带 Content-Length 时, 实际字节数必须一致
+            if total > 0 and downloaded != total:
                 raise RuntimeError(
-                    f"SHA256 mismatch for {name}: "
-                    f"expected {info.sha256}, got {actual}"
+                    f"Truncated download for {name}: "
+                    f"expected {total} bytes, got {downloaded}"
                 )
+
+            # 验证 SHA256 (如果有) — 在 .part 上做, 通过后才替换正式文件
+            if info.sha256:
+                sha = hashlib.sha256()
+                with open(part, "rb") as f:
+                    for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                        sha.update(chunk)
+                actual = sha.hexdigest()
+                if actual != info.sha256:
+                    raise RuntimeError(
+                        f"SHA256 mismatch for {name}: "
+                        f"expected {info.sha256}, got {actual}"
+                    )
+
+            os.replace(part, target)
+        except RuntimeError:
+            part.unlink(missing_ok=True)  # 只清理临时文件, 不碰 target
+            raise
+        except Exception as e:
+            part.unlink(missing_ok=True)  # 只清理临时文件, 不碰 target
+            raise RuntimeError(f"Download failed: {e}") from e
 
         self.log.info(f"  ✓ Downloaded {name} ({target.stat().st_size // 1024 // 1024} MB)")
         return target
