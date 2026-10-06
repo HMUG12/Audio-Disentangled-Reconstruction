@@ -75,8 +75,10 @@ async def profile_ref(name: str):
     # Track B 收口: name 先清洗再拼路径, ../ 穿越越出 VOICES_DIR 一律 404
     ref = pathsafe.resolve_within(voice_library.VOICES_DIR, Path(name) / "ref.wav")
     if ref is None or not ref.exists():
+        # 批次35: code 增量字段 (与错误协议统一)
         return JSONResponse(status_code=404,
-                            content={"message": f"profile not found: {name}"})
+                            content={"message": f"profile not found: {name}",
+                                     "code": "profile_not_found"})
     return FileResponse(str(ref), media_type="audio/wav", filename="ref.wav")
 
 

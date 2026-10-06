@@ -518,3 +518,17 @@
 - [x] **验证** ✅: 全量 pytest 325 passed + 1 skipped (基线 310+1 + 新增 15, v2/v3/webui 既有面无回归)
 - **循环导入设计备案**: 测试入口 `from adr.services.synthesis import ...` 若走模块级 import adr.server.pathsafe → adr.server.__init__ → app → v2_compat → (彼时 adr.services 尚未初始化完成) → ImportError; 解法 = 服务层对 adr.server 子模块全部函数内延迟导入 (其自身无反向依赖), v2→services 单向模块级依赖安全
 - **后续批次**: 35 错误协议接线 (v3 _resolve_voice 静默 None 改类型化上报 / 四面统一错误码映射) → 36 配置单源 (settings 中心) → 37 壳生命周期状态机 + 孤儿收编 (Rust)
+
+### 批次 35 (2026-10-06): Track C 架构收敛 — 错误协议接线 (类型化异常 + 稳定错误码 + 四面统一映射)
+
+> 每个 ADR 异常挂稳定 ``code`` 类属性, ``error_code()`` 为异常→错误码唯一映射点 (非框架异常 → internal_error); 四面各自按 wire 形态序列化 code 增量字段, 既有消息逐字保留 (wire 兼容红线)。v3 _resolve_voice 静默 None 改类型化上报 (非法名精确 message, not found 消息逐字保留), 合成中错误元组扩为 (str, code)。
+
+- [x] **core.exceptions 错误协议** (adr/core/exceptions.py): 全家族 13 异常挂 code (adr_error / config_error / model_not_found / vocab_error / data_pipeline_error / training_error / inference_error / device_error / dependency_missing / synthesis_error / profile_invalid / profile_not_found / invalid_params) + error_code(e) 助手 (getattr 兜底 internal_error)
+- [x] **v2 HTTP 面** (adr/server/v2_compat.py 9 处): _resolve_profile/_check_params 类型化 except → {"message", "code": error_code(e)}; streaming_mode 非法分支/权重路径缺失 → "invalid_params" 字面码; "tts failed"/"change gpt|sovits weight failed" 兜底 → error_code(e) (ADR 异常穿透得真码, 其余 internal_error); 模块 docstring 错误格式行更新
+- [x] **native HTTP 面** (adr/server/native.py): /profiles/{name}/ref 404 → "profile_not_found"; /tts 复用 tts_handle 自动继承 code
+- [x] **v3 WS 面** (adr/server/v3_compat.py): _resolve_voice 删静默 except → 类型化异常原样抛出, init 分支捕获 — ProfileInvalidError 回精确 message + profile_invalid (原误导性 "not found" 修正), ProfileNotFoundError/v is None 保持 "voice_id '{vid}' not found" 逐字 (N.E.K.O wire 兼容) + profile_not_found; _produce 错误元组 ("__err__", str, code) → 消费侧 error 帧带 code; session timeout / not initialized ×2 / busy / unknown cmd / 外层兜底 error 帧全量补 code (session_timeout / not_initialized / busy / unknown_cmd / error_code(e)); 模块 docstring 契约行更新
+- [x] **webui 面 (设计备案, 无代码)**: _err dict 为 Gradio UI 形态非 wire 协议, 不加 code; 既有 except 兜底已覆盖类型化异常 (str(e) 携带精确原因), 音色档案加载失败消息自动获得精确化收益
+- [x] **测试** (tests/test_error_protocol.py 新建 27 用例): 12 异常 code 参数化 + error_code 非框架兜底; v2 面 profile_invalid/profile_not_found 全载荷逐字断言 + invalid_params 三路径 (text 缺失/media_type/streaming_mode) + "tts failed"+Exception+internal_error + 权重缺失参数化; native 404 全载荷; v3 WS init 三态 (非法名精确 message / not found 逐字 / _default 无档案) + ready 正向 + 合成中 error 帧 code; _FakeEngine 恒抛错只测失败面
+- [x] **验证** ✅: 全量 pytest 352 passed + 1 skipped (基线 325+1 + 新增 27, v2/v3/webui/native 既有面无回归)
+- **设计要点**: code 为增量字段 — 既有客户端只读 message/type 不受影响; 成功响应与鉴权中间件 ({"message": "success"/"unauthorized"}) 零改动; "统一映射" = 异常→code 单点 (error_code), 序列化保持各面原生形态 (HTTP JSON / WS 帧 / Gradio dict), 不引入跨面错误中间层
+- **后续批次**: 36 配置单源 (settings 中心) → 37 壳生命周期状态机 + 孤儿收编 (Rust)
