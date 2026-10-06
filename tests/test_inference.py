@@ -197,3 +197,88 @@ def test_from_checkpoint_nonexistent():
 
     with pytest.raises(FileNotFoundError):
         InferPipeline.from_checkpoint("/nonexistent/path/ckpt.pt")
+
+
+# ---------------------------------------------------------------------------
+# 批次41b: from_checkpoint 权重错配校验
+# (unexpected keys / 形状不符 → raise; missing keys → warning + strict=False)
+# ---------------------------------------------------------------------------
+
+
+def _make_ckpt(tmp_path, mutate=None) -> str:
+    """构造合法 SoVITS checkpoint; mutate(state_dict) 可注入错配。"""
+    import dataclasses
+
+    import torch
+
+    from adr.models.sovits import SoVITS, SoVITSConfig
+
+    cfg = SoVITSConfig(
+        hidden_dim=32, n_layers=1, n_heads=2, ffn_dim=64,
+        vocab_size=607, content_dim=16, timbre_dim=16,
+    )
+    model = SoVITS(cfg)
+    sd = {k: v.clone() for k, v in model.state_dict().items()}
+    if mutate is not None:
+        mutate(sd)
+    path = tmp_path / "ckpt.pt"
+    torch.save({
+        "model_state": sd,
+        "model_class": "SoVITS",
+        "backbone_config": dataclasses.asdict(cfg),
+    }, path)
+    return str(path)
+
+
+def test_from_checkpoint_roundtrip(tmp_path):
+    """正常 checkpoint → 加载成功 (批次41b 基线)。"""
+    from adr.inference.pipeline import InferConfig, InferPipeline
+
+    ckpt = _make_ckpt(tmp_path)
+    pipe = InferPipeline.from_checkpoint(
+        ckpt, config=InferConfig(n_timesteps=3, device="cpu")
+    )
+    assert pipe.backbone is not None
+
+
+def test_from_checkpoint_unexpected_keys_raise(tmp_path):
+    """checkpoint 含模型不存在的权重键 → RuntimeError, 不再静默丢弃 (批次41b)。"""
+    from adr.inference.pipeline import InferPipeline
+
+    def add_bogus(sd):
+        import torch
+        sd["ghost_layer.weight"] = torch.zeros(4, 4)
+
+    ckpt = _make_ckpt(tmp_path, mutate=add_bogus)
+    with pytest.raises(RuntimeError, match="不存在的权重"):
+        InferPipeline.from_checkpoint(ckpt)
+
+
+def test_from_checkpoint_shape_mismatch_raise(tmp_path):
+    """权重形状与模型不符 → RuntimeError, 不再静默 strict=False (批次41b)。"""
+    from adr.inference.pipeline import InferPipeline
+
+    def wrong_shape(sd):
+        import torch
+        k = next(iter(sd))
+        sd[k] = torch.zeros(7, 3)
+
+    ckpt = _make_ckpt(tmp_path, mutate=wrong_shape)
+    with pytest.raises(RuntimeError, match="形状"):
+        InferPipeline.from_checkpoint(ckpt)
+
+
+def test_from_checkpoint_missing_keys_warns(tmp_path, caplog):
+    """checkpoint 缺权重键 → warning + strict=False 加载 (LoRA/部分微调场景)。"""
+    import logging
+
+    from adr.inference.pipeline import InferPipeline
+
+    def drop_one(sd):
+        del sd[sorted(sd.keys())[-1]]
+
+    ckpt = _make_ckpt(tmp_path, mutate=drop_one)
+    with caplog.at_level(logging.WARNING, logger="adr.inference"):
+        pipe = InferPipeline.from_checkpoint(ckpt)
+    assert pipe.backbone is not None
+    assert any("缺少" in r.message for r in caplog.records)

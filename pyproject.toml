@@ -43,7 +43,7 @@ dependencies = [
 [project.optional-dependencies]
 # M1 完整功能
 m1 = [
-    "gradio>=4.0",
+    "gradio>=6",
     "faster-whisper>=1.0",
     "g2pW>=0.1",
     "pypinyin>=0.49",
@@ -80,7 +80,7 @@ adr = "adr.cli:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["adr*"]
-exclude = ["adr._legacy*", "tests*", "examples*", "scripts*"]
+exclude = ["tests*", "examples*", "scripts*"]
 
 [tool.setuptools.package-data]
 adr = ["py.typed", "configs/*.yaml"]

@@ -79,15 +79,25 @@ def run_checks(fix: bool = False) -> dict:
         add("device", "设备 / GPU", "fail", f"检测失败: {e}")
 
     # 2. 关键依赖 ----------------------------------------------------
+    # 批次41b: onnxruntime 拆出 — 它只服务 RVC 声线转换, 未装不应让
+    # "关键依赖"整项 fail, 降级为独立 warn 提示
     missing = []
-    for mod in ("numpy", "soundfile", "librosa", "fastapi", "uvicorn",
-                "onnxruntime"):
+    for mod in ("numpy", "soundfile", "librosa", "fastapi", "uvicorn"):
         try:
             __import__(mod)
         except Exception:
             missing.append(mod)
     add("deps", "关键依赖", "ok" if not missing else "fail",
         "全部可导入" if not missing else f"缺失: {', '.join(missing)}")
+
+    try:
+        import onnxruntime
+        add("onnxruntime", "onnxruntime (可选)", "ok",
+            f"onnxruntime {onnxruntime.__version__} 可用")
+    except Exception as e:
+        add("onnxruntime", "onnxruntime (可选)", "warn",
+            f"onnxruntime 未安装 ({type(e).__name__}) — "
+            "仅影响 RVC 声线转换, 其余功能不受影响")
 
     # 3. ffmpeg / ffprobe (切片/ASR 依赖) -----------------------------
     def _find_ff(name: str):
@@ -187,9 +197,11 @@ def run_checks(fix: bool = False) -> dict:
         f"{'已清理' if fix else '下次训练会被秒停 — 可 --fix 清理'}",
         fixable=bool(stops))
 
-    # 8. 磁盘空间 -----------------------------------------------------
+    # 8. 磁盘空间 (批次41b: 历史硬编码 "F:\" 改为 ADR 数据目录所在盘) --
+    from adr.core.config import adr_data_dir
+    data_drive = str(adr_data_dir().anchor)
     low = []
-    for drive in sorted({str(REPO.anchor), "F:\\"}):
+    for drive in sorted({str(REPO.anchor), data_drive}):
         try:
             free = shutil.disk_usage(drive).free / 2 ** 30
             if free < 5:

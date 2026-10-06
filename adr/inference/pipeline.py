@@ -188,13 +188,34 @@ class InferPipeline:
                 + (f", missing={len(missing)}" if missing else "")
             )
         else:
-            try:
-                model.load_state_dict(ckpt["model_state"], strict=True)
-            except Exception as e:
-                get_logger("adr.inference").warning(
-                    f"Strict load failed: {e}, retrying with strict=False"
+            # 批次41b: 预检权重错配 — unexpected keys / 形状不符直接 raise,
+            # 仅容忍 missing keys (LoRA / 部分微调 ckpt 的预期场景)
+            ckpt_state = ckpt["model_state"]
+            model_state = model.state_dict()
+            unexpected = [k for k in ckpt_state if k not in model_state]
+            if unexpected:
+                raise RuntimeError(
+                    f"checkpoint 含模型中不存在的权重键 ({len(unexpected)} 个, "
+                    f"如 {unexpected[:3]}) — 模型结构与 checkpoint 不匹配, 拒绝加载"
                 )
-                model.load_state_dict(ckpt["model_state"], strict=False)
+            mismatched = [
+                k for k, v in ckpt_state.items()
+                if k in model_state and tuple(v.shape) != tuple(model_state[k].shape)
+            ]
+            if mismatched:
+                raise RuntimeError(
+                    f"checkpoint 权重形状与模型不匹配 ({len(mismatched)} 个, "
+                    f"如 {mismatched[:3]}) — 请检查 backbone_config 是否与训练时一致"
+                )
+            missing = [k for k in model_state if k not in ckpt_state]
+            if missing:
+                get_logger("adr.inference").warning(
+                    f"checkpoint 缺少 {len(missing)} 个权重键 (如 {missing[:3]}), "
+                    "以 strict=False 加载 (LoRA/部分微调场景)"
+                )
+                model.load_state_dict(ckpt_state, strict=False)
+            else:
+                model.load_state_dict(ckpt_state, strict=True)
 
         # 加载 vocoder (优先用传入的,其次按路径加载,最后自动找本地 BigVGAN)
         if vocoder is None:

@@ -20,10 +20,14 @@
 """
 from __future__ import annotations
 
+import logging
+import math
 import os
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+_log = logging.getLogger("adr.settings")
 
 # ===== 默认值 (原散布点的字面常量, 就地收编) =====
 DEFAULT_TTS_CACHE_MAX_ENTRIES = 32
@@ -106,10 +110,29 @@ def seg_cache_max_bytes() -> int:
 
 # ===== 引擎运行时开关 (models/gsv_engine.py) =====
 def fragment_interval_default() -> float:
-    """ADR_TTS_FRAGMENT_INTERVAL — None 显式传参时的句末静音默认秒数。"""
-    return float(os.environ.get(
-        "ADR_TTS_FRAGMENT_INTERVAL", DEFAULT_FRAGMENT_INTERVAL)
-        or DEFAULT_FRAGMENT_INTERVAL)
+    """ADR_TTS_FRAGMENT_INTERVAL — None 显式传参时的句末静音默认秒数。
+
+    批次41b: 非法值 (非数值/负数/NaN/Inf) 不再让 float() 直接崩或直接采用,
+    改为打 warning 并回退默认值 (服务不因一个环境变量写错而起不来)。
+    """
+    raw = os.environ.get("ADR_TTS_FRAGMENT_INTERVAL", "").strip()
+    if not raw:
+        return DEFAULT_FRAGMENT_INTERVAL
+    try:
+        val = float(raw)
+    except ValueError:
+        _log.warning(
+            f"ADR_TTS_FRAGMENT_INTERVAL={raw!r} 不是合法数值, "
+            f"回退默认 {DEFAULT_FRAGMENT_INTERVAL}"
+        )
+        return DEFAULT_FRAGMENT_INTERVAL
+    if not math.isfinite(val) or val < 0:
+        _log.warning(
+            f"ADR_TTS_FRAGMENT_INTERVAL={raw!r} 非法 (需为非负有限数), "
+            f"回退默认 {DEFAULT_FRAGMENT_INTERVAL}"
+        )
+        return DEFAULT_FRAGMENT_INTERVAL
+    return val
 
 
 def keep_tqdm() -> bool:

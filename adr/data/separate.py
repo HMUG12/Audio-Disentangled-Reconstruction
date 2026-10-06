@@ -7,6 +7,7 @@ M2+: 集成 UVR5 (audio-separator 库)。
 
 from __future__ import annotations
 
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union
@@ -53,7 +54,8 @@ class Separator:
 
         self._model = AudioSeparator(
             model_file_dir=Path.home() / ".cache/audio-separator",
-            output_dir=Path("/tmp/adr_separated"),
+            # 批次41b: /tmp 在 Windows 不存在, 统一用系统临时目录
+            output_dir=Path(tempfile.gettempdir()) / "adr_separated",
         )
 
     def __call__(
@@ -98,25 +100,33 @@ class Separator:
         audio: AudioData,
         output_dir: Optional[Path],
     ) -> tuple[AudioData, AudioData]:
-        """UVR5 真实人声分离。"""
-        import tempfile
-        import os
+        """UVR5 真实人声分离。
 
+        批次41b: 输入/输出临时文件统一在 finally 清理
+        (原先分离产物留在临时目录里从不删除)。
+        """
         if output_dir is None:
-            output_dir = Path("/tmp/adr_separated")
+            # /tmp 在 Windows 不存在, 统一用系统临时目录
+            output_dir = Path(tempfile.gettempdir()) / "adr_separated"
         output_dir.mkdir(parents=True, exist_ok=True)
 
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             tmp_path = Path(f.name)
-            save_audio(audio, tmp_path)
 
+        out_files: list[str] = []
         try:
+            save_audio(audio, tmp_path)
             self.log.info(f"Running UVR5 separation on {tmp_path}")
             output_files = self._model.separate(tmp_path)
             # output_files: [vocals_path, instrumental_path]
-            vocals = load_audio(output_files[0], sample_rate=audio.sample_rate)
-            instr = load_audio(output_files[1], sample_rate=audio.sample_rate)
+            out_files = [str(p) for p in output_files]
+            vocals = load_audio(out_files[0], sample_rate=audio.sample_rate)
+            instr = load_audio(out_files[1], sample_rate=audio.sample_rate)
             return vocals, instr
         finally:
-            if tmp_path.exists():
-                os.unlink(tmp_path)
+            # 分离结果已读入内存, 临时产物 (输入副本 + 输出文件) 就地清理
+            for p in [tmp_path, *out_files]:
+                try:
+                    Path(p).unlink(missing_ok=True)
+                except OSError as e:
+                    self.log.warning(f"临时文件清理失败 {p}: {e}")

@@ -193,7 +193,18 @@ def setup_device(
     cfg = detect_device()
 
     if device is not None:
-        cfg.device = device
+        if device.startswith("cuda") and not torch.cuda.is_available():
+            # 批次41b: 请求 CUDA 但不可用时不再静默, 明确告警并回退 CPU
+            from adr.core.logging import get_logger
+
+            get_logger("adr.device").warning(
+                f"请求设备 '{device}', 但 torch.cuda.is_available() 为 False "
+                "(可能原因: 未安装 CUDA 版 PyTorch / 无 NVIDIA GPU / 驱动未就绪), "
+                "已回退到 CPU"
+            )
+            cfg.device = "cpu"
+        else:
+            cfg.device = device
 
     if force_preset is not None:
         if force_preset in VRAM_PRESETS:

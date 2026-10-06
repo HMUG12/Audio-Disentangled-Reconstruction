@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from dataclasses import asdict, dataclass, field
@@ -224,6 +225,8 @@ class DataPipeline:
                     s.phonemes = []
 
         # Step 6: F0 + Mel
+        # 批次41b: 单样本提取失败只跳过该样本 (记入 errors), 不让整条数据集构建中断
+        f0_failed: set = set()
         if self.config.enable_f0 and self._f0 and slices:
             self.log.info(f"[6/6] F0 + Mel extraction on {len(slices)} slices")
             for s in slices:
@@ -236,20 +239,30 @@ class DataPipeline:
                         )
                 except Exception as e:
                     result.errors.append(f"F0/Mel slice {s.index}: {e}")
-                    s.f0 = np.array([])
+                    self.log.warning(
+                        f"  F0/Mel 提取失败, 跳过切片 {s.index}: {e}")
+                    f0_failed.add(s.index)
 
         # Build TrainSample list
+        # 批次41b: sample_id 加入源文件路径哈希 — 不同目录同名文件
+        # (如多说话人各自的 voice.wav) 不再互相覆盖 npz
+        path_hash = hashlib.md5(
+            str(input_path.resolve()).encode("utf-8")).hexdigest()[:8]
         for s in slices:
             if not s.text or not s.phonemes:
                 continue
+            if s.index in f0_failed:
+                # F0 失败的切片缺关键训练信号, 跳过而非带空 f0 入库
+                continue
             sample = TrainSample(
-                sample_id=f"{input_path.stem}_{s.index:04d}",
+                sample_id=f"{input_path.stem}_{path_hash}_{s.index:04d}",
                 waveform=s.waveform,
                 sample_rate=s.sample_rate,
                 text=s.text,
                 phonemes=s.phonemes,
                 f0=s.f0 if s.f0 is not None else np.array([]),
-                mel=s.mel,
+                # AudioSlice 无 mel 字段, 仅 enable_mel=True 时才有动态属性
+                mel=getattr(s, "mel", None),
                 start_sec=s.start_sec,
                 end_sec=s.end_sec,
             )

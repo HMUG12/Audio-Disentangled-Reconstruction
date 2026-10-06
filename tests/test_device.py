@@ -61,3 +61,16 @@ def test_vram_presets_keys():
         assert "x_pad" in preset
         assert "batch_size" in preset
         assert "precision" in preset
+
+
+def test_setup_device_cuda_fallback_when_unavailable(monkeypatch, caplog):
+    """请求 cuda 但 torch.cuda.is_available()=False → warning + 回退 cpu (批次41b)。"""
+    import logging
+
+    import torch
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    with caplog.at_level(logging.WARNING, logger="adr.device"):
+        cfg = setup_device(device="cuda", verbose=False)
+    assert cfg.device == "cpu"
+    assert any("回退" in r.message for r in caplog.records)

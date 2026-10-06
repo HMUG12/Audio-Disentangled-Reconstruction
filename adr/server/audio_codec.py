@@ -11,11 +11,37 @@ to_int16() 转换后再打包。
 """
 from __future__ import annotations
 
+import shutil
 import subprocess
 import wave
+from functools import lru_cache
 from io import BytesIO
 
 import numpy as np
+
+from adr.core.settings import REPO_ROOT
+
+
+@lru_cache(maxsize=1)
+def _resolve_ffmpeg() -> str:
+    """定位 ffmpeg 可执行文件 (批次41b)。
+
+    查找顺序: PATH → 项目 bundled 目录 (third_party/gpt_sovits/, 与
+    core/doctor.py 的查找口径一致)。都找不到时抛出带安装指引的 RuntimeError,
+    而不是 subprocess 的裸 FileNotFoundError traceback。
+    """
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    bundled = REPO_ROOT / "third_party" / "gpt_sovits" / "ffmpeg.exe"
+    if bundled.exists():
+        return str(bundled)
+    raise RuntimeError(
+        "未找到 ffmpeg — OGG/MP3/AAC 音频编码依赖它。解决方式 (任选其一):\n"
+        "  1. 安装 ffmpeg 并加入 PATH (https://ffmpeg.org, 或 winget install ffmpeg);\n"
+        "  2. 将 ffmpeg.exe 放到项目 third_party/gpt_sovits/ 目录下。\n"
+        "若只需 WAV/裸 PCM 输出, 可改用 audio/wav 或 audio/raw 格式 (不依赖 ffmpeg)。"
+    )
 
 
 def to_int16(data: np.ndarray) -> np.ndarray:
@@ -29,7 +55,7 @@ def pack_ogg(io_buffer: BytesIO, data: np.ndarray, rate: int) -> BytesIO:
     """编码为 OGG (ffmpeg libvorbis q4)。"""
     process = subprocess.Popen(
         [
-            "ffmpeg",
+            _resolve_ffmpeg(),
             "-f", "s16le",
             "-ar", str(rate),
             "-ac", "1",
@@ -69,7 +95,7 @@ def pack_mp3(io_buffer: BytesIO, data: np.ndarray, rate: int) -> BytesIO:
     """编码为 MP3 (ffmpeg libmp3lame, 192k) — 批次21 OpenAI 兼容面默认格式。"""
     process = subprocess.Popen(
         [
-            "ffmpeg",
+            _resolve_ffmpeg(),
             "-f", "s16le",
             "-ar", str(rate),
             "-ac", "1",
@@ -92,7 +118,7 @@ def pack_aac(io_buffer: BytesIO, data: np.ndarray, rate: int) -> BytesIO:
     """编码为 AAC/ADTS (ffmpeg, 192k)。"""
     process = subprocess.Popen(
         [
-            "ffmpeg",
+            _resolve_ffmpeg(),
             "-f", "s16le",
             "-ar", str(rate),
             "-ac", "1",

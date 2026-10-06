@@ -4,6 +4,8 @@ import os
 import pathlib
 import types
 
+import pytest
+
 from adr.core import load_config
 from adr.core.config import ADRConfig, DataConfig, TrainConfig, adr_data_dir
 
@@ -60,6 +62,37 @@ def test_config_to_yaml(tmp_path):
     # 重新加载
     cfg2 = load_config(config_path=out, preset="default")
     assert cfg2.train.batch_size == cfg.train.batch_size
+
+
+# ---------------------------------------------------------------------------
+# 批次41b: preset / config_path 校验 + 未知键告警
+# ---------------------------------------------------------------------------
+
+
+def test_invalid_preset_raises():
+    """无效 preset → ValueError 并列出合法值, 不再静默回退 (批次41b)。"""
+    with pytest.raises(ValueError, match="合法值"):
+        load_config(preset="vram_16gb")
+
+
+def test_missing_config_path_raises(tmp_path):
+    """config_path 不存在 → FileNotFoundError, 不再静默跳过 (批次41b)。"""
+    with pytest.raises(FileNotFoundError, match="配置文件不存在"):
+        load_config(preset="default", config_path=tmp_path / "nope.yaml")
+
+
+def test_unknown_key_warns_but_loads(caplog):
+    """未知配置键 → 打 warning + 正常加载, 不中断 (批次41b)。"""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="adr.core.config"):
+        cfg = load_config(
+            preset="default",
+            override={"train": {"batch_size": 8, "bogus_typo_key": 1}},
+        )
+    # 合法键正常生效, 未知键被忽略
+    assert cfg.train.batch_size == 8
+    assert any("bogus_typo_key" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------
