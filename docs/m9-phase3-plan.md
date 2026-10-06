@@ -651,3 +651,14 @@
 - [x] **git tag**: `v1.0.0` (annotated, 指向 6c1027f) — 未推送远端, 待用户确认后 push
 - [x] **发布门禁**: 全量 pytest **403 passed + 1 skipped 零失败** (批后基线); cargo check 零警告零错误; Review 分级报告 P0×2 / P1×8 / P2×12 / P3×14 全部修复闭环
 - **收尾**: 批次 38–42 共 7 个 commit (455406a→999c24f→6c1027f + tag), v1.0.0 发布就绪
+
+### 批次 43 (2026-10-06): 安装态 "tts failed" 根因修复 — validate_weights_file 两段式放行 GSV 训练产物
+
+> 用户报 v1.0.0 安装包 TTS 400 "tts failed"。取证 + 探针三连 (3/3b/3c) 实锤根因后两段式收口。
+
+- [x] **根因实锤**: GPT-SoVITS 训练脚本把 hparams 存成第三方 `utils.HParams` 实例塞进 SoVITS 权重 `config` 键; torch>=2.6 `torch.load(weights_only=True)` 默认拒绝该 GLOBAL (`UnpicklingError: Unsupported global: GLOBAL utils.HParams`) → 批次 38 `validate_weights_file` 抛 "weights file rejected by safe loader" → prewarm 失败 + 合成 400。官方预训练 config 是纯 dict 不受影响 (前会话探针 1 佐证), 用户训练产物必挂 (探针 3/3b: zip 新格式, GLOBAL 并集 = collections.OrderedDict + torch.HalfStorage + torch._utils._rebuild_tensor_v2 + utils.HParams)
+- [x] **安装/开发态差异闭环**: 批次 38 validate 引入时间点 + torch 2.10 默认 weights_only=True; 本机 `.venv` 不存在, resolve_runtime 走 PATH python (D:\pyhon), 开发态现在同样可复现; VOICES_DIR 写死 REPO_ROOT (`adr/models/voice_library.py`), 安装态 data_dir 无关, prewarm 照读 E 盘仓库档案
+- [x] **两段式校验** (`adr/models/gsv_engine.py`): 快路径 `torch.load(weights_only=True)` + 顶层 dict 校验; 失败落慢路径受限 pickle 扫描 — 白名单外 GLOBAL 抛 UnpicklingError (RCE 载荷进不来), 白名单内对象 stub 化 (不 import 不执行第三方代码), `persistent_load` 返 stub (不读 storage), 顶层 OrderedDict 用真类保 dict 校验; 兼容 `load_sovits_new` 截头 zip 补 PK 自愈; 第三方加载链 (TTS.py 显式 weights_only=False) 无需改动
+- [x] **测试** (tests/test_server_security.py 批次 43 组 ×5): 纯张量快路径放行 / GSV HParams 产物慢路径放行 (根因回归) / 白名单外 GLOBAL (argparse.Namespace) 拒绝且消息含路径 / 顶层非 dict 拒绝 / 垃圾文件拒绝; 夹具以临时假 utils 模块复现真实 pickle GLOBAL (CPython dump 校验 `getattr(module, qualname) is obj`, 纯改 `__module__` 存不进去)。真实训练权重 `yui的声音_e16_s400.pth` + `user_holdout_e8_s176.pth` 端到端放行验证 ✅
+- [x] **全量回归**: **408 passed + 1 skipped 零失败** (批次 42 基线 403 + 新增 5)
+- **后续**: 重新 tauri build 替换 dist/ 产物; v1.0.0 tag 指向坏包需处置 (重打 tag 或移至修复 commit, 待用户确认)

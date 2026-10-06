@@ -300,3 +300,104 @@ def test_tts_request_weights_allow_tensor_dict(security_client, engine, tmp_path
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("audio/wav")
     assert engine.synth_calls and engine.synth_calls[0]["vits_weights"] == str(p)
+
+
+# ─── 批次43: validate_weights_file 两段式 (weights_only 快路径 + 受限扫描慢路径) ───
+
+def _make_gsv_like_ckpt(path):
+    """仿 GPT-SoVITS 训练产物: 顶层 OrderedDict + config 存 utils.HParams
+    (dict 子类, 临时注入假 utils 模块以复现真实 pickle GLOBAL 'utils.HParams')
+    + half 张量 (触发 torch.HalfStorage GLOBAL)。"""
+    import collections
+    import sys
+    import types
+
+    import torch
+
+    class HParams(dict):
+        pass
+    HParams.__module__ = "utils"
+    HParams.__qualname__ = "HParams"  # pickle dump 按 qualname 写 GLOBAL
+
+    fake_utils = types.ModuleType("utils")
+    fake_utils.HParams = HParams
+    sys.modules["utils"] = fake_utils
+    try:
+        obj = collections.OrderedDict(
+            weight={"enc_p.text_embedding.weight": torch.zeros(3, dtype=torch.float16)},
+            config=HParams(model=HParams(version="v2"), data=HParams(sampling_rate=32000)),
+            info="adr-batch43-fixture",
+        )
+        torch.save(obj, path)
+    finally:
+        del sys.modules["utils"]
+
+
+def test_validate_weights_fast_path_pure_tensor_dict(tmp_path):
+    """纯 torch.save 张量 dict → 快路径 (weights_only=True) 直接通过。"""
+    import torch
+
+    from adr.models.gsv_engine import validate_weights_file
+
+    p = tmp_path / "pure.pth"
+    torch.save({"w": torch.zeros(3)}, p)
+    validate_weights_file(str(p))  # 不抛即通过
+
+
+def test_validate_weights_slow_path_gsv_hparams_config(tmp_path):
+    """GSV 训练产物 (config=utils.HParams) → 快路径被 torch>=2.6 拒,
+    慢路径受限扫描放行 (安装态 "tts failed" 根因回归)。"""
+    from adr.models.gsv_engine import validate_weights_file
+
+    p = tmp_path / "trained.pth"
+    _make_gsv_like_ckpt(p)
+    validate_weights_file(str(p))  # 不抛即通过
+
+
+def test_validate_weights_reject_rce_global_disguise(tmp_path):
+    """白名单外 GLOBAL (argparse.Namespace, 模拟任意未知/恶意类) →
+    快路径 weights_only 拒 → 慢路径 find_class 白名单拒绝,
+    错误消息含载荷名与文件路径 (批次43 诊断增强)。"""
+    import argparse
+
+    import torch
+
+    from adr.models.gsv_engine import validate_weights_file
+
+    p = tmp_path / "evil.pth"
+    torch.save({"weight": torch.zeros(1), "config": argparse.Namespace(cmd="pwned")}, p)
+    with pytest.raises(ValueError, match="argparse.Namespace"):
+        validate_weights_file(str(p))
+    # 消息含文件路径 (诊断增强)
+    with pytest.raises(ValueError) as ei:
+        validate_weights_file(str(p))
+    assert "evil.pth" in str(ei.value)
+
+
+def test_validate_weights_reject_non_dict_top(tmp_path):
+    """合法 zip + data.pkl 顶层为裸 tensor (非 dict) → 慢路径顶层校验拒绝。"""
+    import io
+    import pickle
+    import zipfile
+
+    import torch
+
+    from adr.models.gsv_engine import validate_weights_file
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("archive/data.pkl", pickle.dumps([1, 2, 3]))
+    p = tmp_path / "bare.pth"
+    p.write_bytes(buf.getvalue())
+    with pytest.raises(ValueError, match="dict of tensors"):
+        validate_weights_file(str(p))
+
+
+def test_validate_weights_reject_garbage_file(tmp_path):
+    """文本垃圾文件 → 快慢路径全拒 (BadZipFile), ValueError 带路径。"""
+    from adr.models.gsv_engine import validate_weights_file
+
+    p = tmp_path / "garbage.pth"
+    p.write_text("this is not a weights file")
+    with pytest.raises(ValueError, match="garbage.pth"):
+        validate_weights_file(str(p))
