@@ -24,15 +24,18 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from adr.models import voice_library
-from adr.server import pathsafe, tts_cache
-from adr.server.audio_codec import pack_audio, to_int16, wave_header_chunk
+from adr.core.exceptions import (
+    ProfileInvalidError,
+    ProfileNotFoundError,
+    SynthesisParamsError,
+)
+from adr.server import tts_cache
+from adr.server.audio_codec import pack_audio, to_int16
+from adr.services import SynthesisService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2", tags=["tts"])
-
-MEDIA_TYPES = {"wav", "mp3", "raw", "ogg", "aac"}
 
 
 class TTS_Request(BaseModel):
@@ -82,74 +85,57 @@ def _resolve_profile(request: Request, req: dict):
     if not profile:
         profile = getattr(request.app.state, "default_profile", None)
     if profile:
-        # Track B 收口: 档案名必须是单段纯名, ../ 穿越读任意 voice.json 一律 400
-        if not pathsafe.is_safe_name(profile):
-            return JSONResponse(status_code=400,
-                                content={"message": f"invalid profile name: {profile}"})
+        # 批次34: 名称安全 (../ 穿越一律 400) 与档案回填语义收口至 SynthesisService
         try:
-            meta = voice_library.load_voice(profile)
-        except Exception:
-            return JSONResponse(status_code=400,
-                                content={"message": f"unknown profile: {profile}"})
-        # 请求显式值优先; 档案值兜底
-        if not req.get("ref_audio_path"):
-            req["ref_audio_path"] = meta["ref_audio"]
-        if not req.get("prompt_text"):
-            req["prompt_text"] = meta.get("prompt_text") or ""
-        if req.get("vits_weights") is None:
-            req["vits_weights"] = meta.get("vits_weights")
-        if req.get("t2s_weights") is None:
-            req["t2s_weights"] = meta.get("t2s_weights")
+            meta = SynthesisService.load_profile(profile)
+        except (ProfileInvalidError, ProfileNotFoundError) as e:
+            return JSONResponse(status_code=400, content={"message": str(e)})
+        req.update(SynthesisService.profile_fill(
+            meta,
+            ref_audio_path=req.get("ref_audio_path"),
+            prompt_text=req.get("prompt_text"),
+            t2s_weights=req.get("t2s_weights"),
+            vits_weights=req.get("vits_weights"),
+        ))
     return None
 
 
 def _check_params(req: dict):
-    """必填项 + media_type 白名单。返回错误 Response 或 None。"""
-    if not req.get("text"):
-        return JSONResponse(status_code=400, content={"message": "text is required"})
-    if not req.get("ref_audio_path"):
-        return JSONResponse(status_code=400,
-                            content={"message": "ref_audio_path is required "
-                                                "(or pass profile / set ADR_TTS_DEFAULT_PROFILE)"})
-    media_type = (req.get("media_type") or "wav").lower()
-    if media_type not in MEDIA_TYPES:
-        return JSONResponse(status_code=400,
-                            content={"message": f"unsupported media_type: {media_type}, "
-                                                f"must be one of wav/mp3/raw/ogg/aac"})
-    req["media_type"] = media_type
+    """必填项 + media_type 白名单 (批次34 收口至 SynthesisService)。
+
+    返回错误 Response 或 None。
+    """
+    try:
+        req["media_type"] = SynthesisService.validate_params(
+            req.get("text"), req.get("ref_audio_path"), req.get("media_type"))
+    except SynthesisParamsError as e:
+        return JSONResponse(status_code=400, content={"message": str(e)})
     return None
 
 
 def _stream_generator(engine, req: dict, media_type: str):
     """同步生成器: StreamingResponse 在线程池内迭代 (不堵事件循环)。
 
-    字节契约 (GSV api_v2): media_type=wav 时首块发 44B WAV 头,
-    之后全部为裸 s16le PCM 块; ogg/aac 逐块独立编码。
+    字节契约 (GSV api_v2, 批次34 收口至 SynthesisService.stream_bytes):
+    media_type=wav 时首块发 44B WAV 头, 之后全部为裸 s16le PCM 块;
+    ogg/aac 逐块独立编码。
     """
-    first = True
-    mt = media_type
     try:
-        # 注意: ADR 引擎 yield (chunk, sr) — 与 GSV pipeline 的 (sr, chunk) 相反
-        for chunk, sr in engine.synthesize_stream(
-            req["text"], req["ref_audio_path"],
+        yield from SynthesisService.stream_bytes(
+            engine, req["text"], req["ref_audio_path"], media_type=media_type,
             prompt_text=req.get("prompt_text") or "",
             text_lang=req.get("text_lang") or "zh",
             prompt_lang=req.get("prompt_lang") or "zh",
             t2s_weights=req.get("t2s_weights"),
             vits_weights=req.get("vits_weights"),
-            split_method=req.get("text_split_method") or "cut3",
+            split_method=req.get("text_split_method"),
             head_seed=req.get("seed", -1),
             top_k=req.get("top_k", 15),
             top_p=req.get("top_p", 1.0),
             temperature=req.get("temperature", 1.0),
             speed_factor=req.get("speed_factor", 1.0),
             fragment_interval=req.get("fragment_interval"),
-        ):
-            if first and mt == "wav":
-                yield wave_header_chunk(sample_rate=sr)
-                mt = "raw"
-                first = False
-            yield pack_audio(BytesIO(), to_int16(chunk), sr, mt).getvalue()
+        )
     except Exception as e:
         # 流已开始, 无法改写状态码 — 记录后终止 (与 GSV api_v2 行为一致)
         logger.exception("streaming tts failed: %s", e)
@@ -198,8 +184,8 @@ async def tts_handle(req: dict, request: Request) -> Response:
         if cached is not None:
             return Response(cached, media_type=f"audio/{media_type}")
         audio, sr = await asyncio.to_thread(
-            engine.synthesize,
-            req["text"], req["ref_audio_path"],
+            SynthesisService.synthesize_once,
+            engine, req["text"], req["ref_audio_path"],
             prompt_text=req.get("prompt_text") or "",
             text_lang=req.get("text_lang") or "zh",
             prompt_lang=req.get("prompt_lang") or "zh",
@@ -207,7 +193,7 @@ async def tts_handle(req: dict, request: Request) -> Response:
             seed=req.get("seed", -1),
             t2s_weights=req.get("t2s_weights"),
             vits_weights=req.get("vits_weights"),
-            split_method=req.get("text_split_method") or "cut1",
+            split_method=req.get("text_split_method"),
             top_k=req.get("top_k", 15),
             top_p=req.get("top_p", 1.0),
             temperature=req.get("temperature", 1.0),

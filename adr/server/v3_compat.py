@@ -27,8 +27,7 @@ from typing import Optional
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 
 from adr.models import voice_library
-from adr.server import pathsafe
-from adr.server.audio_codec import to_int16, wave_header_chunk
+from adr.services import SynthesisService
 
 logger = logging.getLogger(__name__)
 
@@ -93,11 +92,9 @@ def _resolve_voice(voice_id: str, app) -> Optional[dict]:
                 or (voice_library.list_voices() or [None])[0])
     if not name:
         return None
-    # Track B 收口: voice_id 必须是单段纯名, ../ 穿越读任意 voice.json → None
-    if not pathsafe.is_safe_name(name):
-        return None
+    # 批次34: 名称安全 + 加载收口至 SynthesisService; 失败静默 None (批次35 修)
     try:
-        return voice_library.load_voice(name)
+        return SynthesisService.load_profile(name)
     except Exception:
         return None
 
@@ -189,14 +186,14 @@ async def tts_ws_stream_input(websocket: WebSocket):
             gen = None
             try:
                 samp = voice.get("sampling") or {}
-                gen = _engine().synthesize_stream(
-                    text, voice["ref_audio"],
+                gen = SynthesisService.stream_chunks(
+                    _engine(), text, voice["ref_audio"],
                     prompt_text=voice.get("prompt_text") or "",
                     text_lang=overrides.get("text_lang") or "zh",
                     prompt_lang="zh",
                     t2s_weights=voice.get("t2s_weights"),
                     vits_weights=voice.get("vits_weights"),
-                    split_method=overrides.get("text_split_method") or "cut3",
+                    split_method=overrides.get("text_split_method"),
                     head_seed=overrides.get("seed", -1),
                     top_k=samp.get("top_k", 15),
                     top_p=samp.get("top_p", 1.0),
@@ -206,8 +203,7 @@ async def tts_ws_stream_input(websocket: WebSocket):
                 for chunk, sr in gen:
                     if cancel.is_set():
                         break
-                    frame = wave_header_chunk(sample_rate=sr) + \
-                        to_int16(chunk).tobytes()
+                    frame = SynthesisService.frame_bytes(chunk, sr)
                     loop.call_soon_threadsafe(_put, frame)
             except Exception as e:
                 if not cancel.is_set():
