@@ -571,3 +571,72 @@
 - [x] **验证** ✅: test_server_api + test_server_security + test_data_pipeline + test_models 定向 105 passed + 1 skipped; 实测确认 torch.load(weights_only=True) 只放行 torch.save 产物 (裸 pickle.dumps protocol-4 流被拒 — 恶意 pickle 校验有效性得到真实负载验证)
 - **设计要点**: 校验单点在引擎换权分支 (安全必须覆盖未来入口), 早检仅为流式 400 体验 (Response 已发出后无法改状态码); weights_only unpickler 对非 torch.save 格式天然拒绝 — "合法放行"判据与真实 .pth 权重格式一致, 无误杀面
 - **后续批次**: 39 P1 训练正确性 → 40 P1 服务/推理/壳 → 41 P2+安全P3 → 42 v1.0.0 打包
+
+### 批次 38 补丁 (2026-10-06): test_ensure_weights_skip_same_path 适配引擎安全校验
+
+> 全量 pytest 唯一失败项: 该测试用假路径 `/w/a.pth` 直调 `_ensure_weights`, 被批次38 新接入的 `validate_weights_file` 以 FileNotFoundError 拒绝 — 测试与新安全语义冲突, 非产品代码缺陷。
+
+- [x] **修复**: 测试改 tmp_path + `torch.save({"w": torch.zeros(3)}, w)` 构造三个真实权重文件 (a.pth/b.ckpt/other.pth), 幂等跳过/热换语义断言全部保留
+- [x] **验证** ✅: test_stream_latency 4 passed; 全量 403 passed + 1 skipped 零失败
+
+### 批次 39 (2026-10-06): Review P1 训练正确性 — resume 进度/GradScaler/shape 预检/clamp/梯度累积 (子代理并行)
+
+> 训练域五项正确性修复: 断点续训从零计数、AMP scaler 状态丢失、shape 错配静默跳过、cosine 越界 LR 反弹、WarmRestart 周期被梯度累积放大。
+
+- [x] **resume 进度恢复**: trainer `__init__` 增 `_start_epoch/_start_global_step/current_epoch/global_step`; `load_checkpoint` 回填进度 (旧 ckpt 缺键 → warning + 默认 0); `fit()` 从 `_start_epoch` 起循环, global_step 从 `_start_global_step` 起步 (cli.py 的 load→fit 流程自动获得断点续训能力)
+- [x] **GradScaler 状态入 ckpt**: save 时 `ckpt["scaler"]=scaler.state_dict()` (存在才写); resume 时 AMP+fp16 启用才 load, 异常/未启用 warning 容错
+- [x] **shape mismatch 预检 raise**: 非 LoRA 分支加载前键交集 shape 预检, 不一致 `RuntimeError` (含 key/期望/实际 shape); strict=False 降级分支保留原容错 (missing→info, unexpected→warning); `lora.py::load_lora_state_dict` 对 lora_A/lora_B 键存在但 shape 不一致 raise — **键缺失容错语义完整保留, 不误伤 LoRA 场景**
+- [x] **cosine clamp**: `optimizer.cosine/warmup_cosine` progress `min(max(x,0),1)` — 越步不再 cos 回升导致 LR 反弹
+- [x] **WarmRestart total_steps**: `_do_restart` 改 `max(1, ceil(len(loader)/grad_accum) × remaining_epochs)`, 与 trainer.fit 的 scheduler 步进边界一致
+- [x] **测试** (+11): resume 进度往返/旧 ckpt 缺键 warning/scaler 1234.5 往返/shape mismatch raise/missing 不误伤/cosine 越界 clamp (parametrize)/grad_accum=2 重启周期减半
+- [x] **验证** ✅: 定向 56 passed (基线 45+11), 无新增失败; 排查记录 — grad_accum 测试初跑失败根因是本机 CUDA 环境 use_amp 默认开, GradScaler 初期梯度溢出跳步致 lr 停在 warmup 起点 λ(0)=0 触发 min_lr 保护 (修复逻辑经 λ 数学实证正确), 测试侧显式 use_amp=False 隔离
+- **设计要点**: "键存在但 shape 不符" 与 "键缺失" 是两类错误 — 前者必是配置错配要炸, 后者是 LoRA/微调的预期形态要容; resume 进度存 ckpt 键而非独立文件, 向后兼容旧存档
+
+### 批次 40 (2026-10-06): Review P1 服务/推理/壳 — 缓存账目/原子下载/chdir 互斥/热路径向量化/壳 Phase (子代理并行)
+
+> 五项: tts_cache 字节账目漂移 + stat race; hub 下载非原子中断留损坏文件; RVC/DiffSinger chdir 与 GSV 并发互踩; sovits 推理热路径 .item() 同步风暴; 壳 Prewarming 先于探活。
+
+- [x] **tts_cache 账目**: 缓存条目 3 元组化 `(bytes, fname, 记账 size)` — 磁盘条目按 st_size、内存条目按 len(data) 记账; 逐出/覆盖/读失败一律按记录值回减 (修复磁盘条目 `len(b"")=0` 导致的 `_total_bytes` 只增不减); `_disk_load_locked` 一次 stat 同时取 mtime+size, OSError/FileNotFoundError 容错跳过 (race: 文件刚被逐出删除)
+- [x] **hub 原子下载**: 同目录 `.part` 中转 → Content-Length 核对 → SHA256 在 .part 上验 → `os.replace` 原子改名; 失败只清 .part 不误删旧文件
+- [x] **chdir 互斥**: rvc_engine `_rvc_context` / diffsinger_engine `_v1_context` 复用 `gsv_engine._CHDIR_LOCK` (RLock 可重入) — chdir 是进程级全局状态, 三引擎 yield 窗口必须互斥; 函数内导入避免模块顶部拉起 GSV 依赖链
+- [x] **sovits 向量化**: `expand` 逐元素 .item() 循环改 `torch.repeat_interleave` 一次展开 + clamp(min=0) (等价 d<=0 跳过) + [:max_len] 截断 (等价 end=min(pos+d,max_len)), 数值语义等价, 消 GPU→CPU 同步风暴
+- [x] **壳 Phase**: `start_and_wait` 探活成功 (start_server 内 wait_healthy 200) 才置 Prewarming — 维持不变式 "Prewarming: 服务已 healthy", 前端零感知 (两态都映射 loading); `skip_prewarm` 加 pid!=0 前置 (服务被杀/未启动时不再谎报 Ready); `kill_current` taskkill 结果落 proc_log 留痕 (reap_log 泛化为 proc_log(tag,msg))
+- [x] **验证** ✅: cargo check 5.22s 零错误; 相关 pytest 随全量绿; 汇报虽丢失, diff 经主线程逐文件 review 确认 (账目回减口径/原子写/chdir try-finally/向量化语义等价/Phase 不变式)
+- **设计要点**: 缓存记账与磁盘重建扫描必须同口径 (st_size), 否则重启后账目立即漂移; "探活后置" 本质是 Phase 状态机不变式修复 — 不变式对了, 行为自然对
+
+### 批次 41a (2026-10-06): Review 安全硬化 — 档案名穿越/错误码/常量时间比较/单例锁/原子写/默认回环/CSP (子代理并行)
+
+> 六项安全硬化, wire 兼容原则: detail 文本逐字保留只增 code 字段。
+
+- [x] **console 档案名**: `profile_create` 的清洗+is_safe_name 校验挪到音频存在性检查之前 (恶意请求无需文件存在即被拒); 非法名 → 400 `code=profile_invalid` (新建 `adr/server/exceptions.py`: ProfileNameInvalid + 状态码→code 码表, 自定义 code 优先)
+- [x] **HTTP 错误码**: app.py 新增 StarletteHTTPException handler — `{"detail": 原文, "code": 新字段}`; 422 不经此 handler 保持 FastAPI 默认形态
+- [x] **auth 常量时间**: 原已是 compare_digest 但 str 版遇非 ASCII 抛 TypeError (异常路径泄漏比较结果) → `hmac.compare_digest(bytes)` (utf-8+surrogateescape), 任意输入恒定时间不抛错
+- [x] **gsv 单例锁**: `get_gsv_engine()` 双重检查锁 (_ENGINE_LOCK) — 快路径无锁, 多线程首次并发只建一个实例
+- [x] **voice_library**: 模块级 is_safe_name (独立实现 — server/__init__ 级联引入 fastapi, models 层不能反向 import) + `resolve().relative_to()` 兜底 Windows 盘符陷阱 (`Path(root)/"C:evil"` 整体替换路径); meta.json 原子写 (.tmp + os.replace)
+- [x] **默认回环 + README**: `--addr` 默认 0.0.0.0 → 127.0.0.1 (显式 0.0.0.0 的警告横幅保留); README 删虚假的 ADR_TTS_PORT 行 (grep 证实全仓库不存在), 新增 "局域网访问与安全" 小节 (--addr 0.0.0.0 必配 ADR_TTS_API_KEY)
+- [x] **CSP 基线**: 自有 4 页 (index/pro/easy/call.html) 加 CSP meta — `default-src 'self'` + 内联/blob 最低放宽; Gradio 自动生成页不动
+- [x] **测试** (+9): is_safe_name 拒绝绝对路径/盘符名 / auth spy 验证走 compare_digest / 非 ASCII 凭据不抛 TypeError / console 穿越 `..` 400+code / 默认名「我的声音」不误拒 (is_safe_name 用仓库既有 pathsafe.py 规则而非纯 ASCII 白名单 — 保住中文默认名 wire 兼容) / 409 带 code / voice_library 恶意名 ValueError+无穿越产物 / meta.json 原子落盘
+- [x] **验证** ✅: 定向 63 passed (security 22 + settings 14 + error_protocol 27), wire 兼容零回归
+- **设计要点**: 错误码增量式演进 (只增 code 不改 detail) 保既有客户端; models 层禁止 import server 包是分层硬约束 — 校验函数宁可复制不可跨层
+
+### 批次 41b (2026-10-06): Review 健壮性杂项 — config 校验/跳样本/doctor/ffmpeg/清理/_legacy 删除 (子代理并行)
+
+> P2/P3 杂项八项 + 清理两项; review 行号普遍有偏移, 子代理按实际代码重新定位。
+
+- [x] **config**: 无效 preset → ValueError (列合法值), config_path 不存在 → FileNotFoundError, 打包场景 preset yaml 缺失 → warning+内置默认; 未知键 warning (含键名与类名) 不再静默
+- [x] **fragment_interval**: 空串/非数值/负数/非有限值 → warning+回退 0.3 (settings 层容错)
+- [x] **pipeline**: F0/Mel 失败切片跳过不再带空 f0 入库; sample_id 改 `文件名_md5(路径)前8位_切片序号` 防跨目录同名覆盖; 顺带修复 AudioSlice 无 mel 字段时 Build 必崩 AttributeError (mock 测试暴露)
+- [x] **doctor**: 硬编码 `F:\` 改 `adr_data_dir().anchor` 实际数据盘符; onnxruntime 未安装独立 warn 降级 (仅影响 RVC, 不再整节崩)
+- [x] **ffmpeg**: `_resolve_ffmpeg()` 三回退 (PATH → bundled third_party/gpt_sovits/ffmpeg.exe → RuntimeError 中文指引), pack_ogg/mp3/aac 三处接线
+- [x] **separate**: `/tmp` 硬编码 (Windows 不存在) → `tempfile.gettempdir()`; 分离输出文件纳入 finally 清理 (原缺口: 只清输入副本不清输出)
+- [x] **device**: 请求 cuda 但不可用 → warning 说明回退原因 (未装 CUDA 版 torch/无 N 卡/驱动未就绪)
+- [x] **strict 加载**: from_checkpoint 删 "strict 失败盲目 strict=False 重载" — 预检 unexpected keys/shape 不符 raise, missing keys (LoRA 预期) warning + strict=False
+- [x] **清理**: `adr/_legacy/` 整目录删除 (全项目 grep 零引用, pyproject exclude 同步移除); pyproject `gradio>=4.0` → `gradio>=6` (lock 已 6.4.0 不矛盾)
+- [x] **测试** (+9): 无效 preset raise / fragment_interval 容错 / F0 全失败+部分失败跳过 / 跨目录 sample_id 唯一 / CUDA 回退 caplog / roundtrip / unexpected raise / shape mismatch raise / missing warn
+- [x] **验证** ✅: 定向 67 passed + 1 skipped; 全项目 ast 语法通过; `import adr` 正常
+- **设计要点**: "容错" 与 "静默" 的分界 — 数值类输入容错回退 (fragment_interval), 结构类错误必须炸 (preset 名错配), 环境缺失降级提示 (onnxruntime/ffmpeg); 删码先证零引用再动手
+
+### 批次 39–41 小结
+
+> 四批并行子代理 (39/40/41a/41b, 文件域互不重叠) + 主线程 diff review + 分批 commit。40 汇报丢失但改动落盘完整, 经逐文件 diff review 验收。全量验证: **403 passed + 1 skipped (零失败), cargo check 零错误**。Commits: 38补丁 455406a → 39 ea96b64 → 40 2f033a0 → 41a d6477dd → 41b a2572d6。Review 报告的 P0×2 (批次38) + P1×8 (批次39/40) + P2×12 + P3×14 (批次41a/41b) 全部闭环, 余项转入批次 42 v1.0.0 打包。
+- **后续批次**: 42 v1.0.0 — 版本四面统一 + tauri build 安装包 + git tag
