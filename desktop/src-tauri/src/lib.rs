@@ -8,8 +8,10 @@
 //!    - pro/easy: 复用常驻 FastAPI 服务秒进 (引擎已预热, 不再杀进程)
 //! 3. 健康探活: legacy 探 ``GET /``; pro/easy 探 ``GET /api/adr/v1/health``
 //! 4. 进程守护: 服务意外退出按同 mode 自动重启 (稳定 60s 重置失败计数, 上限 4 次)
-//! 5. 托盘: 显示窗口 / 返回启动器 / 浏览器打开 / 退出 (退出时 taskkill /T 杀整棵进程树)
-//! 6. 关窗 = 隐藏到托盘, 真正退出只走托盘菜单
+//! 5. 孤儿收编 (批次37): 壳崩溃/强杀会遗留 python 服务孤儿 (占显存/9881 端口),
+//!    启动预热前按命令行特征扫描收编 (kill 整棵树)
+//! 6. 托盘: 显示窗口 / 返回启动器 / 浏览器打开 / 退出 (退出时 taskkill /T 杀整棵进程树)
+//! 7. 关窗 = 隐藏到托盘, 真正退出只走托盘菜单
 //!
 //! Python 解释器解析优先级:
 //! 1. 便携模式: ``<exe目录>/runtime/python/python.exe`` (打包后的绿色运行时)
@@ -24,7 +26,7 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
 use tauri::{
@@ -53,6 +55,22 @@ const TAURI_ORIGIN: &str = "http://tauri.localhost";
 #[cfg(not(windows))]
 const TAURI_ORIGIN: &str = "tauri://localhost";
 
+/// 服务生命周期状态机 (批次37): 显式四态替代原 prewarm_done 布尔与散落组合。
+/// 转换图: Stopped → Starting → Prewarming → Ready → (kill) → Stopped
+/// - Stopped:    无服务进程 (初始 / kill_current / 探活失败)
+/// - Starting:   进程已 spawn, health 探活未过 (engine_status → "loading")
+/// - Prewarming: 服务已 healthy, prewarm_flow 轮询引擎预热中 ("loading")
+/// - Ready:      引擎就绪, 或用户强制放行 / 预热超时放行 (秒进通道开放, "ready")
+/// 两条不变式保证枚举与进程一致: pid 写入处必置 Starting, pid 清零处必置 Stopped。
+#[repr(u8)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    Stopped = 0,
+    Starting = 1,
+    Prewarming = 2,
+    Ready = 3,
+}
+
 /// 共享状态: sidecar PID (0 = 未运行)、就绪后的服务地址、当前控制台模式。
 struct ServerState {
     pid: AtomicU32,
@@ -61,8 +79,22 @@ struct ServerState {
     mode: Mutex<String>,
     /// 调用模式: true = 服务监听 0.0.0.0 (局域网可调用 API), false = 仅 127.0.0.1
     expose: AtomicBool,
-    /// 引擎已就绪 (预热完成或用户强制放行): launcher 的 pro/easy 走秒进通道
-    prewarm_done: AtomicBool,
+    /// 生命周期状态机 (批次37, 替代原 prewarm_done: AtomicBool)
+    phase: AtomicU8,
+}
+
+impl ServerState {
+    fn phase(&self) -> Phase {
+        match self.phase.load(Ordering::Relaxed) {
+            1 => Phase::Starting,
+            2 => Phase::Prewarming,
+            3 => Phase::Ready,
+            _ => Phase::Stopped,
+        }
+    }
+    fn set_phase(&self, p: Phase) {
+        self.phase.store(p as u8, Ordering::Relaxed);
+    }
 }
 
 /// 退出标记: 托盘退出 / RunEvent::Exit 时置位, supervise 轮询后收尾。
@@ -80,7 +112,7 @@ pub fn run() {
                 base_url: Mutex::new(None),
                 mode: Mutex::new(String::new()),
                 expose: AtomicBool::new(false),
-                prewarm_done: AtomicBool::new(false),
+                phase: AtomicU8::new(Phase::Stopped as u8),
             });
 
             // 主窗口: 代码创建 (替代 tauri.conf.json windows), 以便挂 on_download —
@@ -256,7 +288,7 @@ async fn enter_console(app: AppHandle, mode: String, expose: Option<bool>) -> Re
 #[tauri::command]
 fn on_launcher_ready(app: AppHandle) {
     let state: State<ServerState> = app.state();
-    let tip = if state.prewarm_done.load(Ordering::Relaxed) {
+    let tip = if state.phase() == Phase::Ready {
         "ADR Studio — 引擎已预热 (启动器)"
     } else {
         "ADR Studio — 引擎加载中 (启动器)"
@@ -267,15 +299,14 @@ fn on_launcher_ready(app: AppHandle) {
 }
 
 /// 引擎当前状态 (launcher 顶栏显示): 未启动 / 加载中 / 已预热。
+/// 批次37: 按 Phase 状态机映射, 输出形状不变 (前端零改动)。
 #[tauri::command]
 fn engine_status(app: AppHandle) -> serde_json::Value {
     let state: State<ServerState> = app.state();
-    let running = state.pid.load(Ordering::Relaxed) != 0;
-    let ready = state.prewarm_done.load(Ordering::Relaxed);
-    let phase = match (running, ready) {
-        (false, _) => "stopped",
-        (true, true) => "ready",
-        (true, false) => "loading",
+    let phase = match state.phase() {
+        Phase::Stopped => "stopped",
+        Phase::Starting | Phase::Prewarming => "loading",
+        Phase::Ready => "ready",
     };
     serde_json::json!({ "phase": phase })
 }
@@ -284,7 +315,7 @@ fn engine_status(app: AppHandle) -> serde_json::Value {
 #[tauri::command]
 fn skip_prewarm(app: AppHandle) {
     let state: State<ServerState> = app.state();
-    state.prewarm_done.store(true, Ordering::Relaxed);
+    state.set_phase(Phase::Ready);
     let window = app.get_webview_window("main");
     navigate(&window, &format!("{TAURI_ORIGIN}/launcher.html"));
 }
@@ -294,8 +325,7 @@ fn skip_prewarm(app: AppHandle) {
 async fn retry_prewarm(app: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state: State<ServerState> = app.state();
-        state.prewarm_done.store(false, Ordering::Relaxed);
-        kill_current(&state);
+        kill_current(&state); // 置 Stopped (批次37 状态机), 预热流程内再转 Starting
         let window = app.get_webview_window("main");
         navigate(&window, &format!("{TAURI_ORIGIN}/prewarm.html"));
         std::thread::sleep(Duration::from_millis(600));
@@ -386,10 +416,9 @@ fn launch_blocking(app: AppHandle, mode: String, expose: bool) -> Result<String,
     let state: State<ServerState> = app.state();
 
     // 服务互斥: 切换前杀旧 sidecar, 等端口释放
-    kill_current(&state);
+    kill_current(&state); // 置 Stopped (批次37 状态机); start_server 成功后转 Starting
     *state.mode.lock().unwrap() = mode.clone();
     state.expose.store(expose, Ordering::Relaxed);
-    state.prewarm_done.store(false, Ordering::Relaxed); // 冷启动, 引擎待重新预热
     std::thread::sleep(Duration::from_millis(600));
 
     navigate(&window, &format!("{TAURI_ORIGIN}/loading.html"));
@@ -519,6 +548,8 @@ fn start_server(
     }
     state.pid.store(child.id(), Ordering::Relaxed);
     *state.base_url.lock().unwrap() = Some(base.clone());
+    // 不变式 (批次37): pid 写入 → Starting
+    state.set_phase(Phase::Starting);
 
     let health_path = if mode == "legacy" { "/" } else { "/api/adr/v1/health" };
     update_status(window, "引擎加载中… 首次启动导入 torch/CUDA 较慢");
@@ -530,6 +561,8 @@ fn start_server(
         if state.pid.load(Ordering::Relaxed) == child.id() {
             state.pid.store(0, Ordering::Relaxed);
             *state.base_url.lock().unwrap() = None;
+            // 不变式 (批次37): pid 清零 → Stopped
+            state.set_phase(Phase::Stopped);
         }
         update_status(window, "启动超时, 请检查 Python 环境 (180s 探活超时)");
         return None;
@@ -574,6 +607,11 @@ fn prewarm_flow(app: AppHandle) {
     let window = app.get_webview_window("main");
     let state: State<ServerState> = app.state();
 
+    eval_prewarm(&window, "starting", "正在检查遗留服务进程…");
+    // 孤儿收编 (批次37): 壳上次异常退出 (崩溃/强杀/断电) 会遗留 python 服务孤儿,
+    // 占显存与 9881 端口 → 预热撞端口被迫回退随机端口。先收编再启动;
+    // 查询失败时内部记日志放行, 不阻塞预热。
+    reap_orphans();
     eval_prewarm(&window, "starting", "正在启动本地服务…");
     let Some((child, started)) = start_server("pro", &window, &state) else {
         eval_prewarm(&window, "failed", "服务启动失败, 请检查 Python 环境后重试");
@@ -584,6 +622,9 @@ fn prewarm_flow(app: AppHandle) {
     // 守护线程: 服务常驻, launcher 的 pro/easy 走秒进通道
     let h = app.clone();
     std::thread::spawn(move || supervise(h, "pro".to_string(), child, started));
+
+    // 服务已 healthy, 转入引擎预热轮询 (批次37 状态机)
+    state.set_phase(Phase::Prewarming);
 
     // 轮询引擎预热阶段 (queued → importing → loading → kernel → ready)
     let deadline = Instant::now() + PREWARM_TIMEOUT;
@@ -623,8 +664,8 @@ fn prewarm_flow(app: AppHandle) {
         std::thread::sleep(Duration::from_millis(500));
     }
 
-    // 就绪: 放行进启动器
-    state.prewarm_done.store(true, Ordering::Relaxed);
+    // 就绪 (ready 或超时放行): 秒进通道开放 (批次37 状态机)
+    state.set_phase(Phase::Ready);
     if let Some(t) = app.tray_by_id("adr-tray") {
         let _ = t.set_tooltip(Some("ADR Studio — 引擎已预热 (启动器)"));
     }
@@ -660,6 +701,8 @@ fn supervise(app: AppHandle, mode: String, mut child: Child, mut started: Instan
         let _ = child.kill();
         state.pid.store(0, Ordering::Relaxed);
         *state.base_url.lock().unwrap() = None;
+        // 不变式 (批次37): pid 清零 → Stopped (随后 start_and_wait 内转 Starting)
+        state.set_phase(Phase::Stopped);
 
         // 稳定运行够久 → 视为一次成功, 重置失败计数
         if started.elapsed() >= STABLE_UPTIME {
@@ -697,6 +740,8 @@ fn kill_current(state: &State<ServerState>) {
     if pid != 0 {
         kill_tree(pid);
         *state.base_url.lock().unwrap() = None;
+        // 不变式 (批次37): pid 清零 → Stopped
+        state.set_phase(Phase::Stopped);
     }
 }
 
@@ -708,12 +753,93 @@ fn shutdown_server(app: &AppHandle) {
 }
 
 /// Windows 下杀整棵进程树 (uvicorn/gradio 可能带子进程)。
-fn kill_tree(pid: u32) {
+/// 返回 taskkill 是否成功 — 驱动挂死/提权进程会 Access denied (批次37 实测),
+/// 收编方据此记日志, 不静默吞掉。
+fn kill_tree(pid: u32) -> bool {
     let mut cmd = Command::new("taskkill");
     cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
-    let _ = cmd.output();
+    cmd.output().map(|o| o.status.success()).unwrap_or(false)
+}
+
+// ---------------------------------------------------------------------------
+// 孤儿收编 (批次37): 壳崩溃/强杀/断电时 taskkill 不会执行, python 服务进程
+// 成为孤儿 — 占显存、占 9881 端口 (下次预热被迫回退随机端口)。壳启动预热前
+// 扫描本机 python 进程, 按命令行特征识别 ADR 服务孤儿并杀整棵树。
+// ---------------------------------------------------------------------------
+
+/// 扫描并收编孤儿服务进程 (幂等)。
+/// 匹配口径宁窄勿宽: 命令行含 ``-m adr.server`` (pro/easy FastAPI 服务) 或
+/// ``-m adr.cli webui`` (legacy Gradio) — 恰是壳拉起服务的两种形状;
+/// 刻意不匹配 ``-m adr.cli`` 其他子命令 (如 train), 训练进程绝不能被误杀。
+fn reap_orphans() {
+    let Some(procs) = list_python_processes() else {
+        reap_log("PowerShell 查询失败, 本次跳过收编");
+        return;
+    };
+    let mut killed = 0u32;
+    for (pid, cmdline) in procs {
+        let mine = cmdline.contains("-m adr.server") || cmdline.contains("-m adr.cli webui");
+        if !mine {
+            continue;
+        }
+        if kill_tree(pid) {
+            killed += 1;
+            reap_log(&format!("收编孤儿 pid={pid}: {cmdline}"));
+        } else {
+            // 驱动挂死 (CUDA 卡死) / admin 提权进程: 用户态杀不掉, 记日志放行
+            reap_log(&format!("收编失败 (taskkill Access denied) pid={pid}: {cmdline}"));
+        }
+    }
+    if killed > 0 {
+        reap_log(&format!("共收编 {killed} 个孤儿进程"));
+    }
+}
+
+/// 列出本机 python* 进程的 (pid, 命令行)。
+/// 输出为制表符分隔逐行解析 — 规避 PS 5.1 ConvertTo-Json 单对象/数组形态差异;
+/// 输出编码强制 UTF-8 (默认 OEM 代码页, 命令行含中文路径时丢字)。
+fn list_python_processes() -> Option<Vec<(u32, String)>> {
+    let script = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; \
+        Get-CimInstance Win32_Process -Filter \"Name LIKE 'python%'\" | \
+        ForEach-Object { \"{0}`t{1}\" -f $_.ProcessId, $_.CommandLine }";
+    let mut cmd = Command::new("powershell");
+    cmd.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let out = cmd.output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut procs = Vec::new();
+    for line in text.lines() {
+        let Some((pid, cmdline)) = line.split_once('\t') else {
+            continue;
+        };
+        if let Ok(p) = pid.trim().parse::<u32>() {
+            procs.push((p, cmdline.to_string()));
+        }
+    }
+    Some(procs)
+}
+
+/// 收编日志追加到服务日志 (server_log_path(), 与 server 流日志同文件排障)。
+fn reap_log(msg: &str) {
+    use std::io::Write;
+    let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(server_log_path())
+    else {
+        return;
+    };
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let _ = writeln!(f, "===== [reap {ts}] {msg}");
 }
 
 /// 轮询健康端点直到 200 或超时 (legacy: Gradio 首页; pro/easy: FastAPI health)。
