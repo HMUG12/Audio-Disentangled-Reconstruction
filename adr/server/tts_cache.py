@@ -15,6 +15,9 @@
 内存延迟到首次命中 (盘上只记文件名), 启动零读盘成本。
 目录可用 ADR_TTS_CACHE_DIR 覆盖 (测试隔离用)。
 
+批次36: env 读取单源化 — 开关/目录/上限委托 adr/core/settings.py,
+本模块只保留缓存数据结构与算法。
+
 纯标准库, 线程安全 (tts_handle 的查/填跑在事件循环线程, 但合成
 在线程池, 用锁保护避免并发交错下的 dict 竞态)。
 """
@@ -27,10 +30,7 @@ import threading
 from collections import OrderedDict
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-
-DEFAULT_MAX_ENTRIES = 32
-DEFAULT_MAX_BYTES = 256 * 1024 * 1024
+from adr.core import settings
 
 # 参与 key 的请求字段 (seed 有意排除, 见模块 docstring)
 # fragment_interval 烤进输出音频 (句末静音长度), 必须参与 key (批次33)
@@ -48,27 +48,19 @@ _loaded = False  # 缓存目录是否已扫描重建 (惰性, 首次 get/put 触
 
 
 def enabled() -> bool:
-    return os.environ.get("ADR_TTS_CACHE", "1") != "0"
+    return settings.tts_cache_enabled()
 
 
 def _dir() -> Path:
-    env = os.environ.get("ADR_TTS_CACHE_DIR")
-    return Path(env) if env else REPO_ROOT / "data" / "tts_cache"
+    return settings.tts_cache_dir()
 
 
 def _max_entries() -> int:
-    try:
-        return max(1, int(os.environ.get("ADR_TTS_CACHE_MAX", DEFAULT_MAX_ENTRIES)))
-    except ValueError:
-        return DEFAULT_MAX_ENTRIES
+    return settings.tts_cache_max_entries()
 
 
 def _max_bytes() -> int:
-    try:
-        return max(0, int(os.environ.get("ADR_TTS_CACHE_MB", 0)) * 1024 * 1024) \
-            or DEFAULT_MAX_BYTES
-    except ValueError:
-        return DEFAULT_MAX_BYTES
+    return settings.tts_cache_max_bytes()
 
 
 def make_key(req: dict) -> str:

@@ -9,15 +9,18 @@ gsv_engine (单向依赖本模块)。gsv_engine 顶部 re-export, 既有访问�
 同文本重复播报/跨请求重发时已合成句子直接回放, 跳过 GPU 前向。PCM 体积大
 且 GPU 前向才是瓶颈, 内存 LRU 性价比最高。key 不含 seed (播报一致性, 同
 文本不同采样轮次返回相同音频, 与批次21整体缓存语义一致)。
+
+批次36: env 读取单源化 — ADR_SEG_CACHE* 委托 adr/core/settings.py。
 """
 from __future__ import annotations
 
 import hashlib
 import json
-import os
 import threading
 from collections import OrderedDict
 from typing import Optional
+
+from adr.core import settings
 
 _SEG_CACHE: "OrderedDict[str, tuple[bytes, int]]" = OrderedDict()
 _SEG_LOCK = threading.Lock()
@@ -25,7 +28,7 @@ _SEG_BYTES = 0   # 当前缓存占用量 (int16 PCM 字节)
 
 
 def _seg_cache_enabled() -> bool:
-    return os.environ.get("ADR_SEG_CACHE", "1") != "0"
+    return settings.seg_cache_enabled()
 
 
 def _seg_cache_key(seg: str, ref_audio: str, prompt_text: str,
@@ -51,14 +54,8 @@ def _seg_cache_get(key: str):
 
 def _seg_cache_put(key: str, pcm: bytes, sr: int):
     global _SEG_BYTES
-    try:
-        max_items = max(0, int(os.environ.get("ADR_SEG_CACHE_MAX", "128")))
-    except ValueError:
-        max_items = 128
-    try:
-        max_bytes = max(0, int(os.environ.get("ADR_SEG_CACHE_MB", "256"))) * 1024 * 1024
-    except ValueError:
-        max_bytes = 256 * 1024 * 1024
+    max_items = settings.seg_cache_max_items()
+    max_bytes = settings.seg_cache_max_bytes()
     if max_items <= 0 or max_bytes <= 0:
         return
     with _SEG_LOCK:

@@ -532,3 +532,16 @@
 - [x] **验证** ✅: 全量 pytest 352 passed + 1 skipped (基线 325+1 + 新增 27, v2/v3/webui/native 既有面无回归)
 - **设计要点**: code 为增量字段 — 既有客户端只读 message/type 不受影响; 成功响应与鉴权中间件 ({"message": "success"/"unauthorized"}) 零改动; "统一映射" = 异常→code 单点 (error_code), 序列化保持各面原生形态 (HTTP JSON / WS 帧 / Gradio dict), 不引入跨面错误中间层
 - **后续批次**: 36 配置单源 (settings 中心) → 37 壳生命周期状态机 + 孤儿收编 (Rust)
+
+### 批次 36 (2026-10-06): Track C 架构收敛 — 配置单源 (settings 中心)
+
+> 新建 adr/core/settings.py: 所有 ADR_ 前缀环境变量的变量名/默认值/解析口径只在此出现一次, server 与 models 面裸 os.environ 读取全部改调具名函数。刻意**函数式读取**而非启动快照 — tests 大量 monkeypatch.setenv 即时生效 + gsv_engine empty_cache 节流保留运行中切腿语义 (批次33)。各函数解析口径与被替换的原地读取逐字等价 (含容错回退), 不统一不重构 (如 ADR_TTS_CACHE_MB=0 → 回退默认 vs ADR_SEG_CACHE_MB=0 → 禁用, 两处语义本就不同, 均原样保留)。
+
+- [x] **core/settings.py 新建**: 服务面 api_keys() (逗号分隔+strip+过滤空, auth 中间件行为等价) / has_api_key() / default_profile(); TTS 缓存 tts_cache_enabled/_dir/_max_entries/_max_bytes; 句级缓存 seg_cache_enabled/_max_items/_max_bytes; 引擎开关 fragment_interval_default / keep_tqdm / keep_empty_cache; 默认值字面常量就地收编 (32 条/256MB/128 段/0.3s)
+- [x] **server 面接线**: app.py create_app 改调 settings (default_profile/api_keys, 删 import os); __main__.py 启动警告判据改 has_api_key(); tts_cache.py enabled/_dir/_max_entries/_max_bytes 函数体委托 settings (签名保留 — tests 引用 tts_cache._dir())
+- [x] **models 面接线**: gsv_runtime.py _seg_cache_enabled/_seg_cache_put 改调 settings; gsv_engine.py _resolve_fragment_interval / keep_tqdm / keep_empty_cache ×2 改调 settings (empty_cache 节流闭包保持实时读)
+- [x] **不收编 (边界备案)**: ADR_DATA_DIR/ADR_CONFIG/ADR_PRESET 已有单点 (core/config.py); rvc_engine weight_root 等 / HF_HUB_CACHE 为第三方库桥接变量非配置面; ADR_T2S_CUDAGRAPH 是写默认值 (setdefault) 的启动行为留在 gsv_engine
+- [x] **测试** (tests/test_settings.py 新建 14 用例): 逐函数验证默认值/解析/容错回退与原口径逐字等价 (api_keys 过滤空 / MB=0 两处相反语义 / fragment_interval 空串回退与非法值 ValueError 透传 / keep 开关三态)
+- [x] **验证** ✅: 全量 pytest 366 passed + 1 skipped (基线 352+1 + 新增 14, 零回归); 途中抓到 tts_cache.py 误删 import os (落盘 os.replace 逃逸 NameError → "tts failed" 400) — 定位后恢复, 全绿
+- **设计要点**: "单源" = 变量名+默认值+解析口径单文件化, 非配置快照对象 — 函数式读取保住 monkeypatch 测试契约与运行中切腿两条既有语义; 排查配置问题只看 settings.py 一个文件
+- **后续批次**: 37 壳生命周期状态机 + 孤儿收编 (Rust)
