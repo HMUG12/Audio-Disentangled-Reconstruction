@@ -16,6 +16,13 @@ from typing import Any, Literal, Optional
 
 import yaml
 
+from adr.core.logging import get_logger
+
+_log = get_logger("adr.core.config")
+
+# 合法 preset 白名单 (批次41b: 无效 preset 由静默回退改为 raise)
+_VALID_PRESETS = ("default", "vram_4gb", "vram_6gb", "vram_8gb")
+
 
 def adr_data_dir() -> Path:
     """ADR 外部数据目录 (预训练权重/词典/日志等大文件, 不入仓库)。
@@ -208,6 +215,10 @@ def _from_dict(cls: type, data: dict[str, Any]) -> Any:
 
     for k, v in data.items():
         if k not in field_info:
+            # 批次41b: 未知键打 warning (拼写错误可发现), 但不中断加载
+            _log.warning(
+                f"配置含未知键 '{k}' (于 {cls.__name__}), 已忽略 — 请检查拼写"
+            )
             continue
 
         fld = field_info[k]
@@ -247,7 +258,11 @@ def load_config(
         preset: 预设配置 (default/vram_4gb/vram_6gb/vram_8gb)
         override: 覆盖参数 (可选)
     """
-    # 1. 加载预设
+    # 1. 校验 preset (批次41b: 无效 preset 不再静默回退为空配置)
+    if preset not in _VALID_PRESETS:
+        raise ValueError(
+            f"未知 preset: {preset!r} (合法值: {', '.join(_VALID_PRESETS)})"
+        )
     config_dir = Path(__file__).parent.parent.parent / "configs"
     preset_path = config_dir / f"{preset}.yaml"
 
@@ -255,15 +270,18 @@ def load_config(
         with open(preset_path, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
     else:
+        # preset 合法但 yaml 缺失 (打包部署场景) → 用 dataclass 默认值
+        _log.warning(f"preset yaml 缺失: {preset_path}, 使用内置默认值")
         data = {}
 
-    # 2. 合并 config_path
+    # 2. 合并 config_path (批次41b: 无效路径不再静默跳过)
     if config_path:
         config_path = Path(config_path)
-        if config_path.exists():
-            with open(config_path, encoding="utf-8") as f:
-                user_data = yaml.safe_load(f) or {}
-            _deep_merge(data, user_data)
+        if not config_path.exists():
+            raise FileNotFoundError(f"配置文件不存在: {config_path}")
+        with open(config_path, encoding="utf-8") as f:
+            user_data = yaml.safe_load(f) or {}
+        _deep_merge(data, user_data)
 
     # 3. 应用 override
     if override:

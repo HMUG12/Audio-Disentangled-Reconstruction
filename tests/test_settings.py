@@ -126,9 +126,11 @@ def test_fragment_interval_default(monkeypatch):
     assert settings.fragment_interval_default() == pytest.approx(0.5)
     monkeypatch.setenv("ADR_TTS_FRAGMENT_INTERVAL", "")  # 空串 → or 回退
     assert settings.fragment_interval_default() == pytest.approx(0.3)
-    monkeypatch.setenv("ADR_TTS_FRAGMENT_INTERVAL", "abc")  # 原口径 float() 直接崩
-    with pytest.raises(ValueError):
-        settings.fragment_interval_default()
+    # 批次41b: 非法值 (非数值/负数) 不再抛 ValueError, warning + 回退默认
+    monkeypatch.setenv("ADR_TTS_FRAGMENT_INTERVAL", "abc")
+    assert settings.fragment_interval_default() == pytest.approx(0.3)
+    monkeypatch.setenv("ADR_TTS_FRAGMENT_INTERVAL", "-0.5")
+    assert settings.fragment_interval_default() == pytest.approx(0.3)
 
 
 def test_keep_switches(monkeypatch):

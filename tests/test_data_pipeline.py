@@ -285,3 +285,104 @@ def test_separator_vad_fallback():
     vocals, instr = sep(audio)
     assert vocals is not None
     assert instr is None  # VAD fallback 不返回 instrumental
+
+
+# ---------------------------------------------------------------------------
+# 批次41b: F0/Mel 单样本失败跳过 + sample_id 唯一性 (全 mock, 不加载模型)
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_pipeline(tmp_dir: str):
+    """构造全 mock 组件的 pipeline (隔离模型下载, 专测编排逻辑)。
+
+    ASR 恒返回固定文本, G2P 恒返回固定音素; _f0 由各测试自行注入。
+    """
+    import types
+
+    from adr.data.pipeline import DataPipeline, PipelineConfig
+    from adr.data.slice import SliceConfig
+
+    config = PipelineConfig(
+        enable_separation=False,
+        enable_slicing=True,
+        enable_asr=True,
+        enable_g2p=True,
+        enable_f0=True,
+        enable_mel=False,
+        slice=SliceConfig(min_sec=2.0, max_sec=4.0, target_sr=24000),
+        output_dir=str(tmp_dir),
+    )
+    pipeline = DataPipeline(config)
+    pipeline._ensure_components()
+    pipeline._asr = types.SimpleNamespace(
+        transcribe=lambda w, sample_rate=None: types.SimpleNamespace(text="你好世界")
+    )
+    pipeline._g2p = lambda text: ["ni3", "hao3"]
+    return pipeline
+
+
+def test_pipeline_f0_failure_skips_sample(tmp_path):
+    """F0 提取全部失败 → 流水线不中断, errors 记录且无样本入库 (批次41b)。"""
+    pipeline = _make_mock_pipeline(str(tmp_path))
+
+    def _boom(waveform, sample_rate=None):
+        raise RuntimeError("f0 boom")
+
+    pipeline._f0 = _boom
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        wav_path = f.name
+    try:
+        make_synthetic_wav(wav_path, duration_sec=8.0)
+        result = pipeline.run(wav_path, output_dir=tmp_path / "out1")
+        assert result.samples == []          # 失败切片不带空 f0 入库
+        assert result.errors                 # 有错误记录
+        assert all("F0/Mel" in e for e in result.errors)
+    finally:
+        Path(wav_path).unlink(missing_ok=True)
+
+
+def test_pipeline_f0_partial_failure(tmp_path):
+    """F0 部分失败: 失败切片跳过, 其余切片正常入库 (批次41b)。"""
+    pipeline = _make_mock_pipeline(str(tmp_path))
+    state = {"n": 0}
+
+    def _flaky(waveform, sample_rate=None):
+        state["n"] += 1
+        if state["n"] == 1:
+            raise RuntimeError("f0 boom")
+        return np.zeros(10, dtype=np.float32)
+
+    pipeline._f0 = _flaky
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        wav_path = f.name
+    try:
+        make_synthetic_wav(wav_path, duration_sec=10.0)
+        result = pipeline.run(wav_path, output_dir=tmp_path / "out2")
+        assert len(result.errors) == 1
+        assert "F0/Mel" in result.errors[0]
+        assert len(result.samples) >= 1      # 其余切片照常入库
+    finally:
+        Path(wav_path).unlink(missing_ok=True)
+
+
+def test_pipeline_sample_id_unique_across_paths(tmp_path):
+    """不同目录同名 wav → sample_id 不碰撞 (批次41b 路径哈希)。"""
+    dir_a = tmp_path / "a"
+    dir_b = tmp_path / "b"
+    dir_a.mkdir()
+    dir_b.mkdir()
+    wav_a = str(dir_a / "voice.wav")
+    wav_b = str(dir_b / "voice.wav")
+    make_synthetic_wav(wav_a, duration_sec=10.0)
+    make_synthetic_wav(wav_b, duration_sec=10.0)
+
+    pipeline = _make_mock_pipeline(str(tmp_path))
+    r_a = pipeline.run(wav_a, output_dir=tmp_path / "out_a")
+    r_b = pipeline.run(wav_b, output_dir=tmp_path / "out_b")
+
+    ids_a = {s.sample_id for s in r_a.samples}
+    ids_b = {s.sample_id for s in r_b.samples}
+    assert ids_a and ids_b                   # 两条流水线都有产出
+    assert not (ids_a & ids_b)               # 同名文件不再互相覆盖
