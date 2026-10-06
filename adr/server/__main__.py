@@ -10,11 +10,11 @@ N.E.K.O 无需改端口配置。
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 
 import uvicorn
 
+from adr.core import settings
 from adr.server.app import create_app
 
 
@@ -26,7 +26,7 @@ def _warn_unauthenticated_listen(addr: str) -> None:
     """
     if addr not in ("0.0.0.0", "::"):
         return
-    if os.environ.get("ADR_TTS_API_KEY", "").strip():
+    if settings.has_api_key():
         return
     print(
         "\n" + "=" * 64,

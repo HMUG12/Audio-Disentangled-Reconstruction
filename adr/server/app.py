@@ -8,16 +8,17 @@
 环境变量:
     ADR_TTS_DEFAULT_PROFILE  默认音色档案名 (ref_audio_path 缺失时回退)
     ADR_TTS_API_KEY          API Key, 逗号分隔多个; 未设置则不鉴权 (默认)
+    (解析单源: adr/core/settings.py, 批次36 — 本文件不再裸读 os.environ)
 """
 from __future__ import annotations
 
-import os
 import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from adr.core import settings
 from adr.server import console, native, openai_compat, v2_compat, v3_compat
 from adr.server.auth import APIKeyMiddleware
 
@@ -36,7 +37,7 @@ def _prewarm_gsv(default_profile: str | None) -> None:
 
 
 def create_app(engine=None) -> FastAPI:
-    default_profile = os.environ.get("ADR_TTS_DEFAULT_PROFILE") or None
+    default_profile = settings.default_profile()
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI):
@@ -55,7 +56,7 @@ def create_app(engine=None) -> FastAPI:
     )
     # 鉴权 (批次12): 先加 = 内层; 未设 ADR_TTS_API_KEY 时完全放行。
     # CORS 需在外层: 预检 OPTIONS 免 key, 401 响应也带 CORS 头 (浏览器可读)。
-    api_keys = [k.strip() for k in os.environ.get("ADR_TTS_API_KEY", "").split(",")]
+    api_keys = settings.api_keys()
     app.add_middleware(APIKeyMiddleware, api_keys=api_keys)
     # CORS 全开 (与 api_neko 一致): N.E.K.O 前端 / 浏览器插件直连
     app.add_middleware(

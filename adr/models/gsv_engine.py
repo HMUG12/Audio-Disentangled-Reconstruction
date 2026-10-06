@@ -33,6 +33,7 @@ from adr.models.gsv_runtime import (  # noqa: F401
     _seg_cache_key,
     _seg_cache_put,
 )
+from adr.core import settings
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 GSV_DIR = REPO_ROOT / "third_party" / "gpt_sovits"
@@ -47,10 +48,11 @@ _CHDIR_LOCK = threading.RLock()
 
 def _resolve_fragment_interval(fragment_interval: Optional[float]) -> float:
     """Track E (批次33): 句末静音秒数解析 — None → env ADR_TTS_FRAGMENT_INTERVAL
-    (默认 0.3 = GSV 原行为); 显式传入钳到 [0, 2] (负数会使下游 np.zeros 崩)。"""
+    (默认 0.3 = GSV 原行为); 显式传入钳到 [0, 2] (负数会使下游 np.zeros 崩)。
+    (批次36: env 读取委托 settings 单源)"""
     fi = fragment_interval
     if fi is None:
-        fi = float(os.environ.get("ADR_TTS_FRAGMENT_INTERVAL", "0.3") or "0.3")
+        fi = settings.fragment_interval_default()
     return max(0.0, min(float(fi), 2.0))
 
 
@@ -187,7 +189,7 @@ class GSVEngine:
             # TQDM_DISABLE 对 tqdm 4.67 实测无效 — monkeypatch __init__ 注入
             # disable=True。第三方 `from tqdm import tqdm` 绑定同一类对象,
             # 补类属性即全局生效; 必须在 TTS 导入前打。ADR_TTS_KEEP_TQDM=1 保留。
-            if os.environ.get("ADR_TTS_KEEP_TQDM") != "1":
+            if not settings.keep_tqdm():
                 try:
                     import tqdm as _tqdm
 
@@ -226,13 +228,14 @@ class GSVEngine:
             # cuda.empty_cache) — 句间停顿来源之一, 且清缓存后下一步分配要重新
             # cudaMalloc。改为每 16 次调用真清理一次 (防显存碎片兜底保留)。
             # ADR_TTS_KEEP_EMPTY_CACHE=1 回退每句清理。
-            if os.environ.get("ADR_TTS_KEEP_EMPTY_CACHE") != "1":
+            if not settings.keep_empty_cache():
                 _orig_empty_cache = self._tts.empty_cache
                 _ec_calls = {"n": 0}
 
                 def _throttled_empty_cache():
-                    # 实时读 env: A/B 基准可在同进程切腿 (KEEP_EMPTY_CACHE=1 即旧每句清)
-                    if os.environ.get("ADR_TTS_KEEP_EMPTY_CACHE") == "1":
+                    # 实时读 env (经 settings): A/B 基准可在同进程切腿
+                    # (KEEP_EMPTY_CACHE=1 即旧每句清)
+                    if settings.keep_empty_cache():
                         _orig_empty_cache()
                         return
                     _ec_calls["n"] += 1
