@@ -545,3 +545,17 @@
 - [x] **验证** ✅: 全量 pytest 366 passed + 1 skipped (基线 352+1 + 新增 14, 零回归); 途中抓到 tts_cache.py 误删 import os (落盘 os.replace 逃逸 NameError → "tts failed" 400) — 定位后恢复, 全绿
 - **设计要点**: "单源" = 变量名+默认值+解析口径单文件化, 非配置快照对象 — 函数式读取保住 monkeypatch 测试契约与运行中切腿两条既有语义; 排查配置问题只看 settings.py 一个文件
 - **后续批次**: 37 壳生命周期状态机 + 孤儿收编 (Rust)
+
+### 批次 37 (2026-10-06): Track C 架构收敛 — 壳生命周期状态机 + 孤儿收编 (Rust)
+
+> desktop/src-tauri/src/lib.rs 两件事: ① **孤儿收编** — 壳崩溃/强杀/断电时退出清理 (taskkill) 不会执行, python 服务进程成为孤儿 (占显存、占 9881 → 下次预热撞端口被迫回退随机端口; 本机曾积累 3 个孤儿即此)。prewarm_flow 开头 `reap_orphans()`: PowerShell `Get-CimInstance` 扫描本机 python* 进程命令行, 匹配壳拉起服务的两种形状 (`-m adr.server` / `-m adr.cli webui`) 即 kill_tree; 匹配口径宁窄勿宽, 刻意不含 `-m adr.cli` 其他子命令 (train 绝不能被误杀, tests 无真 server 子进程佐证安全面)。② **生命周期状态机** — `Phase { Stopped → Starting → Prewarming → Ready }` (AtomicU8) 替代原 `prewarm_done: AtomicBool` 与 (running, ready) 布尔组合判定; 两条不变式接线: pid 写入处必置 Starting, pid 清零处必置 Stopped; engine_status 按 Phase 映射但输出形状不变 (前端零改动)。
+
+- [x] **孤儿收编**: `reap_orphans()` (幂等) + `list_python_processes()` (制表符分隔逐行解析, 规避 PS 5.1 ConvertTo-Json 单对象/数组形态差异; 输出编码强制 UTF-8 防 OEM 代码页丢字) + `reap_log()` (追加 server.log 同文件排障); PowerShell 不可用 → 记日志放行不阻塞预热; 收编提示经 eval_prewarm 上预热页
+- [x] **PID 文件方案评估后砍掉**: 全盘扫描已覆盖 PID 文件场景, 且身份校验同样依赖命令行形状 — 免写删点、免残留自愈逻辑 (KISS)
+- [x] **Phase 状态机**: 枚举 4 态 + ServerState.phase()/set_phase(); prewarm_done 8 处引用等价改写 (on_launcher_ready/engine_status/skip_prewarm/retry_prewarm/launch_blocking/prewarm_flow×2/字段定义); SHUTTING_DOWN/pid/base_url/mode/expose 原机制保留
+- [x] **不变式接线**: pid 写入 (start_server spawn 成功) → Starting; pid 清零 (kill_current / start_server 探活失败所有权分支 / supervise 意外退出) → Stopped; prewarm_flow healthy 后 → Prewarming, ready/超时放行 → Ready; retry_prewarm/launch_blocking 的 prewarm_done=false 由 kill_current 置 Stopped 覆盖
+- [x] **设计备案**: Ready 语义 = "引擎就绪或放行" (超时/强制放行也 Ready, 秒进通道开放 — 与原 prewarm_done 等价); Restarting 不设独立态 = Stopped→Starting 过渡; 多开壳互踩未定义行为不变 (B 壳收编会杀 A 壳服务, A 的 supervise 自动重启, 现状一致)
+- [x] **收编失败可见化 (实测驱动)**: 本机 3 个孤儿 taskkill /F 实测 Access denied (36K 内存 + CommandLine 不可读 = CUDA 驱动挂死进程特征, 用户态无法清理, 只能重启机器) — 据此 kill_tree 改返回 bool, 收编失败记 reap_log ("收编失败 (taskkill Access denied)") 不静默吞掉; 挂死进程的显存只能重启释放, 收编定位是"可杀孤儿的自动清理 + 杀不掉的留痕"
+- [x] **验证** ✅: cargo check / cargo build 零警告零错误; PowerShell 查询实测格式正确 (pid\tcmdline 逐行, bench_sync_ab.py 等无关进程不匹配不杀); engine_status 输出形状不变 (前端零改动); Python 侧零接触 (全量 pytest 不受影响)
+- **设计要点**: reap 匹配口径是安全边界 — 收编对象 = "壳自己会拉起的服务形状", 其他 python 进程 (训练/推理/调试) 一律不碰; Phase 状态机消除 "pid!=0 且 prewarm_done=false" 类布尔组合隐式状态, 未来新增生命周期态有落点
+- **Track C 收官**: 34 服务层 (ba74518) → 35 错误协议 (2dd33f4) → 36 配置单源 (0bae4b4) → 37 壳生命周期 (本批) — 架构收敛四批全部完成
