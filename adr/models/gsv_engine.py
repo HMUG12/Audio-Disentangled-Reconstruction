@@ -575,6 +575,7 @@ class GSVEngine:
 
 
 _ENGINE: Optional[GSVEngine] = None
+_ENGINE_LOCK = threading.Lock()  # 批次41a: 单例创建锁 (多线程首次并发防多实例)
 _LOADING = False   # 后台预热进行中 (服务启动期, 供控制台显示引擎三态)
 _STAGE = ""        # 预热细分阶段: queued/importing/loading/kernel/failed (供前端实时显示)
 
@@ -607,10 +608,13 @@ def synth_busy() -> int:
 
 
 def get_gsv_engine() -> GSVEngine:
-    """进程级单例。"""
+    """进程级单例 (批次41a: 双重检查锁 — 已初始化后走无锁快路径,
+    多线程首次并发调用只创建一个实例)。"""
     global _ENGINE
     if _ENGINE is None:
-        _ENGINE = GSVEngine()
+        with _ENGINE_LOCK:
+            if _ENGINE is None:
+                _ENGINE = GSVEngine()
     return _ENGINE
 
 

@@ -49,6 +49,131 @@ def test_is_safe_name():
         assert not is_safe_name(bad), bad
 
 
+def test_is_safe_name_rejects_absolute_paths():
+    """批次41a: 绝对路径 / 盘符名 / 反斜杠绝对路径一律拒绝。"""
+    for bad in ("/abs/evil", "\\evil", "C:\\evil", "C:/evil"):
+        assert not is_safe_name(bad), bad
+
+
+# ─── 批次41a: 鉴权常量时间比较 ───
+
+def test_auth_uses_compare_digest(monkeypatch):
+    """_key_ok 必须走 hmac.compare_digest (恒定时间), 不允许退化成 ==。"""
+    import hmac as _hmac
+
+    from adr.server.auth import APIKeyMiddleware
+
+    called = []
+    orig = _hmac.compare_digest
+
+    def _spy(a, b):
+        called.append((a, b))
+        return orig(a, b)
+
+    monkeypatch.setattr(_hmac, "compare_digest", _spy)
+    mw = APIKeyMiddleware(app=None, api_keys=["k1"])
+    assert mw._key_ok("k1")
+    assert called, "key 比较必须经 hmac.compare_digest"
+
+
+def test_auth_key_ok_bytes_safe(engine, monkeypatch):
+    """批次41a: 两侧 bytes 编码比较 — 正确/错误/非 ASCII 凭据行为正确,
+    非 ASCII 凭据不匹配时返回 False 而非抛 TypeError。"""
+    from adr.server.auth import APIKeyMiddleware
+
+    mw = APIKeyMiddleware(app=None, api_keys=["sécret", "k2"])
+    assert mw._key_ok("k2")
+    assert not mw._key_ok("k3")
+    assert mw._key_ok("sécret")       # 非 ASCII key 命中
+    assert not mw._key_ok("sécrét")   # 非 ASCII 不匹配 → False, 不抛错
+    assert not mw._key_ok("")
+    assert not mw._key_ok(None)
+
+
+# ─── 批次41a: console 档案名穿越 + HTTP 错误响应结构化 code ───
+
+def test_console_profile_create_rejects_traversal(security_client):
+    """console 建档恶意档案名 → 400 + code=profile_invalid
+    (名字校验先于音频存在性检查, 无需真实文件即可触发)。"""
+    r = security_client.post("/api/adr/v1/profiles/create", json={
+        "name": "../evil", "audio_path": "nonexistent.wav"})
+    assert r.status_code == 400
+    body = r.json()
+    assert body["code"] == "profile_invalid"
+    assert body["detail"]  # 既有 detail 字段逐字保留 (wire 兼容)
+
+
+def test_console_profile_create_rejects_dotdot(security_client):
+    """纯 ".." 名 (清洗不改变它) 同样拒绝。"""
+    r = security_client.post("/api/adr/v1/profiles/create", json={
+        "name": "..", "audio_path": "nonexistent.wav"})
+    assert r.status_code == 400
+    assert r.json()["code"] == "profile_invalid"
+
+
+def test_console_profile_create_default_name_ok(security_client):
+    """缺省中文名走清洗兜底后合法, 不因名字校验误拒 (报音频不存在而非名字)。"""
+    r = security_client.post("/api/adr/v1/profiles/create", json={
+        "name": "", "audio_path": "nonexistent.wav"})  # 空名 → 清洗兜底「我的声音」
+    assert r.status_code == 400
+    body = r.json()
+    assert body["code"] == "bad_request"
+    assert "音频不存在" in body["detail"]
+
+
+def test_http_error_responses_carry_code(security_client):
+    """HTTPException 响应增量补 code, detail 保留 (wire 兼容)。"""
+    r = security_client.post("/api/adr/v1/train/stop")  # 无训练 → 409
+    assert r.status_code == 409
+    body = r.json()
+    assert body["code"] == "conflict"
+    assert "当前没有进行中的训练" in body["detail"]
+
+
+# ─── 批次41a: voice_library 档案名安全 + meta.json 原子写 ───
+
+def _mk_ref_wav(tmp_path):
+    """4s 正弦波参考音频 (建档防护要求 3~10s)。"""
+    import numpy as np
+    import soundfile as sf
+
+    p = tmp_path / "ref.wav"
+    t = np.linspace(0, 4, 64000, endpoint=False, dtype="float32")
+    sf.write(str(p), (0.3 * np.sin(2 * np.pi * 440 * t)).astype("float32"),
+             16000)
+    return str(p)
+
+
+def test_voice_library_rejects_malicious_names(tmp_path, monkeypatch):
+    """save_voice / load_voice 拒绝穿越名; ".." 不把文件写进档案库上级。"""
+    import adr.models.voice_library as vl
+
+    monkeypatch.setattr(vl, "VOICES_DIR", tmp_path / "voices")
+    for bad in ("..", "../evil", "C:\\evil", ""):
+        with pytest.raises(ValueError):
+            vl.save_voice(bad, "whatever.wav"), bad
+        with pytest.raises(ValueError):
+            vl.load_voice(bad), bad
+    # 穿越 == 未得逞: 档案库上级没有落任何 ref.wav
+    assert not (tmp_path / "ref.wav").exists()
+    assert not (tmp_path / "meta.json").exists()
+
+
+def test_voice_meta_json_atomic_replace(tmp_path, monkeypatch):
+    """meta.json 原子写: .tmp 中转 + os.replace, 落盘后不残留 .tmp。"""
+    import adr.models.voice_library as vl
+
+    monkeypatch.setattr(vl, "VOICES_DIR", tmp_path / "voices")
+    vl.save_voice("demo", _mk_ref_wav(tmp_path))
+    vdir = tmp_path / "voices" / "demo"
+    assert (vdir / "meta.json").exists()
+    assert not (vdir / "meta.json.tmp").exists()
+    import json
+
+    assert json.loads(
+        (vdir / "meta.json").read_text(encoding="utf-8"))["name"] == "demo"
+
+
 # ─── WS 鉴权 (握手层, 不触达合成) ───
 
 WS_PATH = "/api/v3/tts/stream-input"

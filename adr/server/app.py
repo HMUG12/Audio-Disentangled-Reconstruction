@@ -17,10 +17,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from adr.core import settings
 from adr.server import console, native, openai_compat, v2_compat, v3_compat
 from adr.server.auth import APIKeyMiddleware
+from adr.server.exceptions import http_error_code
 
 
 def _prewarm_gsv(default_profile: str | None) -> None:
@@ -65,6 +68,15 @@ def create_app(engine=None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # 批次41a: HTTPException 响应增量补结构化 code — 既有 detail 字段与
+    # 文本逐字保留 (wire 兼容), 422 校验错误 (RequestValidationError) 不经
+    # 此 handler, 保持 FastAPI 默认形态
+    @app.exception_handler(StarletteHTTPException)
+    async def _http_exception_handler(request, exc: StarletteHTTPException):
+        return JSONResponse(
+            status_code=exc.status_code, headers=exc.headers,
+            content={"detail": exc.detail, "code": http_error_code(exc)})
+
     # v2/v3_compat 的请求期引擎缓存 (批次26 注明): 生产模式下初始为 None,
     # 首次合成时由 v2_compat/v3_compat 惰性赋值 get_gsv_engine() 并复用。
     # /health 就绪判据已改用 gsv_engine 模块级三态, 不读此字段 (批次22)。

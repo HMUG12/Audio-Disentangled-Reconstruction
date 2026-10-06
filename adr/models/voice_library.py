@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import time
 from pathlib import Path
@@ -17,6 +18,19 @@ from typing import Optional
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 VOICES_DIR = REPO_ROOT / "data" / "voices"
+
+
+def is_safe_name(name: str) -> bool:
+    """档案名安全校验 (批次41a): 单段纯名, 拒绝路径分隔符/``..``/空字节。
+
+    与 adr/server/pathsafe.py 同规则; models 层不 import server 包
+    (server.__init__ 会级联引入 fastapi), 故在此独立实现。
+    """
+    if not name:
+        return False
+    if any(ch in name for ch in ("/", "\\", "\x00")):
+        return False
+    return ".." not in name
 
 
 def _trim_silence(wav, sr: int, top_db: float = 30.0):
@@ -88,7 +102,16 @@ def save_voice(
     name = name.strip().replace("/", "_").replace("\\", "_")
     if not name:
         raise ValueError("音色名不能为空")
+    # 批次41a: 清洗后仍可能残留危险成分 — ".." 直接目录穿越 (ref 会写进
+    # 档案库上级目录); "C:xxx" 这类盘符名经 pathlib 拼接会整体替换路径。
+    # is_safe_name 拦 "..", resolve 检查兜底拼接后必须仍落在档案库根内。
+    if not is_safe_name(name):
+        raise ValueError(f"音色名含非法路径成分: {name!r}")
     vdir = VOICES_DIR / name
+    try:
+        vdir.resolve().relative_to(VOICES_DIR.resolve())
+    except (ValueError, OSError):
+        raise ValueError(f"音色名解析后越出档案库目录: {name!r}") from None
     vdir.mkdir(parents=True, exist_ok=True)
     dst = vdir / "ref.wav"
     _materialize_ref(ref_audio, dst)
@@ -110,8 +133,12 @@ def save_voice(
         "sampling": prev_sampling,
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
-    (vdir / "meta.json").write_text(
+    meta_path = vdir / "meta.json"
+    # 批次41a: 原子写 (.tmp 中转 + os.replace) — 断电/并发读不会见到半截 JSON
+    tmp_path = vdir / "meta.json.tmp"
+    tmp_path.write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(str(tmp_path), str(meta_path))
     return vdir
 
 
@@ -125,6 +152,9 @@ def list_voices() -> list[str]:
 
 def load_voice(name: str) -> dict:
     """加载音色档案 → {ref_audio, prompt_text, t2s_weights, vits_weights}。"""
+    # 批次41a: 用户可控名直接拼路径, 非法成分 (../ 等) 先拒绝再落盘
+    if not is_safe_name(name):
+        raise ValueError(f"音色档案名非法: {name!r}")
     vdir = VOICES_DIR / name
     meta = json.loads((vdir / "meta.json").read_text(encoding="utf-8"))
     meta["ref_audio"] = str(vdir / "ref.wav")

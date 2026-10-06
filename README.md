@@ -43,7 +43,7 @@ adr train -d <数据目录> --lora --lora-rank 8
 
 | 命令 | 说明 |
 | --- | --- |
-| `python -m adr.server` | 启动 GSV 兼容 TTS 服务 (默认 9881, 被 `ADR_TTS_PORT` 覆盖) |
+| `python -m adr.server` | 启动 GSV 兼容 TTS 服务 (默认 127.0.0.1:9881, `-p` 改端口 / `-a` 改地址) |
 | `adr train -d <dir> --lora` | LoRA 微调训练 |
 | `adr process -i <audio>` | 数据处理管线 |
 | `adr clone --ref <wav> --text <文本>` | 单句克隆推理 |
@@ -58,6 +58,18 @@ adr train -d <数据目录> --lora --lora-rank 8
 3. 刷新音色列表, ADR 档案会自动出现
 
 注意: 首次合成有模型冷启动 (数十秒), 之后为流式秒级响应。若桌面壳提示 "9881 被占用", 说明端口被其他 GSV 服务占用, 改用壳提示的端口。
+
+## 局域网访问与安全
+
+服务默认只监听 `127.0.0.1`（仅本机可达，NEKO 本机对接不受影响）。需要局域网内其他设备调用时：
+
+```powershell
+$env:ADR_TTS_API_KEY = "<你的密钥>"     # 必须: 对外暴露必须同时配 API key
+python -m adr.server --addr 0.0.0.0
+```
+
+- 监听 `0.0.0.0` 且未设置 `ADR_TTS_API_KEY` 时, 局域网内任何设备均可**无鉴权**调用合成 API（启动横幅会打安全警告）。
+- API key 支持逗号分隔多个; 客户端凭据三选一: `Authorization: Bearer <key>` / `X-API-Key: <key>` 头 / `?api_key=<key>` 查询参数。
 
 ## 测试
 
