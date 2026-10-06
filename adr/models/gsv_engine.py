@@ -37,6 +37,13 @@ from adr.models.gsv_runtime import (  # noqa: F401
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 GSV_DIR = REPO_ROOT / "third_party" / "gpt_sovits"
 
+# Track B 收口: chdir 是进程级全局状态, GSV third_party 代码用相对路径
+# 定位权重, chdir 无法消除, 只能串行化整个 chdir 窗口 — 否则线程 A 刚
+# 进入 GSV 上下文, 线程 B 的 finally 恢复 cwd 会把 A 踩进错误目录。
+# RLock: synthesize_stream 的 _gsv_context 内嵌套 _ensure_weights 再开
+# _gsv_context, 必须可重入。
+_CHDIR_LOCK = threading.RLock()
+
 
 @dataclass
 class GSVEngineConfig:
@@ -142,17 +149,17 @@ class GSVEngine:
         """进入 GSV 代码上下文 (sys.path + cwd, 其代码用相对路径找权重)。"""
         code_dir = str(self.config.gsv_dir)
         inner = str(self.config.gsv_dir / "GPT_SoVITS")
-        old_cwd = os.getcwd()
-        added = []
-        for p in (code_dir, inner):
-            if p not in sys.path:
-                sys.path.insert(0, p)
-                added.append(p)
-        os.chdir(code_dir)
-        try:
-            yield
-        finally:
-            os.chdir(old_cwd)
+        # Track B: 全程持锁覆盖 chdir 窗口, 进出后 cwd 恒等于原值
+        with _CHDIR_LOCK:
+            old_cwd = os.getcwd()
+            for p in (code_dir, inner):
+                if p not in sys.path:
+                    sys.path.insert(0, p)
+            os.chdir(code_dir)
+            try:
+                yield
+            finally:
+                os.chdir(old_cwd)
 
     def _lazy_init(self):
         if self._tts is not None:

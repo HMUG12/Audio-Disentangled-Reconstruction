@@ -453,3 +453,30 @@
 - [x] **Docker 修复**: docker-compose 删废弃 `version:` 字段; 8000 错误端口映射 (容器内无进程监听) 改 9881 并注明 TTS 服务需容器内另行启动 `python -m adr.server` (默认入口仍是 webui 7860)
 - [x] **验证** ✅: tomllib 校验 pyproject 通过 (13 核心依赖, extras = m1/m2/all/dev); 被裁包全库 (adr/tests/scripts) 零引用实证; git mv 后脚本路径推导正确
 - **后续批次**: A 训练正确性 (grad_ckpt no-op / LoRA 目标错配 / ref_mel 泄漏 / mel mask / yaml 桥接 / LR total_steps / 种子) → B 服务安全 (WS 鉴权 / set_weights 白名单 / 断连取消 / chdir 治理 / 路径穿越) → E 推理速度 (句间停顿 profile 定位) → C 架构收敛
+
+### 批次 31 (2026-10-06): Track A 训练正确性 — 8 项修复 + 测试补齐
+
+> 全项目 Review 训练管线清单逐项闭环。核心问题: 梯度检查点是 no-op、LoRA 目标层在 SoVITS 上不存在 (注入 0 层)、ref_mel 与 target 相同导致捷径学习、mel loss 未掩码 padding、YAML→TrainerConfig 桥接缺失 (11 个嵌套键静默失效)、total_steps 与 grad_accum 失配、种子未覆盖 numpy/cuda、g2p 丢弃 ASCII 字符。
+
+- [x] **grad_ckpt no-op 修复** (adr/training/grad_ckpt.py): 原实现只改属性不生效; 改为实例级包装每个 EncoderLayer.forward 用 `torch.utils.checkpoint(..., use_reentrant=False)` 包裹, 支持开关与幂等 (重复 apply 不二次包装)
+- [x] **LoRA 目标层错配** (adr/training/lora.py): 默认目标 `["q_proj","v_proj"]` 在 SoVITS 模块树不存在 → 注入 0 层静默空训; 改 `["out_proj","linear1","linear2"]` (实证存在于 attention out_proj + FFN); 注入 0 时: 模型已带 LoRA 则跳过 (幂等), 否则 raise ValueError 拒绝静默
+- [x] **ref_mel 捷径学习** (adr/training/dataset.py): ref_mel 原与 target 同段 (模型抄答案); 改按 speaker 建异样本池 `__getitem__` random.choice + copy.copy 挂 `_ref_mel`; 单样本回退自身并 warning
+- [x] **mel loss padding 污染** (adr/models/sovits.py): L1 改接受 target_mel_mask, `(B,1,T)` 广播后 masked_select 按有效帧计 loss; 无 mask 保留旧路径兼容
+- [x] **YAML→TrainerConfig 桥接** (adr/training/trainer.py + adr/cli.py): 新增 `YAML_TRAIN_KEY_MAP` 11 个嵌套键显式映射 (lr/scheduler/precision 别名归一/batch 等) + `apply_yaml_to_trainer_config()`; cli 弃用 hasattr 链 (只识别扁平属性, 嵌套键全静默失效); 故意不映射 use_qlora (防 YAML 直接开量化, 仍走 CLI 显式参数)
+- [x] **total_steps 失配** (adr/training/trainer.py): 原 `len(loader)*epochs` 未除 grad_accum, scheduler 提前耗尽; 改 `ceil(len(loader)/grad_accum)*epochs`
+- [x] **种子补全** (adr/training/trainer.py): 原 torch.manual_seed 单点; 补 random/np.random/cuda.manual_seed_all + TrainerConfig.deterministic 开关
+- [x] **g2p ASCII 丢弃** (adr/data/g2p.py): 过滤条件 `isalpha()` 改 `isascii()` (英文/数字/标点不再丢); ASCII 段按空白切词级 token; G2PW 模块级 `@lru_cache(maxsize=1)` 单例 (ImportError 不缓存, 避免缓存坏状态)
+- [x] **测试** ✅: test_lora.py +52 / test_training.py +257 (grad_ckpt 幂等与重计算、LoRA 目标匹配 SoVITS、ref_mel 池避免捷径、mel mask、yaml 映射、total_steps、种子) / test_g2p.py 新建 (ASCII 保留/G2PW 缓存); Track A 子集 58 passed → 全量 310 passed + 1 skipped
+
+### 批次 32 (2026-10-06): Track B 服务安全收口 — 5 项 + 安全测试补齐
+
+> 全项目 Review server 清单逐项闭环。核心问题: WS 连接完全绕过鉴权、set_weights 端点 torch.load 任意 pickle 反序列化 (RCE)、v3 客户端断连后生成器不停 (引擎锁永久占用)、GSV 引擎 chdir 全局竞态、档案名路径穿越读任意文件。
+
+- [x] **WS 鉴权** (adr/server/auth.py): WS 此前零校验; 新增 WS 分支 — 凭据三通道: query `?token=` (NEKO http→ws 转换透传 query, 兼容 `?api_key=`) / query `?api_key=` / `Sec-WebSocket-Protocol` 子协议首元素; 不采用首条消息帧 (v3 协议首帧必须是 init, 加鉴权帧破坏协议兼容); 未配置 ADR_TTS_API_KEY 时完全放行 (NEKO 零改造兼容红线); `secrets.compare_digest` 恒定时间比较; 中间件 consume `websocket.connect` 裁决后向下游重放 (否则 starlette accept 抛 "Expected websocket.connect"), 拒绝时 accept 前 close 4401
+- [x] **子协议回显** (adr/server/v3_compat.py): 浏览器以子协议携带 key 时, endpoint 必须 `accept(subprotocol=chosen)` 回显首元素, 否则浏览器侧握手失败
+- [x] **pickle RCE 防护** (adr/server/v2_compat.py): set_gpt/set_sovits_weights 直接交给 third_party torch.load (无 weights_only) → 恶意 ckpt 任意代码执行; 新增 `_validate_weights_file()` warmup 前预检 (torch.load weights_only=True + 顶层必须 dict), 异常走原 400 分支 message="change gpt weight failed"; 测试实证 `__reduce__` payload 被拒且不触达 warmup
+- [x] **v3 断连取消闭环** (adr/server/v3_compat.py): 原客户端断连后生产线程继续推队列直到自然完结, 引擎锁全程占用; 改 cancel/chan_full 双 threading.Event — finally 置 cancel → 生产线程 break → `gen.close()` 触发生成器 finally 释放引擎锁; 队列满 `put_nowait` 捕 QueueFull 置 chan_full → 消费侧回 busy 错误帧; `_QUEUE_MAXSIZE=64` 提模块常量
+- [x] **chdir 竞态治理** (adr/models/gsv_engine.py): GSV third_party 用相对路径找权重, chdir 无法消除; 模块级 `_CHDIR_LOCK = threading.RLock()` 覆盖整个 chdir 窗口 (可重入适配 _gsv_context 嵌套), sys.path 维持只加不删
+- [x] **路径穿越** (adr/server/pathsafe.py 新建 + native.py + v3_compat.py): `resolve_within(root, candidate)` (resolve 规范化 ../ 与符号链接, 相对 candidate 基于 root 解析 — 修复 agent 初版基于 cwd 解析导致合法档案误判越界的 bug) + `is_safe_name` 单段纯名; native profile_ref 越界 404 兜底; v2 profile/v3 voice 名 is_safe_name 400
+- [x] **安全测试** ✅: test_server_security.py 新建 10 用例 (pathsafe 相对/绝对/穿越/换盘符 + is_safe_name; WS 无凭据 4401 / token / api_key / 子协议回显 accepted_subprotocol / 未配置默认放行红线); test_server_api.py 补 v2 profile 穿越 400 不触引擎 + set_weights 真实张量文件改造 (假路径被新预检拒) + 恶意 pickle 拒绝; server 测试 55 → 65, 全量 310 passed + 1 skipped
+- **后续批次**: E 推理速度 (句间停顿 profile 定位: 引擎全局锁覆盖全程 / length_regulate .item() 逐元素同步 / 每句起 ffmpeg / 句间无流水线预取) → C 架构收敛
