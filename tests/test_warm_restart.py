@@ -212,3 +212,36 @@ class TestWarmRestartOrder:
         assert "lr_before" in h and "lr_after" in h
         assert h["lr_after"] == pytest.approx(h["lr_before"] * 0.5)
         cleanup("wr_hist")
+
+
+class TestWarmRestartGradAccum:
+    """total_steps 需按 optimizer 更新次数计 (除以 grad_accum_steps)。"""
+
+    def test_total_steps_divides_grad_accum(self):
+        """grad_accum=2 时重启后 cosine 应走完 (final lr = new_lr × min_lr_ratio)。"""
+        flat = FlatMetricCallback()
+        wr = WarmRestartCallback(
+            metric_name="fake_metric", patience=1, lr_decay=0.5,
+            warmup_steps=1, max_restarts=1,
+        )
+        ds = make_dataset(4)   # batch 2 → 2 batches/epoch
+        model = make_small_model()
+        config = TrainerConfig(
+            epochs=6, batch_size=2, grad_accum_steps=2, val_ratio=0.0,
+            lr=2e-4, warmup_steps=1,
+            # 关闭 AMP: CUDA 上 GradScaler 初期梯度溢出会跳过 optimizer.step,
+            # 导致 scheduler 不步进、lr 停在 warmup 起点 0, 触发 min_lr 保护跳过重启
+            use_amp=False,
+            output_dir=str(REPO / "tests" / "_tmp_wr_accum"),
+            log_every_n_steps=100, save_every_n_epochs=100,
+        )
+        trainer = Trainer(model=model, train_data=ds, config=config,
+                          callbacks=[flat, wr])
+        metrics = trainer.fit()
+
+        # epoch1 末触发重启: 剩余 4 epoch × ceil(2/2)=1 opt step → total_steps=4
+        # cosine 走完 → final = new_lr × 0.1; 旧实现 total=8 (未除 grad_accum) → ~0.65×
+        assert wr.n_restarts == 1
+        new_lr = wr._history[0]["lr_after"]
+        assert metrics["train/lr"] == pytest.approx(new_lr * 0.1, rel=0.05)
+        cleanup("wr_accum")

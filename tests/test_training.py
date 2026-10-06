@@ -536,3 +536,241 @@ def test_trainer_seed_full_and_deterministic():
     v_py = random.random()
     random.seed(123)
     assert v_py == random.random()
+
+
+# ============================================================
+# 断点续训: epoch/global_step 恢复 + scaler 状态 + shape 检查
+# ============================================================
+class _FakeScaler:
+    """duck-typed GradScaler (CPU 测试用): state_dict/load_state_dict 字典语义。"""
+
+    def __init__(self, scale: float = 65536.0):
+        self._state = {"scale": scale}
+
+    def state_dict(self):
+        return dict(self._state)
+
+    def load_state_dict(self, state):
+        self._state = dict(state)
+
+
+def test_trainer_resume_restores_epoch_and_global_step():
+    """resume 应恢复 epoch/global_step, fit 从断点 epoch 继续而非从头。"""
+    from adr.models.sovits import SoVITS, SoVITSConfig
+    from adr.training import Trainer, TrainerConfig
+    from adr.training.callbacks import Callback
+    from adr.training.dataset import VoiceCloneDataset
+
+    model = SoVITS(SoVITSConfig(
+        hidden_dim=32, n_layers=2, n_heads=2, ffn_dim=64,
+        vocab_size=607, content_dim=16, timbre_dim=16,
+    ))
+    samples = [_make_dummy_sample(i) for i in range(4)]
+    ds = VoiceCloneDataset(samples=samples)  # batch 2 → 2 步/epoch
+
+    seen_epochs = []
+
+    class EpochTracker(Callback):
+        def on_epoch_start(self, trainer, epoch, **kw):
+            seen_epochs.append(epoch)
+
+    def _cfg(epochs, tmp_dir):
+        return TrainerConfig(
+            epochs=epochs, batch_size=2, use_amp=False,
+            use_gradient_checkpointing=False,
+            output_dir=tmp_dir, val_ratio=0.0, warmup_steps=2,
+        )
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        # 第 1 段: 训 1 个 epoch 后存档
+        trainer1 = Trainer(model=model, train_data=ds, config=_cfg(1, tmp_dir))
+        trainer1.fit()
+        assert trainer1.global_step == 2
+        assert trainer1.current_epoch == 1
+        ckpt_path = Path(tmp_dir) / "resume.pt"
+        trainer1.save_checkpoint(ckpt_path)
+
+        # 第 2 段: epochs=3, 从 epoch 1 继续 (只跑 epoch 1/2)
+        model2 = SoVITS(SoVITSConfig(
+            hidden_dim=32, n_layers=2, n_heads=2, ffn_dim=64,
+            vocab_size=607, content_dim=16, timbre_dim=16,
+        ))
+        tracker = EpochTracker()
+        trainer2 = Trainer(model=model2, train_data=ds, config=_cfg(3, tmp_dir),
+                           callbacks=[tracker])
+        trainer2.load_checkpoint(ckpt_path)
+        assert trainer2._start_epoch == 1
+        assert trainer2._start_global_step == 2
+
+        trainer2.fit()
+        # 修复前: 从 epoch 0 重跑 → seen_epochs == [0, 1, 2]
+        assert seen_epochs == [1, 2]
+        # 累计 global_step: 断点 2 + 2 epoch × 2 步 = 6 (修复前 = 4)
+        assert trainer2.global_step == 6
+
+
+def test_trainer_resume_old_ckpt_missing_progress_keys(caplog):
+    """旧格式 ckpt (无 epoch/global_step) 应默认 0 + warning, 不报错。"""
+    from adr.models.sovits import SoVITS, SoVITSConfig
+    from adr.training import Trainer, TrainerConfig
+    from adr.training.dataset import VoiceCloneDataset
+
+    model = SoVITS(SoVITSConfig(
+        hidden_dim=32, n_layers=2, n_heads=2, ffn_dim=64,
+        vocab_size=607, content_dim=16, timbre_dim=16,
+    ))
+    samples = [_make_dummy_sample(i) for i in range(4)]
+    ds = VoiceCloneDataset(samples=samples)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config = TrainerConfig(
+            epochs=1, batch_size=2, use_amp=False,
+            use_gradient_checkpointing=False,
+            output_dir=tmp_dir, val_ratio=0.0,
+        )
+        trainer = Trainer(model=model, train_data=ds, config=config)
+
+        # 旧格式: 只有 model_state
+        ckpt_path = Path(tmp_dir) / "legacy.pt"
+        torch.save({"model_state": model.state_dict()}, ckpt_path)
+
+        with caplog.at_level("WARNING", logger="adr.training"):
+            trainer.load_checkpoint(ckpt_path)
+
+        assert trainer._start_epoch == 0
+        assert trainer._start_global_step == 0
+        assert any("epoch/global_step" in r.message for r in caplog.records)
+
+
+def test_trainer_scaler_state_roundtrip():
+    """AMP fp16 scaler 状态应写入 ckpt 并在 load 时恢复 (duck-typed scaler)。"""
+    from adr.models.sovits import SoVITS, SoVITSConfig
+    from adr.training import Trainer, TrainerConfig
+    from adr.training.dataset import VoiceCloneDataset
+
+    model = SoVITS(SoVITSConfig(
+        hidden_dim=32, n_layers=2, n_heads=2, ffn_dim=64,
+        vocab_size=607, content_dim=16, timbre_dim=16,
+    ))
+    samples = [_make_dummy_sample(i) for i in range(4)]
+    ds = VoiceCloneDataset(samples=samples)
+
+    def _cfg(tmp_dir):
+        return TrainerConfig(
+            epochs=1, batch_size=2, use_amp=False,
+            use_gradient_checkpointing=False,
+            output_dir=tmp_dir, val_ratio=0.0,
+        )
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        trainer1 = Trainer(model=model, train_data=ds, config=_cfg(tmp_dir))
+        trainer1.scaler = _FakeScaler(scale=1234.5)  # 注入 (CPU 无 GradScaler)
+        ckpt_path = Path(tmp_dir) / "scaler.pt"
+        trainer1.save_checkpoint(ckpt_path)
+
+        ckpt = torch.load(ckpt_path, weights_only=False)
+        assert ckpt["scaler"]["scale"] == 1234.5
+
+        # 恢复: 新 scaler 从 ckpt 取回 scale
+        trainer2 = Trainer(model=model, train_data=ds, config=_cfg(tmp_dir))
+        fake2 = _FakeScaler(scale=1.0)
+        trainer2.scaler = fake2
+        trainer2.load_checkpoint(ckpt_path)
+        assert fake2.state_dict()["scale"] == 1234.5
+
+        # scaler 未启用 (None) 时 ckpt 带 scaler 状态 → warning 忽略, 不崩溃
+        trainer3 = Trainer(model=model, train_data=ds, config=_cfg(tmp_dir))
+        assert trainer3.scaler is None
+        trainer3.load_checkpoint(ckpt_path)
+
+
+def test_trainer_ckpt_shape_mismatch_raises():
+    """非 LoRA: 键存在但 shape 不一致应 raise (含 key/期望/实际 shape)。"""
+    from adr.models.sovits import SoVITS, SoVITSConfig
+    from adr.training import Trainer, TrainerConfig
+    from adr.training.dataset import VoiceCloneDataset
+
+    model = SoVITS(SoVITSConfig(
+        hidden_dim=32, n_layers=2, n_heads=2, ffn_dim=64,
+        vocab_size=607, content_dim=16, timbre_dim=16,
+    ))
+    samples = [_make_dummy_sample(i) for i in range(4)]
+    ds = VoiceCloneDataset(samples=samples)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config = TrainerConfig(
+            epochs=1, batch_size=2, use_amp=False,
+            use_gradient_checkpointing=False,
+            output_dir=tmp_dir, val_ratio=0.0,
+        )
+        trainer = Trainer(model=model, train_data=ds, config=config)
+
+        # 构造 shape 不一致的 ckpt: 切掉一个权重的首行
+        full = model.state_dict()
+        key = next(k for k, v in full.items() if v.dim() >= 2 and v.shape[0] > 1)
+        bad = {k: v.clone() for k, v in full.items()}
+        bad[key] = bad[key][1:]
+        ckpt_path = Path(tmp_dir) / "bad_shape.pt"
+        torch.save({"model_state": bad, "use_lora": False}, ckpt_path)
+
+        with pytest.raises(RuntimeError, match="shape mismatch"):
+            trainer.load_checkpoint(ckpt_path)
+
+
+def test_trainer_ckpt_missing_keys_tolerated(caplog):
+    """非 LoRA: ckpt 缺部分键 (旧基座缺新模块) 保持容错语义, 不 raise。"""
+    from adr.models.sovits import SoVITS, SoVITSConfig
+    from adr.training import Trainer, TrainerConfig
+    from adr.training.dataset import VoiceCloneDataset
+
+    model = SoVITS(SoVITSConfig(
+        hidden_dim=32, n_layers=2, n_heads=2, ffn_dim=64,
+        vocab_size=607, content_dim=16, timbre_dim=16,
+    ))
+    samples = [_make_dummy_sample(i) for i in range(4)]
+    ds = VoiceCloneDataset(samples=samples)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config = TrainerConfig(
+            epochs=1, batch_size=2, use_amp=False,
+            use_gradient_checkpointing=False,
+            output_dir=tmp_dir, val_ratio=0.0,
+        )
+        trainer = Trainer(model=model, train_data=ds, config=config)
+
+        # 删掉一个键模拟旧基座 ckpt 缺新增模块
+        full = model.state_dict()
+        drop_key = sorted(full.keys())[-1]
+        partial = {k: v for k, v in full.items() if k != drop_key}
+        ckpt_path = Path(tmp_dir) / "partial.pt"
+        torch.save({"model_state": partial, "use_lora": False}, ckpt_path)
+
+        with caplog.at_level("INFO", logger="adr.training"):
+            trainer.load_checkpoint(ckpt_path)  # 不应 raise
+
+        assert any("new params (random init)" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize("name", ["cosine", "warmup_cosine"])
+def test_scheduler_cosine_clamps_after_total(name):
+    """step 超过 total_steps 后 progress 应 clamp 到 1, LR 停在 min_lr_ratio 不回升。"""
+    from adr.training.optimizer import OptimizerConfig, build_scheduler
+
+    model = torch.nn.Linear(4, 4)
+    base_lr = 1e-3
+    opt = torch.optim.AdamW(model.parameters(), lr=base_lr)
+    sched = build_scheduler(
+        opt,
+        OptimizerConfig(lr=base_lr, warmup_steps=2, scheduler=name),
+        total_steps=10,
+    )
+
+    lrs = []
+    for _ in range(30):
+        opt.step()
+        sched.step()
+        lrs.append(opt.param_groups[0]["lr"])
+
+    # 走完后停在 min_lr_ratio*base (1e-4); 旧实现 cos 越界回升到 ~5.5e-4
+    assert lrs[-1] == pytest.approx(base_lr * 0.1, rel=1e-6)
+    assert max(lrs[10:]) <= base_lr * 0.1 + 1e-12
