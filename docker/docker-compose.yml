@@ -6,8 +6,6 @@
 #   docker-compose exec adr bash  # 进入容器
 #   docker-compose down         # 停止
 
-version: "3.9"
-
 services:
   adr:
     build:
@@ -28,8 +26,8 @@ services:
 
     # 端口映射
     ports:
-      - "7860:7860"  # Gradio WebUI
-      - "8000:8000"  # (可选) FastAPI 服务
+      - "7860:7860"  # Gradio WebUI (容器默认入口)
+      - "9881:9881"  # GSV 兼容 TTS 服务 (需另行启动: docker-compose exec adr python -m adr.server)
 
     # 卷挂载 (持久化)
     volumes:

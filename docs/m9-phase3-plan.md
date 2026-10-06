@@ -441,3 +441,15 @@
 - [x] **修复-b (__main__.py)**: 新增 `_print_banner` 启动横幅标识 "ADR TTS 服务 (非 GSV 官方)" + NEKO 对接提示 — 排障时区分对端 (NEKO 日志只报 "GPT-SoVITS 连接失败", 需确认 9881 上是谁); stdout 经壳 pump_server_log 落 server.log
 - [x] **验证** ✅: cargo check 通过 (零警告); py_compile 通过; banner 实弹确认落 stdout; NEKO 探针全链二次通过; 临时探针脚本已清理
 - **NEKO 侧使用指引**: GPT-SoVITS 模式 API 地址保持默认 http://127.0.0.1:9881 即可; 音色下拉自动出现 ADR 档案; 若壳启动提示 "9881 被占用" 则改填提示的端口
+
+### 批次 30 (2026-10-06): 全项目 Review 落地 — Track D 仓库卫生
+
+> 全项目三路并行审查 (后端 server / 训练管线 / 桌面壳+仓库卫生) 产出 12 严重 + 约 20 中级问题; 用户选定优化路线 **D 卫生 → A 训练正确性 → B 服务安全 → E 推理速度 → C 架构收敛**。本批执行 Track D; 训练/服务问题清单留给 A/B 批次逐项闭环。
+
+- [x] **README/LICENSE 补齐**: 项目简介 / 功能特性 / 快速开始 (NUMBA_CACHE_DIR 环境 + `pip install -e .[m1]` + `python -m adr.server` 9881 / `adr webui` / `adr train --lora`) / NEKO 对接指引 / 测试与文档索引; LICENSE = MIT (ADR Team); 顺带修复 Dockerfile L58 `COPY README.md LICENSE` build 必失败问题
+- [x] **.gitignore 补充**: `*.pt` / `*.safetensors` (模型权重不入库) + `.output/` 与 `需要适配的一个接口/` (本地实验/api_neko 蓝本不入库)
+- [x] **死依赖裁剪 (pyproject.toml + requirements.txt 同步)**: 核心删 omegaconf/hydra-core/einops (adr+tests+scripts 全库 import 零引用实证); 核心补 server 运行时硬需求 fastapi/uvicorn[standard]/python-multipart (UploadFile 需要) + transformers (gsv_engine.py AutoModel 运行时 import); m2 删 flash-attn/deepspeed/accelerate 保留 peft/bitsandbytes (训练在用); 删 m3 组 (auto-gptq/awq 零引用, export 为预留 stub); all 改 `[m1,m2]`
+- [x] **死脚本归置**: 删 run_lora_tests_v2.py (遗留实验脚本); `_bench_0p3b_gpu.py` → `scripts/bench_0p3b_gpu.py` 且硬编码 `REPO = Path(r"E:\...")` 改 `Path(__file__).resolve().parents[1]`
+- [x] **Docker 修复**: docker-compose 删废弃 `version:` 字段; 8000 错误端口映射 (容器内无进程监听) 改 9881 并注明 TTS 服务需容器内另行启动 `python -m adr.server` (默认入口仍是 webui 7860)
+- [x] **验证** ✅: tomllib 校验 pyproject 通过 (13 核心依赖, extras = m1/m2/all/dev); 被裁包全库 (adr/tests/scripts) 零引用实证; git mv 后脚本路径推导正确
+- **后续批次**: A 训练正确性 (grad_ckpt no-op / LoRA 目标错配 / ref_mel 泄漏 / mel mask / yaml 桥接 / LR total_steps / 种子) → B 服务安全 (WS 鉴权 / set_weights 白名单 / 断连取消 / chdir 治理 / 路径穿越) → E 推理速度 (句间停顿 profile 定位) → C 架构收敛

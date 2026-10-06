@@ -1,11 +1,8 @@
 # ADR 框架核心依赖
-# 安装: pip install -e .         (基础)
-#       pip install -e .[m1]     (M1 完整)
-#       pip install -e .[m2]     (M2 训练加速)
-#       pip install -e .[all]    (全量)
-#       pip install -e .[dev]    (含开发工具)
+# 推荐用 pip install -e .[m1] 安装 (本文件与 pyproject.toml 核心依赖保持同步)
+# 可选组: [m1] WebUI/ASR/G2P 完整功能, [m2] LoRA/QLoRA 训练加速, [all] 全量, [dev] 开发工具
 
-# ===== 基础 (M1 Day 1) =====
+# ===== 基础 (M1 Day 1 + TTS 服务运行时) =====
 torch>=2.1.0
 torchaudio>=2.1.0
 numpy>=1.24
@@ -15,8 +12,10 @@ rich>=13.0
 tqdm>=4.65
 soundfile>=0.12
 librosa>=0.10
-omegaconf>=2.3
-einops>=0.7
+transformers>=4.35
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-multipart>=0.0.9
 
 # ===== M1 完整 (Day 4-10) =====
 # gradio>=4.0
@@ -24,10 +23,6 @@ einops>=0.7
 # g2pW>=0.1
 # pypinyin>=0.49
 
-# ===== M2 训练加速 =====
+# ===== M2 训练加速 (LoRA/QLoRA) =====
 # peft>=0.7
 # bitsandbytes>=0.41
-# flash-attn>=2.3
-# deepspeed>=0.12
-# accelerate>=0.24
-# transformers>=4.35
