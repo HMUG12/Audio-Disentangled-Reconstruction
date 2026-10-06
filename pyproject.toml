@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "adr-clone"
-version = "0.1.0"
+version = "1.0.0"
 description = "ADR: Audio Disentangled Reconstruction — low-resource fast voice cloning training framework"
 readme = "README.md"
 license = {text = "MIT"}
