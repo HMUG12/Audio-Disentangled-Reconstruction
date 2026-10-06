@@ -15,10 +15,14 @@
 from __future__ import annotations
 
 import contextlib
+import io
 import logging
 import os
+import pickle
 import sys
 import threading
+import zipfile
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -51,9 +55,17 @@ def validate_weights_file(weights_path: str) -> None:
 
     引擎热换最终走 GSV third_party 内部的 torch.load (无 weights_only,
     third_party 不可改), 恶意 pickle 文件会在其加载时执行任意代码。
-    此处先用 weights_only=True 安全试读 — 只允许张量原始类型, 恶意
-    载荷在此即抛异常, 不会进入引擎; 并校验顶层必须是 dict
-    (模型权重的张量字典形态), 其他格式一律拒绝。
+    两段式校验 (批次43):
+
+    1) 快路径 torch.load(weights_only=True) — 官方预训练等纯 torch 权重
+       直接通过;
+    2) 慢路径受限 pickle 扫描 — GPT-SoVITS 训练产物把 config 存成第三方
+       utils.HParams 对象, torch>=2.6 的 weights_only=True 默认拒绝
+       (官方预训练的 config 是纯 dict, 不受影响), 导致安装态 prewarm /
+       换权全挂 ("tts failed")。慢路径按 GLOBAL 白名单扫描 pickle 流:
+       白名单外一律拒绝 (os.system 等 RCE 载荷进不来), 白名单内对象
+       stub 化 — 不 import 模块、不执行类体, storage 一律 stub; 顶层
+       仍须为 dict。安全性不降, 训练产物放行。
 
     唯一强收口点在 _ensure_weights 换权分支内 (覆盖 v2 请求级热换 /
     v3 档案 / native / openai / set_*_weights 全部入口); v2 层另有
@@ -62,11 +74,106 @@ def validate_weights_file(weights_path: str) -> None:
     import torch
     try:
         obj = torch.load(weights_path, map_location="cpu", weights_only=True)
-    except Exception as e:
-        raise ValueError(
-            f"weights file rejected by safe loader: {type(e).__name__}")
+    except Exception as fast_err:
+        try:
+            _restricted_weights_scan(weights_path)
+        except Exception as slow_err:
+            raise ValueError(
+                f"weights file rejected by safe loader: {type(slow_err).__name__}: "
+                f"{slow_err} ({weights_path})") from slow_err
+        return  # 慢路径通过: 含 HParams 的 GSV 训练产物
     if not isinstance(obj, dict):
         raise ValueError("weights file top-level must be a dict of tensors")
+
+
+def _is_trusted_weights_global(module: str, name: str) -> bool:
+    """慢路径 GLOBAL 白名单 (批次43, 探针实测真实权重文件 GLOBAL 并集)。
+
+    - collections.OrderedDict: torch.save 顶层容器 (真类, 保顶层 dict 校验)
+    - torch.*Storage: zip 权重 persistent_id 元组里的 storage 类型
+    - torch._utils._rebuild_*: torch 张量重建函数
+    - utils.HParams: GPT-SoVITS 训练产物 config 的第三方类型 (唯一放行的
+      非 torch GLOBAL; stub 化, 不 import third_party)
+    """
+    if module == "collections" and name == "OrderedDict":
+        return True
+    if module == "torch" and name.endswith("Storage"):
+        return True
+    if module == "torch._utils" and name in (
+        "_rebuild_tensor_v2",
+        "_rebuild_tensor",
+        "_rebuild_parameter",
+        "_rebuild_device_tensor_from_numpy",
+    ):
+        return True
+    return module == "utils" and name == "HParams"
+
+
+class _WeightsScanStub:
+    """GLOBAL 白名单内对象的 no-op 替身: 不 import 模块、不执行任何代码,
+    只让 pickle 流走完 (REDUCE / BUILD / SETITEMS / APPENDS 全部吞掉)。"""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __call__(self, *args, **kwargs):
+        return _WeightsScanStub()
+
+    def __setitem__(self, key, value):
+        pass
+
+    def __getitem__(self, key):
+        return None
+
+    def __setstate__(self, state):
+        pass
+
+    def append(self, value):
+        pass
+
+    def __len__(self):
+        return 0
+
+
+class _WeightsScanUnpickler(pickle.Unpickler):
+    """受限 Unpickler: 白名单外 GLOBAL 直接抛 UnpicklingError。"""
+
+    def find_class(self, module, name):
+        if module == "collections" and name == "OrderedDict":
+            return OrderedDict  # 标准库纯容器, 真类以保顶层 dict 校验
+        if _is_trusted_weights_global(module, name):
+            return _WeightsScanStub
+        raise pickle.UnpicklingError(
+            f"forbidden global in weights pickle: {module}.{name}")
+
+    def persistent_load(self, pid):
+        # 只验结构不读 storage: zip 权重的张量数据不进入内存
+        return _WeightsScanStub()
+
+
+def _restricted_weights_scan(weights_path: str) -> None:
+    """慢路径: 受限 Unpickler 扫描 torch zip 权重的 data.pkl (不加载张量)。"""
+    with open(weights_path, "rb") as f:
+        raw = f.read()
+    if raw[:2] != b"PK":
+        # GSV 生态常见的截头 zip 自愈 (与 third_party process_ckpt.load_sovits_new
+        # 同款补头); 真 legacy 非 zip 格式会在下方 BadZipFile 拒绝 — 该格式
+        # 仅存于 torch 1.x 古董文件, 官方/ADR 产物均为 zip 格式。
+        raw = b"PK" + raw
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            pkl_names = [n for n in zf.namelist() if n.endswith("data.pkl")]
+            if len(pkl_names) != 1:
+                raise pickle.UnpicklingError(
+                    f"expected exactly one data.pkl in weights zip, got {len(pkl_names)}")
+            data = zf.read(pkl_names[0])
+    except zipfile.BadZipFile as e:
+        raise pickle.UnpicklingError(
+            "not a torch zip weights file (legacy non-zip format not accepted)") from e
+    obj = _WeightsScanUnpickler(io.BytesIO(data)).load()
+    if not isinstance(obj, dict):
+        raise pickle.UnpicklingError(
+            "weights file top-level must be a dict of tensors")
 
 
 def _resolve_fragment_interval(fragment_interval: Optional[float]) -> float:
