@@ -33,9 +33,10 @@ DEFAULT_MAX_ENTRIES = 32
 DEFAULT_MAX_BYTES = 256 * 1024 * 1024
 
 # 参与 key 的请求字段 (seed 有意排除, 见模块 docstring)
+# fragment_interval 烤进输出音频 (句末静音长度), 必须参与 key (批次33)
 _KEY_FIELDS = (
     "text", "ref_audio_path", "prompt_text", "text_lang", "prompt_lang",
-    "top_k", "top_p", "temperature", "speed_factor",
+    "top_k", "top_p", "temperature", "speed_factor", "fragment_interval",
     "t2s_weights", "vits_weights", "media_type", "text_split_method",
 )
 

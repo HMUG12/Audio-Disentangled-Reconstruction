@@ -51,7 +51,7 @@ class TTS_Request(BaseModel):
     batch_threshold: float = 0.75
     split_bucket: bool = True
     speed_factor: float = 1.0
-    fragment_interval: float = 0.3
+    fragment_interval: float | None = None  # 批次33: None → 引擎侧 env (默认 0.3 = GSV 原行为)
     seed: int = -1
     media_type: str = "wav"
     streaming_mode: Union[bool, int] = False
@@ -143,6 +143,7 @@ def _stream_generator(engine, req: dict, media_type: str):
             top_p=req.get("top_p", 1.0),
             temperature=req.get("temperature", 1.0),
             speed_factor=req.get("speed_factor", 1.0),
+            fragment_interval=req.get("fragment_interval"),
         ):
             if first and mt == "wav":
                 yield wave_header_chunk(sample_rate=sr)
@@ -210,6 +211,7 @@ async def tts_handle(req: dict, request: Request) -> Response:
             top_k=req.get("top_k", 15),
             top_p=req.get("top_p", 1.0),
             temperature=req.get("temperature", 1.0),
+            fragment_interval=req.get("fragment_interval"),
         )
         buf = pack_audio(BytesIO(), to_int16(audio), sr, media_type)
         tts_cache.put(cache_key, buf.getvalue(), ext=media_type)
@@ -238,7 +240,7 @@ async def tts_get_endpoint(
     batch_threshold: float = 0.75,
     split_bucket: bool = True,
     speed_factor: float = 1.0,
-    fragment_interval: float = 0.3,
+    fragment_interval: float | None = None,
     seed: int = -1,
     media_type: str = "wav",
     parallel_infer: bool = True,
