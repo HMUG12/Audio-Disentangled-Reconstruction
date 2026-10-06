@@ -285,14 +285,19 @@ def test_v2_profile_resolution(client, engine, voice_dir):
     assert call["t2s_weights"] is None
 
 
-def test_v2_voice_alias_and_explicit_override(client, engine, voice_dir):
+def test_v2_voice_alias_and_explicit_override(client, engine, voice_dir, tmp_path):
+    # 批次38: 显式权重先过安全预检, 必须是真实 torch.save 张量 dict 文件
+    import torch
+
+    w = tmp_path / "explicit.pth"
+    torch.save({"w": torch.zeros(3)}, w)
     r = client.post("/api/v2/tts", json={
         "text": "hi", "voice": "demo",
-        "prompt_text": "显式覆盖", "vits_weights": "显式.pth"})
+        "prompt_text": "显式覆盖", "vits_weights": str(w)})
     assert r.status_code == 200
     call = engine.synth_calls[0]
     assert call["prompt_text"] == "显式覆盖"       # 显式值优先于档案
-    assert call["vits_weights"] == "显式.pth"
+    assert call["vits_weights"] == str(w)
 
 
 def test_v2_unknown_profile_400(client, engine, voice_dir):

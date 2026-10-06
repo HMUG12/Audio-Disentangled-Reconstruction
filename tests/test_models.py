@@ -324,3 +324,44 @@ def test_model_loading_local_bigvgan():
         print(f"  BigVGAN loaded: {v.is_loaded()}")
     except Exception as e:
         pytest.skip(f"BigVGAN load failed: {e}")
+
+
+# ─── 批次38: F0 采样率语义 (P0-2 歌唱时长错位修复) ───
+
+
+def test_f0_to_notes_duration_scales_with_sample_rate():
+    """同一 f0 轨迹, 采样率翻倍 → 音符时长减半。
+
+    修复前 sample_rate 硬编码 22050, 44.1k 参考音频的音符时长被放大 2 倍。
+    """
+    from adr.models.melody_bridge import f0_to_notes
+
+    f0 = np.full(256, 220.0, np.float32)  # 1.0s @22050 / 0.5s @44100
+    notes_22k, durs_22k = f0_to_notes(f0, 2, sample_rate=22050)
+    notes_44k, durs_44k = f0_to_notes(f0, 2, sample_rate=44100)
+    assert notes_22k == notes_44k  # 音高不受采样率影响
+    assert abs(sum(durs_22k) - 2 * sum(durs_44k)) < 1e-6
+
+
+def test_f0_to_notes_pitch_invariant_to_sample_rate():
+    """同一 Hz 序列 → 同一音符 (midi 与采样率无关)。"""
+    from adr.models.melody_bridge import f0_to_notes
+
+    f0 = np.full(512, 440.0, np.float32)
+    n22, _ = f0_to_notes(f0, 1, sample_rate=22050)
+    n44, _ = f0_to_notes(f0, 1, sample_rate=44100)
+    assert n22 == n44 == ["A4"]
+
+
+def test_f0_extract_with_sr_returns_sr():
+    """extract_with_sr 返回 (f0, sr); 数组路径 sr = 显式传入值。"""
+    from adr.data.f0 import F0Extractor
+
+    sr = 22050
+    t = np.linspace(0, 1.0, sr, dtype=np.float32)
+    audio = 0.3 * np.sin(2 * np.pi * 440 * t)
+    f0, got_sr = F0Extractor().extract_with_sr(audio, sample_rate=sr)
+    assert got_sr == sr
+    assert f0.ndim == 1 and f0.dtype == np.float32
+    voiced = f0[f0 > 0]
+    assert len(voiced) > 0 and 400 < voiced.mean() < 480

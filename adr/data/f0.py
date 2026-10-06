@@ -48,21 +48,26 @@ class F0Extractor:
         Returns:
             F0 序列 (T,), 0 表示无声帧
         """
-        if self.config.backend == "pyin":
-            return self._pyin_extract(audio, sample_rate)
-        else:
+        f0, _ = self.extract_with_sr(audio, sample_rate)
+        return f0
+
+    def extract_with_sr(
+        self,
+        audio: Union[str, Path, np.ndarray],
+        sample_rate: Optional[int] = None,
+    ) -> tuple:
+        """提取 F0 并返回实际采样率: (f0 (T,), sr)。
+
+        批次38: 从路径加载时 librosa sr=None 保留原生采样率, f0 帧格
+        对应 native sr * hop_length — 调用方 (如 melody_bridge 的时长
+        换算) 必须拿到这个 sr 才不会把 44.1k 参考音频的时长放大 2 倍。
+        传波形数组时 sr = sample_rate 或 config.sr。
+        """
+        if self.config.backend != "pyin":
             self.log.warning(
                 f"F0 backend '{self.config.backend}' not in M1, "
                 f"falling back to pyin"
             )
-            return self._pyin_extract(audio, sample_rate)
-
-    def _pyin_extract(
-        self,
-        audio: Union[str, Path, np.ndarray],
-        sample_rate: Optional[int] = None,
-    ) -> np.ndarray:
-        """使用 librosa.pyin 提取 F0。"""
         try:
             import librosa
         except ImportError as e:
@@ -72,7 +77,7 @@ class F0Extractor:
             y, sr = librosa.load(str(audio), sr=None)
         else:
             y = audio
-            sr = sample_rate or self.config.sr
+            sr = int(sample_rate or self.config.sr)
             if y.ndim > 1:
                 y = y.mean(axis=0)
 
@@ -88,7 +93,7 @@ class F0Extractor:
         # NaN -> 0
         f0 = np.nan_to_num(f0, nan=0.0)
 
-        return f0.astype(np.float32)
+        return f0.astype(np.float32), int(sr)
 
     @staticmethod
     def f0_to_midi(f0: np.ndarray) -> np.ndarray:
