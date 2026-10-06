@@ -594,8 +594,8 @@ fn eval_prewarm(window: &Option<WebviewWindow>, stage: &str, text: &str) {
     }
 }
 
-/// 从 stats 拉引擎预热阶段 (后端 gsv_engine.stage(), 不触发加载)。
-fn fetch_engine_stage(base: &str) -> Option<String> {
+/// 从 stats 拉引擎预热阶段 + 实时进度文案 (批次44: 下载进度透传, 不触发加载)。
+fn fetch_engine_stage_info(base: &str) -> Option<(String, String)> {
     let url = format!("{base}/api/adr/v1/system/stats");
     let body = ureq::get(&url)
         .timeout(Duration::from_secs(2))
@@ -603,11 +603,14 @@ fn fetch_engine_stage(base: &str) -> Option<String> {
         .ok()?
         .into_string()
         .ok()?;
-    serde_json::from_str::<serde_json::Value>(&body)
-        .ok()?
-        .get("engine_stage")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
+    let v = serde_json::from_str::<serde_json::Value>(&body).ok()?;
+    let stage = v.get("engine_stage").and_then(|x| x.as_str())?.to_string();
+    let text = v
+        .get("engine_stage_text")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    Some((stage, text))
 }
 
 /// 启动预热主流程: 拉服务 → 轮询引擎阶段 → ready 后自动放行进启动器。
@@ -635,7 +638,7 @@ fn prewarm_flow(app: AppHandle) {
     // 服务已 healthy, 转入引擎预热轮询 (批次37 状态机)
     state.set_phase(Phase::Prewarming);
 
-    // 轮询引擎预热阶段 (queued → importing → loading → kernel → ready)
+    // 轮询引擎预热阶段 (queued → importing → downloading → loading → kernel → ready)
     let deadline = Instant::now() + PREWARM_TIMEOUT;
     let mut last = String::new();
     loop {
@@ -646,22 +649,32 @@ fn prewarm_flow(app: AppHandle) {
         if state.base_url.lock().unwrap().as_deref() != Some(base.as_str()) {
             return;
         }
-        match fetch_engine_stage(&base) {
-            Some(st) if st == "ready" => break,
-            Some(st) if st == "failed" => {
+        match fetch_engine_stage_info(&base) {
+            Some((st, _)) if st == "ready" => break,
+            Some((st, _)) if st == "failed" => {
                 eval_prewarm(&window, "failed", "引擎预热失败, 请查看日志或重试");
                 return;
             }
-            Some(st) if !st.is_empty() && st != last => {
-                last = st.clone();
-                let text = match st.as_str() {
-                    "queued" => "预热排队中, 等待服务初始化…",
-                    "importing" => "加载框架 (torch / CUDA, 首次较慢)…",
-                    "loading" => "加载模型权重…",
-                    "kernel" => "预热推理内核 (首句提速)…",
-                    _ => "预热中…",
-                };
-                eval_prewarm(&window, &st, text);
+            Some((st, text)) if !st.is_empty() => {
+                let changed = st != last;
+                // 批次44: downloading 阶段文案为实时下载进度, 每次轮询都刷新;
+                // 其余阶段仅阶段变化时 eval 一次 (文案固定)
+                if changed {
+                    last = st.clone();
+                }
+                if st == "downloading" && !text.is_empty() {
+                    eval_prewarm(&window, &st, &text);
+                } else if changed {
+                    let text = match st.as_str() {
+                        "queued" => "预热排队中, 等待服务初始化…",
+                        "importing" => "加载框架 (torch / CUDA, 首次较慢)…",
+                        "downloading" => "下载预训练模型 (首次运行)…",
+                        "loading" => "加载模型权重…",
+                        "kernel" => "预热推理内核 (首句提速)…",
+                        _ => "预热中…",
+                    };
+                    eval_prewarm(&window, &st, text);
+                }
             }
             _ => {}
         }

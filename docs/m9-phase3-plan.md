@@ -662,3 +662,18 @@
 - [x] **测试** (tests/test_server_security.py 批次 43 组 ×5): 纯张量快路径放行 / GSV HParams 产物慢路径放行 (根因回归) / 白名单外 GLOBAL (argparse.Namespace) 拒绝且消息含路径 / 顶层非 dict 拒绝 / 垃圾文件拒绝; 夹具以临时假 utils 模块复现真实 pickle GLOBAL (CPython dump 校验 `getattr(module, qualname) is obj`, 纯改 `__module__` 存不进去)。真实训练权重 `yui的声音_e16_s400.pth` + `user_holdout_e8_s176.pth` 端到端放行验证 ✅
 - [x] **全量回归**: **408 passed + 1 skipped 零失败** (批次 42 基线 403 + 新增 5)
 - **后续**: 重新 tauri build 替换 dist/ 产物; v1.0.0 tag 指向坏包需处置 (重打 tag 或移至修复 commit, 待用户确认)
+
+### 批次 44 (2026-10-06): 全离线安装包 — 便携 runtime 全量入包 + Inno Setup 换装 (NSIS 2GB 硬上限)
+
+> 用户报安装包在别的机器 (纯 CPU) 无法预热, 实锤根因: v1.0.0 包内只有 Tauri 壳 + 静态页, Python 引擎环境 (torch/依赖/adr/GSV 代码) 全部缺位。方案: 便携 runtime 全离线包 (python + CPU torch + 全依赖 + adr + GSV 代码入包; 预训练底模 4.35GB 不入包, 首启 bootstrap 按需下载带进度)。
+
+- [x] **便携 runtime 构建** (`scripts/build_runtime.ps1`): python-build-standalone 3.13 → `build/runtime/python`; CPU torch + 全服务依赖 (requirements 冻结 `build_freeze.txt`); `adr` 包源码 + `runtime/third_party/gpt_sovits`; 安装态 3.89GB, GSV 冒烟三要素 (chdir + 双 sys.path + 依赖补齐) 全绿
+- [x] **底模按需下载** (`adr/models/gsv_bootstrap.py` 新建): 引擎启动时检测底模缺失 → 下载 pretrained_models.zip (4.35GB) + 校验 + 解压; 原子下载 (tmp→rename) 沿批次 40; 阶段文本经 `gsv_bootstrap.status()` → `engine_stage_text` → prewarm 页 `#tip` 实时透传 (downloading 期 500ms 轮询)
+- [x] **NSIS 2GB 硬上限实锤**: tauri bundle makensis LZMA 压缩 3.89GB runtime 在 1.87GB 处 `Internal compiler error #12345 mmapping out of range`; NSIS 32 位数据偏移 (最高位存压缩标志) 任何压缩算法均无法超过 ~2GB (官方确认, 不可绕) → **安装器换装 Inno Setup 6** (支持 >2GB 单 setup.exe, LicenseFile 协议页 + 简体中文原生); Tauri 只出 `--no-bundle` 主程序, `scripts/build_installer.ps1` 统一构建链
+- [x] **Inno 安装器** (`scripts/installer/installer.iss`): 单 setup.exe 体验对齐原 NSIS — `PrivilegesRequired=lowest` (per-user 免 UAC) / `Compression=lzma2/max` 非固体 (分块并行压缩) / 简体中文界面 (ChineseSimplified.isl 已转 UTF-8 BOM, 规避 LanguageCodePage=936 乱码) / **用户协议页** (license.rtf, 占位内容含授权范围/本地推理隐私/第三方组件声明, 待开源协议定稿后替换) / WebView2 运行时注册表检测 (EdgeUpdate Clients GUID, 缺失时提示并开官网) / per-user 默认目录 `%LOCALAPPDATA%\Programs\ADR Studio`
+- [x] **关于页** (launcher.html): 模态框 — 版本 (取自 Tauri API) / 维护者 未知之致 / 联系 QQ 3699672176 (点击复制)
+- [x] **产物**: `ADR-Studio-1.0.0-x64-setup.exe` **2297.5 MB** (~21 分钟 lzma2 编译, 突破 NSIS 2GB 上限); 安装态 3.82GB; 安装布局与壳的 runtime 推导三链对齐 (`{app}\adr-desktop.exe` + `{app}\runtime\python\python.exe` + `{app}\runtime\adr` + `{app}\runtime\third_party\gpt_sovits`)
+- [x] **新机器模拟验证** (rt9): Inno `/VERYSILENT /DIR="E:\adr-sim-install"` 静默安装 exit 0 → 布局核对全 ✓ → WMI 分离启动 (绕 RunCommand job object 回收) → 引擎以安装目录便携 Python 拉起 → Uvicorn 127.0.0.1:9881 `Application startup complete` → health `status:ok` + `engine_stage:"downloading"` + `engine_stage_text:"正在下载 pretrained_models.zip 1709.0/4351.8 MB (39%)"` — **bootstrap 下载与进度透传在安装态实测工作**
+- [x] **全量回归**: pytest 全量零失败 (见 commit); cargo release 编译零错误; GetDiagnostics 零诊断
+- **留白 (向用户明示)**: ① 安装包体积实况 — 安装态 3.82GB / setup.exe 2.24GB, 远超批次 42 预告的 200-300MB (torch CPU + GSV 全依赖所致, 为"别的机器开箱即用"的必要代价); ② `data/voices` (5GB 音色库) 与训练产物不入包 — 用户自定义声音在新机器暂不可用, 需后续做档案导出/导入; ③ 底模首启需联网下载 4.35GB, 无网环境不可用 (后续可做离线底模包)
+- **约定后续**: 开源协议选型 + license.rtf 定稿 + README (md 仓库介绍) 编写 — 与用户商量后落批次 45; v1.0.0 tag 指向坏包处置仍待确认
