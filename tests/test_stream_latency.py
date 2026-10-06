@@ -25,8 +25,20 @@ def test_head_split_long_text_sentence_end():
     assert len(head) <= 14
 
 
-def test_ensure_weights_skip_same_path():
-    """同路径热换幂等跳过 (稳态不再重复加载权重)。"""
+def test_ensure_weights_skip_same_path(tmp_path):
+    """同路径热换幂等跳过 (稳态不再重复加载权重)。
+
+    批次38 起 _ensure_weights 换权分支走引擎安全校验, 传入路径必须是
+    torch.save 产出的合法权重文件 (假路径 FileNotFoundError 直接拒)。
+    """
+    import torch
+
+    w_a = tmp_path / "a.pth"
+    w_b = tmp_path / "b.ckpt"
+    w_other = tmp_path / "other.pth"
+    for w in (w_a, w_b, w_other):
+        torch.save({"w": torch.zeros(3)}, w)
+
     eng = GSVEngine.__new__(GSVEngine)  # 跳过 __init__, 手工装状态
     eng._loaded = {"t2s": None, "vits": None}
     calls = []
@@ -48,11 +60,11 @@ def test_ensure_weights_skip_same_path():
     eng._tts = FakeTTS()
     eng._gsv_context = FakeCtx
 
-    eng._ensure_weights("/w/a.pth", "/w/b.ckpt")
+    eng._ensure_weights(str(w_a), str(w_b))
     assert len(calls) == 2
-    eng._ensure_weights("/w/a.pth", "/w/b.ckpt")   # 同路径 → 跳过
+    eng._ensure_weights(str(w_a), str(w_b))   # 同路径 → 跳过
     assert len(calls) == 2
-    eng._ensure_weights("/w/other.pth", None)      # 换 vits → 只热换 vits
+    eng._ensure_weights(str(w_other), None)   # 换 vits → 只热换 vits
     assert [sys_name for sys_name, _ in calls] == ["vits", "t2s", "vits"]
     # 传入路径经 resolve 归一, 相同真实文件只加载一次
-    assert calls[2][1] != calls[0][1]              # other.pth ≠ a.pth
+    assert calls[2][1] != calls[0][1]         # other.pth ≠ a.pth
