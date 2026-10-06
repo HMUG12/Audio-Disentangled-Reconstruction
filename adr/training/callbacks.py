@@ -9,6 +9,7 @@ M4: 新增 ASRCallback (ASR-based 早停, 用 WER/CER 评估 wav 可懂度)
 from __future__ import annotations
 
 import json
+import math
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -1116,7 +1117,10 @@ class WarmRestartCallback(Callback):
             g["lr"] = new_lr
             g["initial_lr"] = new_lr
         remaining_epochs = max(1, trainer.config.epochs - epoch - 1)
-        total_steps = max(1, len(trainer.train_loader) * remaining_epochs)
+        # scheduler 按 optimizer 更新边界步进: 需除以梯度累积步数 (与 trainer.fit 一致)
+        grad_accum = max(1, getattr(trainer.config, "grad_accum_steps", 1))
+        steps_per_epoch = math.ceil(len(trainer.train_loader) / grad_accum)
+        total_steps = max(1, steps_per_epoch * remaining_epochs)
         cfg = OptimizerConfig(
             lr=new_lr,
             warmup_steps=min(self.warmup_steps, total_steps),

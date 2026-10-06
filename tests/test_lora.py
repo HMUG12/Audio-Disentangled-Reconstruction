@@ -11,8 +11,10 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 import torch.nn as nn
@@ -397,3 +399,101 @@ def test_try_apply_peft():
     # 不论 PEFT 装没装,函数都应返回 (model, bool)
     assert peft_model is not None
     assert isinstance(success, bool)
+
+
+# ============================================================
+# shape mismatch 检查 (键在但 shape 不符 → raise; 键缺 → 容错)
+# ============================================================
+def test_load_lora_state_dict_shape_mismatch_raises():
+    """lora 键存在但 shape 不一致应 raise (消息含 key/期望/实际 shape)。"""
+    from adr.training.lora import (
+        LoRAConfig, apply_lora, get_lora_state_dict, load_lora_state_dict,
+    )
+
+    model = TinyTransformer(dim=32, n_layers=1)
+    config = LoRAConfig(rank=4, alpha=8, target_modules=["q_proj"])
+    apply_lora(model, config)
+
+    state = get_lora_state_dict(model)
+    bad_key = next(k for k in state if k.endswith("lora_A"))
+    bad = dict(state)
+    bad[bad_key] = torch.randn(8, state[bad_key].shape[1])  # rank 4 → 8
+
+    with pytest.raises(RuntimeError, match="shape mismatch"):
+        load_lora_state_dict(model, bad, strict=True)
+
+
+def test_load_lora_state_dict_missing_keys_tolerated():
+    """缺失 lora 键保持原容错语义 (strict 计数 missing, 不 raise)。"""
+    from adr.training.lora import (
+        LoRAConfig, apply_lora, get_lora_state_dict, load_lora_state_dict,
+    )
+
+    model = TinyTransformer(dim=32, n_layers=2)
+    config = LoRAConfig(rank=4, alpha=8, target_modules=["q_proj", "v_proj"])
+    apply_lora(model, config)
+    state = get_lora_state_dict(model)
+
+    # 删掉一层 lora 的 A/B 两个键
+    drop = sorted(k for k in state if k.endswith("lora_A"))[0]
+    b_key = drop.replace("lora_A", "lora_B")
+    partial = {k: v for k, v in state.items() if k not in (drop, b_key)}
+
+    loaded, missing = load_lora_state_dict(model, partial, strict=True)
+    assert missing == 2
+    assert loaded == len(state) - 2
+
+
+def _make_tiny_dataset(n: int = 4):
+    """构造极小训练集 (Trainer 集成测试用)。"""
+    from adr.data.pipeline import TrainSample
+    from adr.training.dataset import VoiceCloneDataset
+
+    samples = []
+    for i in range(n):
+        samples.append(TrainSample(
+            sample_id=f"u_{i}",
+            phonemes=["zh", "ong1"] * 5,
+            text="测试",
+            f0=np.linspace(180, 200, 80).astype(np.float32),
+            mel=np.random.randn(80, 80).astype(np.float32) * 0.1 + 0.5,
+            waveform=np.random.randn(8000).astype(np.float32) * 0.1,
+            sample_rate=22050,
+        ))
+    return VoiceCloneDataset(samples=samples)
+
+
+def test_trainer_lora_rank_mismatch_raises(tmp_path):
+    """Trainer 级: LoRA rank 不一致 → 明确 RuntimeError (不静默截断/跳过)。"""
+    from adr.models.sovits import SoVITS, SoVITSConfig
+    from adr.training import Trainer, TrainerConfig
+
+    def _model():
+        return SoVITS(SoVITSConfig(
+            hidden_dim=32, n_layers=2, n_heads=2, ffn_dim=64,
+            vocab_size=607, content_dim=16, timbre_dim=16,
+        ))
+
+    def _cfg(tmp_dir, rank):
+        return TrainerConfig(
+            epochs=1, batch_size=2, use_amp=False,
+            use_gradient_checkpointing=False,
+            output_dir=tmp_dir, val_ratio=0.0,
+            use_lora=True, lora_rank=rank,
+        )
+
+    ds = _make_tiny_dataset(4)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        # rank=4 训练并存档 (LoRA-only ckpt)
+        t1 = Trainer(model=_model(), train_data=ds, config=_cfg(tmp_dir, 4))
+        ckpt_path = Path(tmp_dir) / "lora.pt"
+        t1.save_checkpoint(ckpt_path)
+
+        # rank=8 加载 → lora_A/lora_B shape 不符 → raise
+        t2 = Trainer(model=_model(), train_data=ds, config=_cfg(tmp_dir, 8))
+        with pytest.raises(RuntimeError, match="shape mismatch"):
+            t2.load_checkpoint(ckpt_path)
+
+        # 对照: rank=4 加载成功 (base 权重缺失属 LoRA 预期, 不误伤)
+        t3 = Trainer(model=_model(), train_data=ds, config=_cfg(tmp_dir, 4))
+        t3.load_checkpoint(ckpt_path)  # 不应 raise

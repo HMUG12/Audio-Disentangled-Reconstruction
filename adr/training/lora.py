@@ -338,6 +338,15 @@ def load_lora_state_dict(
             a_key = f"{name}.lora_A"
             b_key = f"{name}.lora_B"
             if a_key in state_dict and b_key in state_dict:
+                # shape 预检查: copy_ 的广播报错信息不含 key/shape, 提前给出明确错误
+                for key, param in ((a_key, m.lora_A), (b_key, m.lora_B)):
+                    tensor = state_dict[key]
+                    if tuple(tensor.shape) != tuple(param.shape):
+                        raise RuntimeError(
+                            f"LoRA checkpoint shape mismatch: {key}: "
+                            f"expected {tuple(param.shape)}, "
+                            f"got {tuple(tensor.shape)}"
+                        )
                 with torch.no_grad():
                     m.lora_A.copy_(state_dict[a_key].to(m.lora_A.device))
                     m.lora_B.copy_(state_dict[b_key].to(m.lora_B.device))

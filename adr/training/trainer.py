@@ -196,6 +196,12 @@ class Trainer:
             self.amp_dtype = torch.float16
         self.scaler = torch.amp.GradScaler("cuda") if self.use_amp and self.amp_dtype == torch.float16 else None
 
+        # 断点续训/进度状态 (load_checkpoint 恢复; save_checkpoint 写入)
+        self._start_epoch = 0          # fit 起始 epoch (resume 时 > 0)
+        self._start_global_step = 0    # fit 起始全局步
+        self.current_epoch = 0         # 已完成的 epoch 数 (下一个待跑 epoch)
+        self.global_step = 0           # 累计 batch 步数
+
         # Gradient Checkpointing
         if self.config.use_gradient_checkpointing:
             n = enable_gradient_checkpointing(self.model, enabled=True)
@@ -234,22 +240,30 @@ class Trainer:
             cb.on_train_start(self)
 
         best_metrics = {}
-        global_step = 0
+        # 从断点恢复 (load_checkpoint 已写入 _start_epoch/_start_global_step)
+        self.global_step = self._start_global_step
         t_start = time.time()
+
+        if self._start_epoch > 0:
+            self.log.info(
+                f"Resuming from epoch {self._start_epoch} "
+                f"(global_step={self.global_step})"
+            )
 
         # Early Stopping 状态 (M3)
         best_val_loss = float("inf")
         epochs_no_improve = 0
         early_stopped = False
 
-        for epoch in range(self.config.epochs):
+        for epoch in range(self._start_epoch, self.config.epochs):
+            self.current_epoch = epoch  # 进行中的 epoch
             # on_epoch_start
             for cb in self.callbacks:
                 cb.on_epoch_start(self, epoch)
 
             # 训练
-            train_metrics = self._train_epoch(epoch, global_step)
-            global_step = train_metrics["global_step"]
+            train_metrics = self._train_epoch(epoch, self.global_step)
+            self.global_step = train_metrics["global_step"]
 
             # 验证
             val_metrics = {}
@@ -260,6 +274,9 @@ class Trainer:
             # 合并
             metrics = {**train_metrics, **val_metrics}
             metrics.pop("global_step", None)
+
+            # 本 epoch 训练+验证已完成 (供 checkpoint 记录进度)
+            self.current_epoch = epoch + 1
 
             # on_epoch_end
             for cb in self.callbacks:
@@ -444,7 +461,7 @@ class Trainer:
                 dequantize_4bit(self.model)
             model_state_to_save = self.model.state_dict()
 
-        torch.save({
+        ckpt = {
             "model_state": model_state_to_save,
             "optimizer_state": self.optimizer.state_dict(),
             "scheduler_state": self.scheduler.state_dict(),
@@ -452,7 +469,14 @@ class Trainer:
             "model_class": self.model.__class__.__name__,
             "backbone_config": backbone_config,
             "use_lora": self.config.use_lora,
-        }, path)
+            # 训练进度 (resume 时恢复 epoch/global_step)
+            "epoch": self.current_epoch,
+            "global_step": self.global_step,
+        }
+        # AMP GradScaler 状态 (scale/增长追踪器), 保证 resume 后梯度缩放稳定
+        if self.scaler is not None:
+            ckpt["scaler"] = self.scaler.state_dict()
+        torch.save(ckpt, path)
 
     def load_checkpoint(self, path: Union[str, Path]) -> None:
         """加载 checkpoint。
@@ -469,6 +493,16 @@ class Trainer:
             loaded, missing = load_lora_state_dict(self.model, ckpt["model_state"])
             self.log.info(f"  LoRA loaded: {loaded} params, {missing} missing")
         else:
+            # shape 预检查: strict=False 也无法容忍 size mismatch (PyTorch 必然 raise),
+            # 提前抛出含 key/期望/实际 shape 的明确错误
+            model_state = self.model.state_dict()
+            for key, tensor in ckpt["model_state"].items():
+                if key in model_state and model_state[key].shape != tensor.shape:
+                    raise RuntimeError(
+                        f"checkpoint shape mismatch: {key}: "
+                        f"expected {tuple(model_state[key].shape)}, "
+                        f"got {tuple(tensor.shape)}"
+                    )
             # strict 失败时 (如旧基座缺新增模块, 例 f0_embed) 降级 strict=False
             try:
                 self.model.load_state_dict(ckpt["model_state"])
@@ -492,6 +526,22 @@ class Trainer:
                 self.scheduler.load_state_dict(ckpt["scheduler_state"])
             except Exception as e:
                 self.log.warning(f"  scheduler state skipped: {e}")
+        # GradScaler 状态恢复 (仅 AMP+fp16 启用时有 scaler 实例)
+        if "scaler" in ckpt:
+            if self.scaler is not None:
+                try:
+                    self.scaler.load_state_dict(ckpt["scaler"])
+                except Exception as e:
+                    self.log.warning(f"  scaler state skipped: {e}")
+            else:
+                self.log.warning("  ckpt 含 scaler 状态但当前未启用 AMP+fp16, 已忽略")
+        # 恢复训练进度 (旧格式 ckpt 缺键默认 0, 从头继续)
+        if "epoch" not in ckpt or "global_step" not in ckpt:
+            self.log.warning("  ckpt 缺少 epoch/global_step, 按从头训练恢复 (epoch=0)")
+        self._start_epoch = int(ckpt.get("epoch", 0) or 0)
+        self._start_global_step = int(ckpt.get("global_step", 0) or 0)
+        self.current_epoch = self._start_epoch
+        self.global_step = self._start_global_step
 
     @classmethod
     def from_config(

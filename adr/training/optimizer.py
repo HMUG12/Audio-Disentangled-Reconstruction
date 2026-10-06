@@ -107,7 +107,8 @@ def build_scheduler(
         def lr_lambda(step):
             if step < warmup:
                 return step / warmup
-            progress = (step - warmup) / max(1, total_steps - warmup)
+            # clamp 到 [0,1]: 越界时 cos 会回升导致 LR 反弹
+            progress = min(max((step - warmup) / max(1, total_steps - warmup), 0.0), 1.0)
             return config.min_lr_ratio + (1 - config.min_lr_ratio) * 0.5 * (1 + math.cos(math.pi * progress))
         return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
@@ -115,7 +116,8 @@ def build_scheduler(
         def lr_lambda(step):
             if step < warmup:
                 return step / warmup
-            progress = (step - warmup) / max(1, total_steps - warmup)
+            # clamp 到 [0,1]: 越界时 cos 会回升导致 LR 反弹
+            progress = min(max((step - warmup) / max(1, total_steps - warmup), 0.0), 1.0)
             return config.min_lr_ratio + (1 - config.min_lr_ratio) * 0.5 * (1 + math.cos(math.pi * progress))
         return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
