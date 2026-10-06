@@ -209,17 +209,57 @@ def test_v2_stream_mode2_and_3(client, engine):
 
 # ─── 权重切换端点 ───
 
-def test_v2_set_gpt_weights(client, engine):
-    r = client.get("/api/v2/set_gpt_weights", params={"weights_path": "g.ckpt"})
+def test_v2_set_gpt_weights(client, engine, tmp_path):
+    # Track B: 端点先做 weights_only 安全预检, 须传合法张量字典文件
+    import torch
+
+    w = tmp_path / "g.ckpt"
+    torch.save({"w": torch.zeros(1)}, w)
+    r = client.get("/api/v2/set_gpt_weights", params={"weights_path": str(w)})
     assert r.status_code == 200
     assert r.json() == {"message": "success"}
-    assert engine.warmup_calls == [(None, "g.ckpt")]   # (vits, t2s)
+    assert engine.warmup_calls == [(None, str(w))]   # (vits, t2s)
 
 
-def test_v2_set_sovits_weights(client, engine):
-    r = client.get("/api/v2/set_sovits_weights", params={"weights_path": "s.pth"})
+def test_v2_set_sovits_weights(client, engine, tmp_path):
+    import torch
+
+    w = tmp_path / "s.pth"
+    torch.save({"w": torch.zeros(1)}, w)
+    r = client.get("/api/v2/set_sovits_weights", params={"weights_path": str(w)})
     assert r.status_code == 200
-    assert engine.warmup_calls == [("s.pth", None)]
+    assert engine.warmup_calls == [(str(w), None)]
+
+
+def test_v2_set_weights_rejects_malicious_pickle(client, engine, tmp_path):
+    """Track B: 恶意/非法 pickle 在安全预检即被拒 (400), 不进入引擎。"""
+    import pickle
+
+    class _Payload:
+        def __reduce__(self):  # 若被 pickle.load 会执行任意代码
+            return (print, ("pwned",))
+
+    w = tmp_path / "evil.pth"
+    w.write_bytes(pickle.dumps({"x": _Payload()}))
+    for ep in ("set_gpt_weights", "set_sovits_weights"):
+        r = client.get(f"/api/v2/{ep}", params={"weights_path": str(w)})
+        assert r.status_code == 400
+        assert engine.warmup_calls == []
+
+
+def test_v2_set_weights_load_fail(tmp_path):
+    import torch
+
+    class _Boom:
+        def warmup(self, vits_weights=None, t2s_weights=None):
+            raise RuntimeError("bad ckpt")
+
+    w = tmp_path / "x.ckpt"
+    torch.save({"w": torch.zeros(1)}, w)
+    c2 = TestClient(create_app(engine=_Boom()))
+    r = c2.get("/api/v2/set_gpt_weights", params={"weights_path": str(w)})
+    assert r.status_code == 400
+    assert r.json()["message"] == "change gpt weight failed"
 
 
 def test_v2_set_weights_missing_path(client):
@@ -228,17 +268,6 @@ def test_v2_set_weights_missing_path(client):
         r = client.get(f"/api/v2/{ep}")
         assert r.status_code == 400
         assert r.json()["message"] == msg
-
-
-def test_v2_set_weights_load_fail():
-    class _Boom:
-        def warmup(self, vits_weights=None, t2s_weights=None):
-            raise RuntimeError("bad ckpt")
-
-    c2 = TestClient(create_app(engine=_Boom()))
-    r = c2.get("/api/v2/set_gpt_weights", params={"weights_path": "x.ckpt"})
-    assert r.status_code == 400
-    assert r.json()["message"] == "change gpt weight failed"
 
 
 # ─── profile 档案扩展 ───
@@ -410,6 +439,18 @@ def test_auth_empty_value_means_off(engine, monkeypatch):
     c = TestClient(create_app(engine=engine))
     assert c.post("/api/v2/tts",
                   json={"text": "hi", "ref_audio_path": "a.wav"}).status_code == 200
+
+
+# ─── 路径穿越 (Track B: pathsafe) ───
+
+def test_v2_profile_name_traversal_rejected(client, engine):
+    """profile/voice 含路径成分一律 400, 不触达引擎。"""
+    for bad in ("../demo", "a/b", "..\\demo"):
+        r = client.post("/api/v2/tts", json={"text": "hi", "profile": bad})
+        assert r.status_code == 400, bad
+        assert "invalid profile name" in r.json()["message"], bad
+    assert engine.synth_calls == []
+    assert engine.stream_calls == []
 
 
 # ─── OpenAI 兼容面 (/v1/audio/speech + /v1/models, 批次21) ───

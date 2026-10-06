@@ -27,6 +27,7 @@ from typing import Optional
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 
 from adr.models import voice_library
+from adr.server import pathsafe
 from adr.server.audio_codec import to_int16, wave_header_chunk
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,9 @@ router = APIRouter(prefix="/api/v3", tags=["tts-v3"])
 
 # 句子边界标点 (与 api_neko tts_v3._SENTENCE_SPLITS 一致)
 _SENTENCE_SPLITS = {"，", "。", "？", "！", ",", ".", "?", "!", "~", ":", "：", "—", "…"}
+
+# 句级帧队列容量 (Track B 收口: 提为常量供测试缩小触发 QueueFull 路径)
+_QUEUE_MAXSIZE = 64
 
 
 class _TextBuffer:
@@ -89,6 +93,9 @@ def _resolve_voice(voice_id: str, app) -> Optional[dict]:
                 or (voice_library.list_voices() or [None])[0])
     if not name:
         return None
+    # Track B 收口: voice_id 必须是单段纯名, ../ 穿越读任意 voice.json → None
+    if not pathsafe.is_safe_name(name):
+        return None
     try:
         return voice_library.load_voice(name)
     except Exception:
@@ -118,8 +125,18 @@ async def voices_list(request: Request):
 
 @router.websocket("/tts/stream-input")
 async def tts_ws_stream_input(websocket: WebSocket):
-    """双向流式: 文本流入 + 音频流出 (N.E.K.O gptsovits worker 消费面)。"""
-    await websocket.accept()
+    """双向流式: 文本流入 + 音频流出 (N.E.K.O gptsovits worker 消费面)。
+
+    鉴权 (Track B): APIKeyMiddleware 在握手前校验 ?token= / ?api_key= /
+    Sec-WebSocket-Protocol; 未配置 ADR_TTS_API_KEY 时完全放行 (协议兼容)。
+    浏览器以子协议携带 key 时必须回显所选子协议, 否则浏览器会断开握手。
+    """
+    proto = websocket.headers.get("sec-websocket-protocol", "")
+    chosen = proto.split(",")[0].strip() or None
+    if chosen:
+        await websocket.accept(subprotocol=chosen)
+    else:
+        await websocket.accept()
 
     app = websocket.app
     voice: Optional[dict] = None
@@ -144,17 +161,35 @@ async def tts_ws_stream_input(websocket: WebSocket):
         return app.state.engine
 
     async def _push_task(text: str):
-        """合成一句: sentence → 逐帧完整 WAV → sentence_done / error。"""
+        """合成一句: sentence → 逐帧完整 WAV → sentence_done / error。
+
+        Track B 收口:
+        - 任何退出路径 (断连 / 发送失败 / 队列满 / 完成) 都在 finally 置位
+          cancel, 生产线程随即 break 并 close 合成生成器 → 引擎锁经其内部
+          finally 立即释放, 不再"断连后持锁合成到结束"饿死后续请求;
+        - 帧队列满时不再堆积/吞异常: 消费侧立即回 busy 错误帧并结束本句,
+          生产线程感知 cancel 后停止。
+        """
         task_id = next(task_ids)
         await _safe_send_json({"type": "sentence", "text": text, "task_id": task_id})
 
         loop = asyncio.get_running_loop()
-        chan: asyncio.Queue = asyncio.Queue(maxsize=64)
+        chan: asyncio.Queue = asyncio.Queue(maxsize=_QUEUE_MAXSIZE)
+        cancel = threading.Event()     # 置位 → 生产线程停止合成并释放引擎锁
+        chan_full = threading.Event()  # 队列满 → 消费侧立即回 busy 错误帧
+
+        def _put(item):
+            """生产线程 → 事件循环 入队; 满时不阻塞、不吞异常 (置标志上报)。"""
+            try:
+                chan.put_nowait(item)
+            except asyncio.QueueFull:
+                chan_full.set()
 
         def _produce():
+            gen = None
             try:
                 samp = voice.get("sampling") or {}
-                for chunk, sr in _engine().synthesize_stream(
+                gen = _engine().synthesize_stream(
                     text, voice["ref_audio"],
                     prompt_text=voice.get("prompt_text") or "",
                     text_lang=overrides.get("text_lang") or "zh",
@@ -166,34 +201,50 @@ async def tts_ws_stream_input(websocket: WebSocket):
                     top_k=samp.get("top_k", 15),
                     top_p=samp.get("top_p", 1.0),
                     temperature=samp.get("temperature", 1.0),
-                ):
+                )
+                for chunk, sr in gen:
+                    if cancel.is_set():
+                        break
                     frame = wave_header_chunk(sample_rate=sr) + \
                         to_int16(chunk).tobytes()
-                    loop.call_soon_threadsafe(chan.put_nowait, frame)
+                    loop.call_soon_threadsafe(_put, frame)
             except Exception as e:
-                logger.exception("v3 stream synth failed")
-                loop.call_soon_threadsafe(chan.put_nowait, ("__err__", str(e)))
-            loop.call_soon_threadsafe(chan.put_nowait, None)
+                if not cancel.is_set():
+                    logger.exception("v3 stream synth failed")
+                    loop.call_soon_threadsafe(_put, ("__err__", str(e)))
+            finally:
+                if gen is not None:
+                    gen.close()  # 触发生成器 finally → 引擎锁释放 (线程内安全)
+                loop.call_soon_threadsafe(_put, None)
 
         threading.Thread(target=_produce, daemon=True,
                          name=f"adr-v3-tts-{task_id}").start()
 
         n, err = 0, None
-        while True:
-            item = await chan.get()
-            if item is None:
-                break
-            if isinstance(item, tuple):
-                err = item[1]
-                break
-            await _safe_send_bytes(item)
-            n += 1
-        logger.debug("v3 task#%s done frames=%s err=%s", task_id, n, err)
-        if err:
-            await _safe_send_json({"type": "error", "message": err})
-        else:
-            await _safe_send_json({"type": "sentence_done", "task_id": task_id,
-                                   "chunks_sent": n})
+        try:
+            while True:
+                if chan_full.is_set():
+                    # 队列曾满: 立即报 busy, 不阻塞不堆积 (生产者随后自行停止)
+                    await _safe_send_json(
+                        {"type": "error",
+                         "message": "busy: synthesis queue full"})
+                    return
+                item = await chan.get()
+                if item is None:
+                    break
+                if isinstance(item, tuple):
+                    err = item[1]
+                    break
+                await _safe_send_bytes(item)
+                n += 1
+            logger.debug("v3 task#%s done frames=%s err=%s", task_id, n, err)
+            if err:
+                await _safe_send_json({"type": "error", "message": err})
+            else:
+                await _safe_send_json({"type": "sentence_done", "task_id": task_id,
+                                       "chunks_sent": n})
+        finally:
+            cancel.set()  # 断连/异常/完成 统一取消生产者并释放引擎锁
 
     try:
         while True:

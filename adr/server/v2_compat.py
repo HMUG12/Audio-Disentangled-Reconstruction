@@ -25,7 +25,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from adr.models import voice_library
-from adr.server import tts_cache
+from adr.server import pathsafe, tts_cache
 from adr.server.audio_codec import pack_audio, to_int16, wave_header_chunk
 
 logger = logging.getLogger(__name__)
@@ -82,6 +82,10 @@ def _resolve_profile(request: Request, req: dict):
     if not profile:
         profile = getattr(request.app.state, "default_profile", None)
     if profile:
+        # Track B 收口: 档案名必须是单段纯名, ../ 穿越读任意 voice.json 一律 400
+        if not pathsafe.is_safe_name(profile):
+            return JSONResponse(status_code=400,
+                                content={"message": f"invalid profile name: {profile}"})
         try:
             meta = voice_library.load_voice(profile)
         except Exception:
@@ -294,12 +298,33 @@ async def tts_post_endpoint(request: Request, body: TTS_Request):
 
 # ─── 模型切换端点 (全局语义: 热换引擎默认权重) ───
 
+def _validate_weights_file(weights_path: str) -> None:
+    """权重文件安全预检 (Track B 收口): 防恶意 pickle 反序列化 RCE。
+
+    引擎热换最终走 GSV third_party 内部的 torch.load (无 weights_only,
+    third_party 不可改), 恶意 pickle 文件会在其加载时执行任意代码。
+    此处先用 weights_only=True 安全试读 — 只允许张量原始类型, 恶意
+    载荷在此即抛异常, 不会进入引擎; 并校验顶层必须是 dict
+    (模型权重的张量字典形态), 其他格式一律拒绝。
+    """
+    import torch
+    try:
+        obj = torch.load(weights_path, map_location="cpu", weights_only=True)
+    except Exception as e:
+        raise ValueError(
+            f"weights file rejected by safe loader: {type(e).__name__}")
+    if not isinstance(obj, dict):
+        raise ValueError("weights file top-level must be a dict of tensors")
+
+
 @router.get("/set_gpt_weights", summary="切换 GPT (t2s) 权重")
 async def set_gpt_weights(request: Request, weights_path: str = None):
     try:
         if weights_path in ["", None]:
             return JSONResponse(status_code=400,
                                 content={"message": "gpt weight path is required"})
+        # Track B: 安全预检, 恶意 pickle 在进入引擎加载前即被拒 (400)
+        await asyncio.to_thread(_validate_weights_file, weights_path)
         engine = _get_engine(request)
         await asyncio.to_thread(engine.warmup, None, weights_path)
     except Exception as e:
@@ -316,6 +341,8 @@ async def set_sovits_weights(request: Request, weights_path: str = None):
         if weights_path in ["", None]:
             return JSONResponse(status_code=400,
                                 content={"message": "sovits weight path is required"})
+        # Track B: 安全预检, 恶意 pickle 在进入引擎加载前即被拒 (400)
+        await asyncio.to_thread(_validate_weights_file, weights_path)
         engine = _get_engine(request)
         await asyncio.to_thread(engine.warmup, weights_path, None)
     except Exception as e:

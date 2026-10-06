@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from adr.models import voice_library
+from adr.server import pathsafe
 from adr.server.v2_compat import tts_handle
 
 router = APIRouter(prefix="/api/adr/v1", tags=["adr-native"])
@@ -71,8 +72,9 @@ async def profiles():
 
 @router.get("/profiles/{name}/ref", summary="下载档案参考音频")
 async def profile_ref(name: str):
-    ref = Path(voice_library.VOICES_DIR) / name / "ref.wav"
-    if not ref.exists():
+    # Track B 收口: name 先清洗再拼路径, ../ 穿越越出 VOICES_DIR 一律 404
+    ref = pathsafe.resolve_within(voice_library.VOICES_DIR, Path(name) / "ref.wav")
+    if ref is None or not ref.exists():
         return JSONResponse(status_code=404,
                             content={"message": f"profile not found: {name}"})
     return FileResponse(str(ref), media_type="audio/wav", filename="ref.wav")
