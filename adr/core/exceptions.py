@@ -35,3 +35,19 @@ class DeviceError(ADRException):
 
 class DependencyMissingError(ADRException):
     """依赖缺失。"""
+
+
+class SynthesisError(ADRException):
+    """合成服务层错误基类 (批次34)。"""
+
+
+class ProfileInvalidError(SynthesisError):
+    """音色档案名非法 (含路径穿越)。"""
+
+
+class ProfileNotFoundError(SynthesisError):
+    """音色档案不存在。"""
+
+
+class SynthesisParamsError(SynthesisError):
+    """合成请求参数缺失/非法。"""

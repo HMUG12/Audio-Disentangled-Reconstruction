@@ -999,17 +999,19 @@ def _stream_clone_cmd(ref_path, text, prompt_text, voice_name, split_method="cut
     """
     import numpy as np
 
+    from adr.services import SynthesisService
+
     if not (text or "").strip():
         return
     t2s_w = vits_w = None
     if voice_name and voice_name.strip():
         try:
-            from adr.models.voice_library import load_voice
-            prof = load_voice(voice_name.strip())
-            ref_path = prof["ref_audio"]
-            prompt_text = prompt_text or prof.get("prompt_text") or ""
-            t2s_w = prof.get("t2s_weights")
-            vits_w = prof.get("vits_weights")
+            prof = SynthesisService.load_profile(voice_name.strip())
+            fill = SynthesisService.profile_fill(prof, prompt_text=prompt_text)
+            ref_path = fill["ref_audio_path"]
+            prompt_text = fill["prompt_text"]
+            t2s_w = fill["t2s_weights"]
+            vits_w = fill["vits_weights"]
         except Exception:
             return
     if _validate_audio(ref_path):
@@ -1017,10 +1019,10 @@ def _stream_clone_cmd(ref_path, text, prompt_text, voice_name, split_method="cut
     try:
         from adr.models.gsv_engine import get_gsv_engine
         eng = get_gsv_engine()
-        for chunk, sr in eng.synthesize_stream(
-                text, ref_path, prompt_text=(prompt_text or "").strip(),
+        for chunk, sr in SynthesisService.stream_chunks(
+                eng, text, ref_path, prompt_text=(prompt_text or "").strip(),
                 t2s_weights=t2s_w, vits_weights=vits_w,
-                split_method=split_method or "cut3"):
+                split_method=split_method):
             pcm = np.clip(chunk, -1.0, 1.0)
             yield sr, (pcm * 32767).astype(np.int16)
     except Exception:
@@ -1035,18 +1037,19 @@ def _run_clone_cmd(ref_path: Optional[str], text: str, ckpt_value: str,
     voice_name 命中已存音色时, 参考音频/参考文本/微调权重全部来自档案。
     style_desc 人设描述 → 风格预设覆盖 temperature/top_k, speed 相乘 (批次 7)。"""
     from adr.models.style_presets import resolve_style
+    from adr.services import SynthesisService
 
     style, style_hit = resolve_style(style_desc)
     style_bound = ""   # 档案默认人设 (voice 命中且风格框为空时生效)
     t2s_w = vits_w = None
     if voice_name and voice_name.strip():
         try:
-            from adr.models.voice_library import load_voice
-            prof = load_voice(voice_name.strip())
-            ref_path = prof["ref_audio"]
-            prompt_text = prompt_text or prof.get("prompt_text") or ""
-            t2s_w = prof.get("t2s_weights")
-            vits_w = prof.get("vits_weights")
+            prof = SynthesisService.load_profile(voice_name.strip())
+            fill = SynthesisService.profile_fill(prof, prompt_text=prompt_text)
+            ref_path = fill["ref_audio_path"]
+            prompt_text = fill["prompt_text"]
+            t2s_w = fill["t2s_weights"]
+            vits_w = fill["vits_weights"]
             if not style_desc.strip() and prof.get("style"):
                 style, style_hit = resolve_style(prof["style"])
                 style_bound = " (档案默认)"
@@ -1073,10 +1076,11 @@ def _run_clone_cmd(ref_path: Optional[str], text: str, ckpt_value: str,
 
             from adr.models.gsv_engine import get_gsv_engine
             t0 = time.time()
-            wav, sr = get_gsv_engine().synthesize(
-                text, ref_path, prompt_text=(prompt_text or "").strip(),
+            wav, sr = SynthesisService.synthesize_once(
+                get_gsv_engine(), text, ref_path,
+                prompt_text=(prompt_text or "").strip(),
                 t2s_weights=t2s_w, vits_weights=vits_w,
-                split_method=split_method or "cut1",
+                split_method=split_method,
                 temperature=style.temperature, top_k=style.top_k,
                 speed_factor=(speed_factor or 1.0) * style.speed)
             out_dir = Path("output/webui_clone")

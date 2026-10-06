@@ -504,3 +504,17 @@
 - [x] **验证** ✅: 全量 pytest 310 passed + 1 skipped; bench 三腿全跑通产物落盘; diag v3 五跑指纹全同
 - **已知权衡**: C (_every=8) 流式块结算同样粗化 → 首包延迟回退 (long_45 3.60s vs A 1.25s; short_12 2.92s vs 1.08s; two_20x2 反而 1.07s vs 1.72s — 段多时同步节流收益盖过粗化); 低首包场景可调小 `ADR_AR_SYNC_EVERY` (2~4) 折中
 - **后续批次**: C 架构收敛 (SynthesisService 单一合成服务+薄适配器 / GSV 引擎进程隔离 / 壳生命周期状态机+孤儿收编 / 配置单源 / core.exceptions 错误协议接线)
+
+### 批次 34 (2026-10-06): Track C 架构收敛 — SynthesisService 单一合成服务层
+
+> 档案解析/参数校验/split_method 兜底/流式线格式在 v2/v3/webui 三面散落的同构逻辑收为 adr/services/synthesis.py 单实现; v2_compat 薄壳化 (协议外壳+缓存编排保留), v3/webui 改调服务; 错误消息逐字保留 (wire 兼容), 类型化异常落地 core.exceptions; adr.server 重链 (包 __init__ → app → v2_compat) 规避: 服务层对 pathsafe/audio_codec 函数内延迟导入, 模块级仅依赖 core/models。
+
+- [x] **core.exceptions 服务侧异常** (adr/core/exceptions.py): SynthesisError 基类 + ProfileInvalidError (含 ../ 穿越拒绝) / ProfileNotFoundError / SynthesisParamsError — 批次35 错误协议接线的基础
+- [x] **SynthesisService** (adr/services/synthesis.py 新建 + adr/services/__init__.py): load_profile (名称安全 + 加载, 异常类型化) / profile_fill (请求显式优先: ref/prompt falsy 判定兜底, weights is None 判定兜底 — 精确镜像 v2 原语义) / validate_params (text/ref 必填 + media_type 白名单, 消息逐字) / stream_chunks+synthesize_once (引擎调用透传, split_method 兜底单点 cut3/cut1, engine 显式传参保留 app.state.engine 测试注入契约) / stream_bytes (wav 首块 44B 头 → raw 裸 PCM) / frame_bytes (v3 逐帧完整 WAV); MEDIA_TYPES 白名单收口为元组
+- [x] **v2_compat 薄壳化**: _resolve_profile → load_profile+profile_fill (except 两异常 → 400 str(e)), _check_params → validate_params (SynthesisParamsError → 400), _stream_generator → yield from stream_bytes (原 except 日志外壳保留), 非流式 → asyncio.to_thread(synthesize_once) (split_method 传 raw 值); 删 MEDIA_TYPES 常量与 voice_library/pathsafe/codec import; streaming_mode 分支语义/tts_cache 缓存编排/"tts failed" 错误外壳/权重端点零改动 — raw text_split_method 入缓存 key 语义天然兼容
+- [x] **v3_compat 改调服务**: _resolve_voice → load_profile (except 静默 None 保持原行为, 批次35 修错误协议), _produce → stream_chunks + frame_bytes; 删 pathsafe/codec import (voice_library 保留 — voices_list 仍用)
+- [x] **webui 改调服务**: _stream_clone_cmd/_run_clone_cmd 函数顶部 import SynthesisService (引擎调用在档案分支外, 分支内 import 会 NameError); 内联 load_voice 块 → load_profile+profile_fill (_run_clone_cmd 保留 prof 取档案默认 style); 引擎调用 → stream_chunks/synthesize_once (split_method 传 raw); Gradio (sr, int16) 输出形态与 prompt_text strip 语义在调用点保留; webui 多传的 text_lang/seed 等默认值与引擎签名默认一致, 零语义漂移
+- [x] **测试** (tests/test_synthesis_service.py 新建 15 用例): load_profile 三态消息逐字 / profile_fill 显式优先 + 双语义 (t2s=None→档案值, vits=""→保持空串) / validate_params 三错误逐字 + "WAV"→wav + None→wav / stream_chunks cut3 兜底 + 全参数透传 / synthesize_once cut1 兜底 / stream_bytes wav (44B 头 + 2×32B 裸 PCM) 与 raw (无头) / frame_bytes (帧头采样率 @24:28=32000, 44+32B) / MEDIA_TYPES 白名单; RecordingEngine 每块 16 样本便于字节断言; raw 替代 mp3 断言避免 ffmpeg 依赖
+- [x] **验证** ✅: 全量 pytest 325 passed + 1 skipped (基线 310+1 + 新增 15, v2/v3/webui 既有面无回归)
+- **循环导入设计备案**: 测试入口 `from adr.services.synthesis import ...` 若走模块级 import adr.server.pathsafe → adr.server.__init__ → app → v2_compat → (彼时 adr.services 尚未初始化完成) → ImportError; 解法 = 服务层对 adr.server 子模块全部函数内延迟导入 (其自身无反向依赖), v2→services 单向模块级依赖安全
+- **后续批次**: 35 错误协议接线 (v3 _resolve_voice 静默 None 改类型化上报 / 四面统一错误码映射) → 36 配置单源 (settings 中心) → 37 壳生命周期状态机 + 孤儿收编 (Rust)
