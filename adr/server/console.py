@@ -155,8 +155,10 @@ def system_stats():
         # 引擎三态: loading=后台预热中 / ready=_tts 就绪可合成
         "engine_loading": gsv_engine.is_loading(),
         "engine_ready": gsv_engine.is_ready(),
-        # 预热细分阶段: queued/importing/loading/kernel/ready/failed/""
+        # 预热细分阶段: queued/importing/downloading/loading/kernel/ready/failed/""
         "engine_stage": gsv_engine.stage(),
+        # 批次44: downloading 阶段的实时下载进度文案 (其余阶段空串)
+        "engine_stage_text": gsv_engine.stage_text(),
         # 批次23: 并发排队可视化 (排队等待数 / 合成中数)
         "queue_depth": gsv_engine.queue_depth(),
         "synth_busy": gsv_engine.synth_busy(),

@@ -704,6 +704,32 @@ def stage() -> str:
     return _STAGE
 
 
+def stage_text() -> str:
+    """downloading 阶段的实时进度文案 (批次44 下载提示), 其余阶段返回空串。
+
+    由 server stats 透传 → 桌面壳轮询 → prewarm 页显示下载进度。
+    """
+    if _STAGE != "downloading":
+        return ""
+    try:
+        from adr.models import gsv_bootstrap
+
+        st = gsv_bootstrap.status()
+    except Exception:
+        return "正在下载预训练模型…"
+    b = st.get("stage")
+    if b == "downloading":
+        done, total = st.get("downloaded", 0), st.get("total", 0)
+        mb = done / 1048576
+        if total > 0:
+            return (f"正在下载 {st.get('file', '')} "
+                    f"{mb:.1f}/{total / 1048576:.1f} MB ({int(done * 100 / total)}%)")
+        return f"正在下载 {st.get('file', '')} {mb:.1f} MB"
+    if b == "extracting":
+        return f"正在解压 {st.get('file', '')}…"
+    return "正在下载预训练模型…"
+
+
 def queue_depth() -> int:
     """进程级排队数 (批次23, 引擎未初始化时 0)。"""
     return _ENGINE.queue_depth() if _ENGINE is not None else 0
@@ -755,6 +781,13 @@ def prewarm(default_profile: str | None = None) -> None:
                 log.info("[prewarm] 用音色档案「%s」的权重预热", prof_name)
             except Exception:
                 prof = None  # 档案损坏 → 退回纯预训练权重
+        # 批次44: 预训练资源 bootstrap — 便携包不含底模, 首启按需下载+解压
+        # (已就位时 pending() 为空, 零开销直接过)
+        from adr.models import gsv_bootstrap
+
+        if gsv_bootstrap.pending():
+            _STAGE = "downloading"  # 进度经 stage_text() → stats → 壳透传
+            gsv_bootstrap.ensure()
         _STAGE = "loading"    # 权重加载进显存
         eng = get_gsv_engine()
         eng.warmup(**{k: v for k, v in kw.items() if v})

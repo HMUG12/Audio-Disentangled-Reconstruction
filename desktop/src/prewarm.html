@@ -107,7 +107,7 @@ const steps = [0, 1, 2, 3].map(i => document.getElementById("st" + i));
 const tip = document.getElementById("tip");
 const acts = document.getElementById("acts");
 // 引擎阶段 → 步骤下标 (queued/importing 同属"加载框架")
-const MAP = { starting: 0, queued: 1, importing: 1, loading: 2, kernel: 3 };
+const MAP = { starting: 0, queued: 1, importing: 1, downloading: 2, loading: 2, kernel: 3 };
 
 function setTip(text, cls) {
   tip.textContent = text;
