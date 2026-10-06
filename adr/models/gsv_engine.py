@@ -45,6 +45,15 @@ GSV_DIR = REPO_ROOT / "third_party" / "gpt_sovits"
 _CHDIR_LOCK = threading.RLock()
 
 
+def _resolve_fragment_interval(fragment_interval: Optional[float]) -> float:
+    """Track E (批次33): 句末静音秒数解析 — None → env ADR_TTS_FRAGMENT_INTERVAL
+    (默认 0.3 = GSV 原行为); 显式传入钳到 [0, 2] (负数会使下游 np.zeros 崩)。"""
+    fi = fragment_interval
+    if fi is None:
+        fi = float(os.environ.get("ADR_TTS_FRAGMENT_INTERVAL", "0.3") or "0.3")
+    return max(0.0, min(float(fi), 2.0))
+
+
 @dataclass
 class GSVEngineConfig:
     """GPT-SoVITS 套壳引擎配置。"""
@@ -174,6 +183,23 @@ class GSVEngine:
         socket.setdefaulttimeout(5)
         with self._gsv_context():
             import torch
+            # Track E (批次33): AR 解码 tqdm 每句 1500 迭代渲染 stderr,
+            # TQDM_DISABLE 对 tqdm 4.67 实测无效 — monkeypatch __init__ 注入
+            # disable=True。第三方 `from tqdm import tqdm` 绑定同一类对象,
+            # 补类属性即全局生效; 必须在 TTS 导入前打。ADR_TTS_KEEP_TQDM=1 保留。
+            if os.environ.get("ADR_TTS_KEEP_TQDM") != "1":
+                try:
+                    import tqdm as _tqdm
+
+                    _tqdm_init = _tqdm.tqdm.__init__
+
+                    def _silent_tqdm_init(_tq, *a, **k):
+                        k.setdefault("disable", True)
+                        _tqdm_init(_tq, *a, **k)
+
+                    _tqdm.tqdm.__init__ = _silent_tqdm_init
+                except Exception:
+                    pass
             from TTS_infer_pack.TTS import TTS, TTS_Config
 
             device = self.config.device
@@ -196,6 +222,24 @@ class GSVEngine:
             _scratch = self.config.gsv_dir / "TEMP" / "tts_infer_adr_scratch.yaml"
             _scratch.parent.mkdir(exist_ok=True)
             self._tts.configs.configs_path = str(_scratch)
+            # Track E (批次33): run() finally 每句 empty_cache (gc.collect +
+            # cuda.empty_cache) — 句间停顿来源之一, 且清缓存后下一步分配要重新
+            # cudaMalloc。改为每 16 次调用真清理一次 (防显存碎片兜底保留)。
+            # ADR_TTS_KEEP_EMPTY_CACHE=1 回退每句清理。
+            if os.environ.get("ADR_TTS_KEEP_EMPTY_CACHE") != "1":
+                _orig_empty_cache = self._tts.empty_cache
+                _ec_calls = {"n": 0}
+
+                def _throttled_empty_cache():
+                    # 实时读 env: A/B 基准可在同进程切腿 (KEEP_EMPTY_CACHE=1 即旧每句清)
+                    if os.environ.get("ADR_TTS_KEEP_EMPTY_CACHE") == "1":
+                        _orig_empty_cache()
+                        return
+                    _ec_calls["n"] += 1
+                    if _ec_calls["n"] % 16 == 0:
+                        _orig_empty_cache()
+
+                self._tts.empty_cache = _throttled_empty_cache
 
             # 批次5: 纯 CPU 档用 ORT 版 BERT (组件级 ~1.4x, 端到端 ~10%)
             if ((device == "cpu" and self.config.bert_onnx == "auto")
@@ -319,6 +363,7 @@ class GSVEngine:
         top_p: float = 1.0,
         temperature: float = 1.0,
         speed_factor: float = 1.0,
+        fragment_interval: Optional[float] = None,
     ):
         """流式合成: 逐块 yield (wav_chunk float32 [-1,1], sr)。
 
@@ -332,6 +377,9 @@ class GSVEngine:
               为上游流式历史行为; 偏发散, 档案可配保守值压电音 (批次20)
         speed_factor: 语速 (批次21)。仅 ≠1.0 时注入 GSV inputs —
               GSV 流式路径对语速支持不稳, ==1.0 保持历史行为字节级一致
+        fragment_interval: 句末静音秒数 (批次33)。None → env
+              ADR_TTS_FRAGMENT_INTERVAL (默认 0.3 = GSV 原行为); 置 0 可
+              消除句间停顿 (Track E)
         """
         import numpy as np
 
@@ -368,6 +416,9 @@ class GSVEngine:
                 }
                 if speed_factor != 1.0:
                     inputs["speed_factor"] = speed_factor
+                # 批次33: 句末静音秒数 — 一直传 (None→env 解析), 0 可消除句间停顿
+                fi = _resolve_fragment_interval(fragment_interval)
+                inputs["fragment_interval"] = fi
                 with self._gsv_context():
                     self._ensure_weights(vits_weights, t2s_weights)
                     for i, seg in enumerate(segments):
@@ -379,7 +430,7 @@ class GSVEngine:
                             ckey = _seg_cache_key(
                                 seg, ref_audio, prompt_text, text_lang,
                                 prompt_lang, split_method, top_k, top_p,
-                                temperature, speed_factor, t2s_weights,
+                                temperature, speed_factor, fi, t2s_weights,
                                 vits_weights)
                             hit = _seg_cache_get(ckey)
                             if hit is not None:
@@ -425,6 +476,7 @@ class GSVEngine:
         top_k: int = 15,
         top_p: float = 1.0,
         temperature: float = 1.0,
+        fragment_interval: Optional[float] = None,
     ) -> "tuple":
         """零样本克隆朗读: (text, 参考音频) → (wav, sr)。
 
@@ -470,6 +522,7 @@ class GSVEngine:
                     "return_fragment": False,
                     "streaming_mode": False,
                     "parallel_infer": True,
+                    "fragment_interval": _resolve_fragment_interval(fragment_interval),
                 }
                 self._ensure_weights(vits_weights, t2s_weights)
                 with self._gsv_context():

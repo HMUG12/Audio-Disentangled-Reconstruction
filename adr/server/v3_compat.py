@@ -201,6 +201,7 @@ async def tts_ws_stream_input(websocket: WebSocket):
                     top_k=samp.get("top_k", 15),
                     top_p=samp.get("top_p", 1.0),
                     temperature=samp.get("temperature", 1.0),
+                    fragment_interval=overrides.get("fragment_interval"),
                 )
                 for chunk, sr in gen:
                     if cancel.is_set():
@@ -268,6 +269,7 @@ async def tts_ws_stream_input(websocket: WebSocket):
                 overrides = {k: data.get(k) for k in (
                     "text_lang", "speed_factor", "temperature", "top_k", "top_p",
                     "seed", "batch_size", "text_split_method", "media_type",
+                    "fragment_interval",
                 ) if data.get(k) is not None}
                 await _safe_send_json({"type": "ready", "voice_id": vid})
 

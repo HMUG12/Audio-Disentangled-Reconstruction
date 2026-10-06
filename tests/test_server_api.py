@@ -34,12 +34,14 @@ class FakeEngine:
     def synthesize(self, text, ref_audio, prompt_text="", text_lang="zh",
                    prompt_lang="zh", speed_factor=1.0, seed=-1,
                    t2s_weights=None, vits_weights=None, split_method="cut1",
-                   top_k=15, top_p=1.0, temperature=1.0):
+                   top_k=15, top_p=1.0, temperature=1.0,
+                   fragment_interval=None):
         self.synth_calls.append(dict(
             text=text, ref_audio=ref_audio, prompt_text=prompt_text,
             text_lang=text_lang, prompt_lang=prompt_lang,
             speed_factor=speed_factor, seed=seed, t2s_weights=t2s_weights,
-            vits_weights=vits_weights, split_method=split_method))
+            vits_weights=vits_weights, split_method=split_method,
+            fragment_interval=fragment_interval))
         if self.fail:
             raise RuntimeError("boom")
         return np.full(self.sr // 10, 0.1, np.float32), self.sr
@@ -48,13 +50,13 @@ class FakeEngine:
                           prompt_lang="zh", t2s_weights=None, vits_weights=None,
                           split_method="cut3", head_seed=-1,
                           top_k=15, top_p=1.0, temperature=1.0,
-                          speed_factor=1.0):
+                          speed_factor=1.0, fragment_interval=None):
         self.stream_calls.append(dict(
             text=text, ref_audio=ref_audio, prompt_text=prompt_text,
             t2s_weights=t2s_weights, vits_weights=vits_weights,
             split_method=split_method, head_seed=head_seed,
             top_k=top_k, top_p=top_p, temperature=temperature,
-            speed_factor=speed_factor))
+            speed_factor=speed_factor, fragment_interval=fragment_interval))
         if self.fail:
             raise RuntimeError("boom")
         for _ in range(3):

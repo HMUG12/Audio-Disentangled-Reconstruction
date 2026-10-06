@@ -480,3 +480,27 @@
 - [x] **路径穿越** (adr/server/pathsafe.py 新建 + native.py + v3_compat.py): `resolve_within(root, candidate)` (resolve 规范化 ../ 与符号链接, 相对 candidate 基于 root 解析 — 修复 agent 初版基于 cwd 解析导致合法档案误判越界的 bug) + `is_safe_name` 单段纯名; native profile_ref 越界 404 兜底; v2 profile/v3 voice 名 is_safe_name 400
 - [x] **安全测试** ✅: test_server_security.py 新建 10 用例 (pathsafe 相对/绝对/穿越/换盘符 + is_safe_name; WS 无凭据 4401 / token / api_key / 子协议回显 accepted_subprotocol / 未配置默认放行红线); test_server_api.py 补 v2 profile 穿越 400 不触引擎 + set_weights 真实张量文件改造 (假路径被新预检拒) + 恶意 pickle 拒绝; server 测试 55 → 65, 全量 310 passed + 1 skipped
 - **后续批次**: E 推理速度 (句间停顿 profile 定位: 引擎全局锁覆盖全程 / length_regulate .item() 逐元素同步 / 每句起 ffmpeg / 句间无流水线预取) → C 架构收敛
+
+### 批次 33 (2026-10-06): Track E 推理提速 — AR 同步风暴消除/tqdm静音/empty_cache节流/fragment_interval可配
+
+> 句间停顿 profile 定位四个来源并逐项消除: AR 解码每步 4 次隐式 GPU→CPU 同步 (EOS 判定 2 次 + mute 分支 2 次, 同步风暴)、tqdm 每步 stderr 渲染、run() finally 每句 empty_cache (清后下一步分配重 cudaMalloc)、fragment_interval 0.3s 句末静音硬编码。三腿 A/B 基准 C/A x1.12~x1.48, RTF 全线 <1 越过实时线; diag v3 token 指纹取证证明同步节律改动与 token 输出逐位无关 (音频差异仅 vits 噪声 RNG 偏移, 合法性等价非 bug)。
+
+- [x] **T1 AR 同步风暴消除** (third_party/gpt_sovits/GPT_SoVITS/AR/models/t2s_model.py infer_panel_naive — third_party 不入库, 此处备案改动): 原每步 4 次隐式同步 + tqdm 每步渲染为句间停顿主因; 改 EOS 旗标每步仅设备侧累积 (0 同步, `(argmax==EOS)|(samples==EOS)` 张量), 每 `ADR_AR_SYNC_EVERY` 步 (默认 8) 一次 `torch.stack(_eos_flags).cpu()` 批量结算 (循环内唯一 D2H), chunk yield 一并挪到检查点; sample() 参数与 RNG 逐位一致 → token 流与旧实现相同, 仅 EOS 观察至多延迟 _every-1 步、流式 chunk 边界从定长 16 变 16~(16+_every-1) (下游按累计 token 解码 + SOLA 拼接对变长不敏感); 终止步 (early_stop/1499) 挂起窗口+本步旗标合并结算, EOS 后垃圾 token 永不外发; `ADR_AR_SYNC_LEGACY=1` 回退逐步同步 (基准 A/B 腿); `ADR_AR_DEBUG_TOKENS=1` 打印 token sha1 指纹 (取证用)
+- [x] **T2 tqdm 静音** (adr/models/gsv_engine.py _lazy_init): AR 解码 tqdm 每句 ~1500 迭代渲染 stderr; TQDM_DISABLE 对 tqdm 4.67 实测无效 → monkeypatch `tqdm.__init__` 注入 disable=True (第三方 `from tqdm import tqdm` 绑定同一类对象, 类补丁全局生效, 须在 TTS 导入前打); `ADR_TTS_KEEP_TQDM=1` 保留
+- [x] **T3 empty_cache 节流** (adr/models/gsv_engine.py _lazy_init): TTS.run() finally 每句 empty_cache (gc.collect + cuda.empty_cache) 为句间停顿来源之一且清后分配重 cudaMalloc; 改 `_throttled_empty_cache` 每 16 次调用真清理一次 (防显存碎片兜底保留), 闭包实时读 env 支持同进程切腿; `ADR_TTS_KEEP_EMPTY_CACHE=1` 回退每句清
+- [x] **T4 fragment_interval 可配** (gsv_engine.py + gsv_runtime.py + v2_compat.py + v3_compat.py + tts_cache.py + tests/test_server_api.py): 句末静音秒数原硬编码 GSV 默认 0.3s — 引擎层 `_resolve_fragment_interval()`: None → env `ADR_TTS_FRAGMENT_INTERVAL` (默认 0.3 = GSV 原行为), 显式值钳 [0,2] (负数使下游 np.zeros 崩); synthesize/stream 双路径恒传 (None→env 解析, 置 0 消除句间停顿); v2 API `fragment_interval` 默认改 None (None → 引擎侧 env), v3 WS overrides 白名单加入; 段缓存 key (gsv_runtime._seg_cache_key) 与 TTS 输出缓存 key (tts_cache._KEY_FIELDS) 均烤入 fragment_interval — 输出音频依赖它, 不入 key 会串音; FakeEngine 签名同步 + 断言透传
+- [x] **T5 三腿 A/B 基准** (scripts/bench_sync_ab.py 新建): 三腿同进程切腿 — A legacy_full (`ADR_AR_SYNC_LEGACY=1`+`ADR_TTS_KEEP_EMPTY_CACHE=1`) / B legacy_ec (仅 LEGACY=1, 隔离 T3 贡献) / C new (默认); REPS=2 预热 1 次丢弃 + 测 2 次取 min 抗噪; `ADR_SEG_CACHE=0` 防段缓存污染; NUMBA_CACHE_DIR 顶部强制改道 (见环境要求)。一致性校验 warn-only (样本数一致 + diff 统计: samples 85120=85120 OK, max|Δ|=0.358215 — vits 噪声 RNG 偏移, 见 T6)
+- [x] **基准结论** (output/bench_sync_ab.json + output/bench_console.log):
+
+  | 文本 | A_legacy | B_legacy_ec | C_new | C/A | C/B(T1) | B/A(T3) |
+  |------|---------|------------|-------|-----|---------|---------|
+  | long_45 | 9.83s | 8.83s | 8.35s | x1.18 | x1.06 | x1.11 |
+  | two_20x2 | 7.88s | 6.30s | 5.34s | **x1.48** | x1.18 | x1.25 |
+  | short_12 | 3.26s | 3.19s | 2.92s | x1.12 | x1.09 | x1.02 |
+
+  RTF: A 1.05/1.22/1.07 → C **0.93/0.97/0.95** 全线越过实时线; 句子越多提升越大 (T1 同步风暴 + T3 句间清理均按句计费); T3 贡献在多句文本尤为显著 (two_20x2 x1.25)
+- [x] **T6 diag v3 token 取证破案** (scripts/diag_consistency.py 重写): 交替 5 跑 (E8/E1/E8/E1/E8, seed=0 单句非流式) `[AR-DBG]` token sha1 指纹全同 (gen=59, first16 逐 token 一致) → AR token 输出与 _every 逐位无关, 循环数学正确; every8/every1 音频不同的根因 = E8 在 EOS 检出前多跑 _every-1 步 (退出 idx=63 vs 59) → 多 5 次 multinomial RNG 消耗 → vits flow randn 在 RNG 流不同偏移取值 → 波形自 sample 0 不同 (max|Δ|=0.3582 吻合); E8 首跑 0.0038 微差为 cuDNN autotune 首跑效应 → **_every=8 非 bug**: token 等价、合法性等价, 代价仅 EOS 检出延迟
+- [x] **环境要求**: NUMBA_CACHE_DIR 必须在 import numpy/librosa 前设置 — 默认 TEMP 下 numba 缓存初始化 (librosa.filters `@jit(cache=True)`) 被安全软件拦截 → 导入永久卡死 (py-spy 取证: 卡 `_mkstemp_inner ← numba ensure_cache_path ← librosa import ← TTS.py:27`); bench/diag 脚本顶部 `os.environ.setdefault("NUMBA_CACHE_DIR", ...)` 兜底
+- [x] **验证** ✅: 全量 pytest 310 passed + 1 skipped; bench 三腿全跑通产物落盘; diag v3 五跑指纹全同
+- **已知权衡**: C (_every=8) 流式块结算同样粗化 → 首包延迟回退 (long_45 3.60s vs A 1.25s; short_12 2.92s vs 1.08s; two_20x2 反而 1.07s vs 1.72s — 段多时同步节流收益盖过粗化); 低首包场景可调小 `ADR_AR_SYNC_EVERY` (2~4) 折中
+- **后续批次**: C 架构收敛 (SynthesisService 单一合成服务+薄适配器 / GSV 引擎进程隔离 / 壳生命周期状态机+孤儿收编 / 配置单源 / core.exceptions 错误协议接线)

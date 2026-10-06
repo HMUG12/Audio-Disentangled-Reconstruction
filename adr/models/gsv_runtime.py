@@ -31,11 +31,12 @@ def _seg_cache_enabled() -> bool:
 def _seg_cache_key(seg: str, ref_audio: str, prompt_text: str,
                    text_lang: str, prompt_lang: str, split_method: str,
                    top_k: int, top_p: float, temperature: float,
-                   speed_factor: float,
+                   speed_factor: float, fragment_interval: float,
                    t2s_weights: Optional[str], vits_weights: Optional[str]) -> str:
     payload = json.dumps(
         [seg, ref_audio, prompt_text, text_lang, prompt_lang, split_method,
-         top_k, top_p, temperature, speed_factor, t2s_weights, vits_weights],
+         top_k, top_p, temperature, speed_factor, fragment_interval,
+         t2s_weights, vits_weights],
         ensure_ascii=False)
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 
