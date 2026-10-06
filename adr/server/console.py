@@ -30,6 +30,9 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from adr.server.exceptions import ProfileNameInvalid
+from adr.server.pathsafe import is_safe_name
+
 REPO = Path(__file__).resolve().parents[2]
 STATIC_DIR = Path(__file__).parent / "static"
 OUTPUT_DIR = REPO / "output"
@@ -475,11 +478,15 @@ def _profile_worker(name: str, audio_path: str, prompt_text: str, style: str) ->
 @router.post("/profiles/create", summary="从录音新建音色档案 (后台扫段选优)")
 async def profile_create(body: ProfileCreateReq):
     from adr.models import voice_library
+    # 批次41a: 档案名直接拼档案库路径, 清洗后仍可能残留 ".." (穿越成分),
+    # 先做单段纯名校验 (400 + code=profile_invalid), 再查音频存在性
+    name = (body.name or "我的声音").strip()
+    name = "".join(c for c in name if c not in '\\/:*?"<>|') or "我的声音"
+    if not is_safe_name(name):
+        raise ProfileNameInvalid(name)
     audio = Path(body.audio_path)
     if not audio.exists():
         raise HTTPException(400, f"音频不存在: {body.audio_path}")
-    name = (body.name or "我的声音").strip()
-    name = "".join(c for c in name if c not in '\\/:*?"<>|') or "我的声音"
     if name in voice_library.list_voices():
         raise HTTPException(409, f"已存在同名声音「{name}」, 请换一个名字")
     with _profile_lock:

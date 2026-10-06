@@ -18,8 +18,8 @@
 """
 from __future__ import annotations
 
+import hmac
 import json
-import secrets
 from urllib.parse import unquote
 
 # 监控探活豁免 (无敏感数据, 供 N.E.K.O / 负载均衡探活)
@@ -35,10 +35,17 @@ class APIKeyMiddleware:
         self.api_keys = {k for k in (api_keys or ()) if k}
 
     def _key_ok(self, key) -> bool:
-        """恒定时间比较 (Track B): 逐个 compare_digest, 防时序侧信道枚举。"""
+        """恒定时间比较 (Track B): 逐个 compare_digest, 防时序侧信道枚举。
+
+        批次41a: 两侧统一 encode 成 bytes 再比 — compare_digest 对 str
+        遇非 ASCII 会抛 TypeError (异常路径同时泄漏比较失败信息),
+        bytes 口径对任意凭据输入都恒定时间且不抛错。
+        """
         if not key:
             return False
-        return any(secrets.compare_digest(key, k) for k in self.api_keys)
+        kb = key.encode("utf-8", "surrogateescape")
+        return any(hmac.compare_digest(kb, k.encode("utf-8", "surrogateescape"))
+                   for k in self.api_keys)
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "websocket":
