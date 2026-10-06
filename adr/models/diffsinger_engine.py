@@ -182,8 +182,10 @@ class DiffSingerEngine:
         from adr.data.f0 import F0Extractor
         from adr.models.melody_bridge import build_word_level_input
 
-        f0 = F0Extractor()(ref_audio)
-        inp = build_word_level_input(text, f0)
+        # 批次38 (P0-2): extract_with_sr 保留参考音频原生采样率, 避免 22050
+        # 硬编码把 44.1k/48k 参考音频的音符时长放大 2~2.2 倍。
+        f0, ref_sr = F0Extractor().extract_with_sr(ref_audio)
+        inp = build_word_level_input(text, f0, sample_rate=ref_sr)
         wav, sr = self.synthesize_word(inp["text"], inp["notes"],
                                        inp["notes_duration"], speedup=speedup)
 

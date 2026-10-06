@@ -153,6 +153,20 @@ async def tts_handle(req: dict, request: Request) -> Response:
       0 → 非流式 | 1 → 分段流 (return_fragment) | 2 → 真流式 | 3 → 真流式+定长块
       其余 → 400。注: bool True == 1, 自然落分支 1。
     """
+    # 批次38 (Track B 补口): 请求显式传入的权重文件先过安全预检, 给出干净的 400
+    # (流式路径响应头先行, 引擎校验发生在流开始后只能断流)。仅校验请求级热换值 —
+    # 档案回填的权重由引擎 _ensure_weights 换权分支强收口, 不在此处重复。
+    for _wk in ("t2s_weights", "vits_weights"):
+        _wp = req.get(_wk)
+        if _wp:
+            try:
+                await asyncio.to_thread(_validate_weights_file, _wp)
+            except Exception as e:
+                return JSONResponse(
+                    status_code=400,
+                    content={"message": f"invalid {_wk}: {e}",
+                             "code": "invalid_params"})
+
     err = _resolve_profile(request, req)
     if err is not None:
         return err
@@ -296,20 +310,12 @@ async def tts_post_endpoint(request: Request, body: TTS_Request):
 def _validate_weights_file(weights_path: str) -> None:
     """权重文件安全预检 (Track B 收口): 防恶意 pickle 反序列化 RCE。
 
-    引擎热换最终走 GSV third_party 内部的 torch.load (无 weights_only,
-    third_party 不可改), 恶意 pickle 文件会在其加载时执行任意代码。
-    此处先用 weights_only=True 安全试读 — 只允许张量原始类型, 恶意
-    载荷在此即抛异常, 不会进入引擎; 并校验顶层必须是 dict
-    (模型权重的张量字典形态), 其他格式一律拒绝。
+    批次38: 实现收编为引擎单点 gsv_engine.validate_weights_file —
+    _ensure_weights 换权分支同样预检, 覆盖 v3 档案等不经本层的入口;
+    此处委托保持既有访问面 (tests/早期引用) 不变。
     """
-    import torch
-    try:
-        obj = torch.load(weights_path, map_location="cpu", weights_only=True)
-    except Exception as e:
-        raise ValueError(
-            f"weights file rejected by safe loader: {type(e).__name__}")
-    if not isinstance(obj, dict):
-        raise ValueError("weights file top-level must be a dict of tensors")
+    from adr.models.gsv_engine import validate_weights_file
+    validate_weights_file(weights_path)
 
 
 @router.get("/set_gpt_weights", summary="切换 GPT (t2s) 权重")

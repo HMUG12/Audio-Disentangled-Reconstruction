@@ -559,3 +559,15 @@
 - [x] **验证** ✅: cargo check / cargo build 零警告零错误; PowerShell 查询实测格式正确 (pid\tcmdline 逐行, bench_sync_ab.py 等无关进程不匹配不杀); engine_status 输出形状不变 (前端零改动); Python 侧零接触 (全量 pytest 不受影响)
 - **设计要点**: reap 匹配口径是安全边界 — 收编对象 = "壳自己会拉起的服务形状", 其他 python 进程 (训练/推理/调试) 一律不碰; Phase 状态机消除 "pid!=0 且 prewarm_done=false" 类布尔组合隐式状态, 未来新增生命周期态有落点
 - **Track C 收官**: 34 服务层 (ba74518) → 35 错误协议 (2dd33f4) → 36 配置单源 (0bae4b4) → 37 壳生命周期 (本批) — 架构收敛四批全部完成
+
+### 批次 38 (2026-10-06): 全项目 Review P0×2 — pickle 预检漏网收口 + 歌唱采样率错位
+
+> Review 发现的两个 P0: ① 请求级 `t2s_weights`/`vits_weights` (v2/native/openai) 绕过批次32 的 set_*_weights 预检直达 third_party 无 `weights_only` 的 `torch.load` (RCE); ② 歌唱桥 `build_word_level_input` 硬编码 22050 换算时长, 44.1k/48k 参考音频音符时长被放大 2~2.2 倍 (旋律错拍)。
+
+- [x] **P0-1 引擎单点收口**: `gsv_engine.validate_weights_file()` (torch.load weights_only=True + 顶层 dict 校验) 接入 `_ensure_weights` 换权分支 — 覆盖 v2 请求级热换 / v3 档案 / native / openai / set_*_weights 全部入口; `self._loaded` 幂等跳过 → 稳态零开销 (校验只在真正换权时执行一次)
+- [x] **P0-1 请求早检**: v2_compat `tts_handle` 对**显式传入**的 t2s/vits_weights 先过预检, 流式路径响应头先行也能给出干净 400 (code=invalid_params); 刻意放在 `_resolve_profile` 之前只校验请求显式值 — 档案回填权重由引擎 `_ensure_weights` 强收口 (测试环境假路径档案不误伤)
+- [x] **P0-2 采样率语义**: `f0.py` 新增 `extract_with_sr()` 返回 `(f0, sr)` (路径加载 librosa.load(sr=None) 保原生 sr; 数组路径显式 sample_rate 优先); `__call__` 委托保持原签名; `diffsinger_engine.sing_like` 改用 `extract_with_sr` 并把 `sample_rate=ref_sr` 传给 `build_word_level_input` (melody_bridge 本就接受该参数, 修复只是接线)
+- [x] **测试**: test_server_security.py +3 (恶意 __reduce__ pickle → 400 不触引擎 / 裸 tensor 非 dict → 400 / 合法 torch.save 张量 dict → 200 且引擎收到路径); test_models.py +3 (f0_to_notes 采样率翻倍时长减半 / 音高 midi 与采样率无关 / extract_with_sr 返回 sr); 调整 test_server_api.py 显式覆盖用例 (显式权重现为真 torch.save 文件 — 假路径 400 是新安全语义)
+- [x] **验证** ✅: test_server_api + test_server_security + test_data_pipeline + test_models 定向 105 passed + 1 skipped; 实测确认 torch.load(weights_only=True) 只放行 torch.save 产物 (裸 pickle.dumps protocol-4 流被拒 — 恶意 pickle 校验有效性得到真实负载验证)
+- **设计要点**: 校验单点在引擎换权分支 (安全必须覆盖未来入口), 早检仅为流式 400 体验 (Response 已发出后无法改状态码); weights_only unpickler 对非 torch.save 格式天然拒绝 — "合法放行"判据与真实 .pth 权重格式一致, 无误杀面
+- **后续批次**: 39 P1 训练正确性 → 40 P1 服务/推理/壳 → 41 P2+安全P3 → 42 v1.0.0 打包

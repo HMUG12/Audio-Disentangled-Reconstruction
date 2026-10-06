@@ -46,6 +46,29 @@ GSV_DIR = REPO_ROOT / "third_party" / "gpt_sovits"
 _CHDIR_LOCK = threading.RLock()
 
 
+def validate_weights_file(weights_path: str) -> None:
+    """权重文件安全预检 (Track B 收口; 批次38 收编为引擎单点): 防恶意 pickle RCE。
+
+    引擎热换最终走 GSV third_party 内部的 torch.load (无 weights_only,
+    third_party 不可改), 恶意 pickle 文件会在其加载时执行任意代码。
+    此处先用 weights_only=True 安全试读 — 只允许张量原始类型, 恶意
+    载荷在此即抛异常, 不会进入引擎; 并校验顶层必须是 dict
+    (模型权重的张量字典形态), 其他格式一律拒绝。
+
+    唯一强收口点在 _ensure_weights 换权分支内 (覆盖 v2 请求级热换 /
+    v3 档案 / native / openai / set_*_weights 全部入口); v2 层另有
+    请求入口早检, 仅为了流式请求能在响应头发出前给出干净的 400。
+    """
+    import torch
+    try:
+        obj = torch.load(weights_path, map_location="cpu", weights_only=True)
+    except Exception as e:
+        raise ValueError(
+            f"weights file rejected by safe loader: {type(e).__name__}")
+    if not isinstance(obj, dict):
+        raise ValueError("weights file top-level must be a dict of tensors")
+
+
 def _resolve_fragment_interval(fragment_interval: Optional[float]) -> float:
     """Track E (批次33): 句末静音秒数解析 — None → env ADR_TTS_FRAGMENT_INTERVAL
     (默认 0.3 = GSV 原行为); 显式传入钳到 [0, 2] (负数会使下游 np.zeros 崩)。
@@ -290,9 +313,13 @@ class GSVEngine:
         tw = str(Path(t2s_weights).resolve()) if t2s_weights else None
         with self._gsv_context():
             if vw and self._loaded.get("vits") != vw:
+                # 批次38: 安全预检收编到唯一换权点 — 恶意 pickle 在 third_party
+                # torch.load 前拒绝, 覆盖 v2 请求级 / v3 档案 / set_* 全部入口
+                validate_weights_file(vw)
                 self._tts.init_vits_weights(vw)
                 self._loaded["vits"] = vw
             if tw and self._loaded.get("t2s") != tw:
+                validate_weights_file(tw)
                 self._tts.init_t2s_weights(tw)
                 self._loaded["t2s"] = tw
 
