@@ -315,7 +315,12 @@ fn engine_status(app: AppHandle) -> serde_json::Value {
 #[tauri::command]
 fn skip_prewarm(app: AppHandle) {
     let state: State<ServerState> = app.state();
-    state.set_phase(Phase::Ready);
+    // 服务确实在跑 (pid != 0) 才标 Ready (批次40): 服务已被杀/从未启动时
+    // 标 Ready 会谎报就绪 (launcher 顶栏/托盘显示失真); 导航保留 —
+    // launcher 里 enter_console 按 base_url+探活自行冷启动兜底。
+    if state.pid.load(Ordering::Relaxed) != 0 {
+        state.set_phase(Phase::Ready);
+    }
     let window = app.get_webview_window("main");
     navigate(&window, &format!("{TAURI_ORIGIN}/launcher.html"));
 }
@@ -449,6 +454,10 @@ fn start_and_wait(
     state: &State<ServerState>,
 ) -> Option<(Child, String, Instant)> {
     let (child, started) = start_server(mode, window, state)?;
+    // 探活成功 (start_server 内 wait_healthy 已 200) 才转 Prewarming (批次40):
+    // 维持不变式 "Prewarming: 服务已 healthy" — 此前本路径 Phase 停在 Starting。
+    // 前端零感知: Starting/Prewarming 在 engine_status 中都映射 "loading"。
+    state.set_phase(Phase::Prewarming);
     let base = state.base_url.lock().unwrap().clone().unwrap_or_default();
     // ?desktop=1: 控制台页据此显示"返回启动器" (壳内标记; 浏览器直开不带)
     let target = match mode {
@@ -738,7 +747,16 @@ fn supervise(app: AppHandle, mode: String, mut child: Child, mut started: Instan
 fn kill_current(state: &State<ServerState>) {
     let pid = state.pid.swap(0, Ordering::Relaxed);
     if pid != 0 {
-        kill_tree(pid);
+        // 日志留痕 (批次40): 被杀 pid 与 taskkill 结果落服务日志, 排障可查
+        let ok = kill_tree(pid);
+        proc_log(
+            "kill",
+            &if ok {
+                format!("kill_current: taskkill /T /F pid={pid} 成功")
+            } else {
+                format!("kill_current: taskkill /T /F pid={pid} 失败 (Access denied / 已退出)")
+            },
+        );
         *state.base_url.lock().unwrap() = None;
         // 不变式 (批次37): pid 清零 → Stopped
         state.set_phase(Phase::Stopped);
@@ -827,6 +845,11 @@ fn list_python_processes() -> Option<Vec<(u32, String)>> {
 
 /// 收编日志追加到服务日志 (server_log_path(), 与 server 流日志同文件排障)。
 fn reap_log(msg: &str) {
+    proc_log("reap", msg);
+}
+
+/// 通用进程操作日志 (批次40): 按标签追加到服务日志, 供 kill/收编等留痕。
+fn proc_log(tag: &str, msg: &str) {
     use std::io::Write;
     let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
@@ -839,7 +862,7 @@ fn reap_log(msg: &str) {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let _ = writeln!(f, "===== [reap {ts}] {msg}");
+    let _ = writeln!(f, "===== [{tag} {ts}] {msg}");
 }
 
 /// 轮询健康端点直到 200 或超时 (legacy: Gradio 首页; pro/easy: FastAPI health)。
