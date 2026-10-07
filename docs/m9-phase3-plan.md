@@ -699,3 +699,18 @@
 - [x] **GitHub Release v1.0.0 发布** (id 405378553, `releases/tag/v1.0.0`): gh CLI 未安装, 改用 git credential fill 取存储凭据 + REST API `POST /releases` (curl --data-binary); 踩坑两个: ① `Get-Content -Raw` 的字符串带 ETS 附加属性 (PSPath 等), ConvertTo-Json 把 body 序列化成对象 → 422, 改 `[IO.File]::ReadAllText` 取纯净字符串; ② HEAD 请求被 123 盘 CDN 拒 (404), GET 才能验证链接; 发布说明含 123 云盘直链 + 提取码 ADRS + "未经充分测试不确定是否可用"声明 + 安装说明 + 源码指引
 - [x] **README 安装方式一更新**: 下载指引改为 123 云盘分享链接 (提取码 `ADRS`) + 未经充分测试声明 + Issues 反馈入口, Releases 链接保留
 - **留白**: ① 安装包用户实测结果待反馈 (桌面端安装/协议页/LICENSE 随附/首启预热); ② 若确认可用, 后续版本可评估 Inno 分卷直传 GitHub; ③ pyproject `[project.urls]` 与 README 均已指向实际仓库, 待仓库 Description/topics 由用户在 GitHub 网页端补充
+
+### 批次 47 (2026-10-07): M10 开篇 — A 壳体检全扫 + D 音色档案导入导出 + GPU 性能埋点
+
+> M10 计划书 (docs/m10-plan.md) 定档四线: 47=A 壳体检 + D 导入导出 + 性能埋点 → 48=B 设置中心 → 49=C 低配加速 → 50=E 续训; F 多语言待定。本批执行批次 47 三件事。
+
+- [x] **A 静态审计** ✅: 桌面壳四页 (launcher/prewarm/loading + 控制台 pro/easy/call) invoke 调用逐一对照 lib.rs 命令注册表 — 全部已注册无悬空; 控制台页 fetch 端点对照 native.py 路由表全对齐
+- [x] **A 动态点检** ✅: 服务起 9881 (TestClient 不可覆盖壳 JS 交互, 走实弹) — 四页按钮逐一点检; 一键诊断/健康轮询/prewarm 状态机 (queued→importing→loading→kernel→ready, t+64s 走完) 数据链全通
+- [x] **prewarm 卡死根因修复 (沙箱发现)**: 干净环境预热卡 loading 数十分钟 — GPU 在动排除死锁、无外网连接排除 HF 卡死; py-spy dump 实锤 `numba caching ensure_cache_path → tempfile.mkstemp 死循环` (librosa.filters 模块级 `@njit(cache=True)` 模块导入期触发); 决定性实验: 沙箱进程禁写 `D:\pyhon\Lib\site-packages\**` (numba 默认缓存落包旁 `__pycache__`) → **NUMBA_CACHE_DIR=F:\ADR_data\numba_cache 重定向修复**, 服务 t+64s ready; 同时解释上会话 pytest 8 分钟单核异常与并行 pytest 干扰 prewarm 全部历史现象 (批次 33 已在 bench 脚本顶部 setdefault, 本批追认到服务启动层)
+- [x] **端到端合成实测** ✅: `GET /api/adr/v1/tts` HTTP 200, 241964B 合法 RIFF/WAVE (~3.7s 音频); numba_cache 3 文件落 F 盘验证重定向生效
+- [x] **D 导入导出核心** (adr/models/voice_package.py 新建): `.adrvoice` zip 容器 (manifest.json 格式/版本/档案名/权重清单/**sha256 完整性** + ref.wav + meta.json 可移植副本 (权重字段置 null) + weights/ 原始权重); 权重路径解析口径与引擎/doctor 一致 (绝对/仓库根相对/GSV 根相对 + rvc weight_root 纯文件名); 导入落位按本机布局重写绝对路径 (GPT_weights_v2/SoVITS_weights_v2/rvc weights+logs), 落盘后 t2s/vits 过 `validate_weights_file` (批次 43 两段式放行) — 隐私告知: 权重即声音本体
+- [x] **D 三面接线**: CLI `adr voice export <名> [-o]` / `adr voice import <包> [--name] [--overwrite]`; API `GET /profiles/{name}/export` (zip 流下载) + `POST /profiles/import` (两段式: 先传包校验 → 确认落位); pro.html 档案卡导出按钮 + 导入弹窗 (toast 反馈)
+- [x] **GPU 埋点** (scripts/bench_gpu_util.py 新建): nvidia-smi 采样器 → CSV (util/mem/power/temp) + 汇总统计 (均值/中位/p95/峰值) + 饿卡窗口检测 (连续低于阈值区段, 定位 dataloader 瓶颈); 训练全程挂载用, 冒烟通过
+- [x] **环境回归修复 (音素字典)**: 全量 pytest 7 failed 全是 `PhonemeDict(vocab_size=6 fallback)` — 批次 46 E 盘清盘删 DiffSinger×2 连带 `third_party/DiffSinger/dictionaries/opencpop-extension.txt` 消失, 三级回退路径全空; jsDelivr CDN (raw.githubusercontent 直连被重置) 拉官方字典 601 音素落 `F:\ADR_data\dictionaries\` (adr_data_dir 持久目录, 免疫 third_party 清理, 零代码改动) →  vocab 607 与基准一致 → 三失败模块重跑 44 passed 全绿
+- [x] **全量回归** ✅: **408 passed + 1 skipped 零失败** (恢复批次 43 基线; test_voice_package 7 用例含在内)
+- **留白**: ① Tauri 壳内页 (launcher/prewarm/loading) 浏览器自动化不可达, prewarm 状态机经 /health 轮询数据源验证 (64s 完整走通), 壳内 UI 呈现待用户实机确认; ② pro.html 导入 toast 反馈未最终确认; ③ **安装态机器同样缺音素字典** (批次 44 便携 runtime 未含 third_party 字典, prewarm 将退化 fallback-special-only) — 后续批次在 bootstrap/安装器附带字典

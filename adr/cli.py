@@ -96,6 +96,52 @@ def list() -> None:
         click.echo(f"  {name}: {', '.join(items)}")
 
 
+@main.group("voice")
+def voice() -> None:
+    """音色档案导入导出: 跨机迁移 .adrvoice 包。"""
+
+
+@voice.command("export")
+@click.argument("name")
+@click.option("--output", "-o", default=None,
+              help="输出包路径 (默认 <名字>.adrvoice)")
+def voice_export(name: str, output: str | None) -> None:
+    """导出音色档案 (含参考音频与绑定的微调权重)。"""
+    from adr.models.voice_package import export_voice
+
+    def _log(msg: str) -> None:
+        click.echo(f"  {msg}")
+
+    try:
+        out = export_voice(name, output, progress=_log)
+    except ValueError as e:
+        click.echo(f"✗ {e}")
+        sys.exit(1)
+    click.echo(f"✓ 已导出: {out}")
+
+
+@voice.command("import")
+@click.argument("package", type=click.Path(exists=True))
+@click.option("--name", "-n", default=None,
+              help="导入后的音色名 (默认用包内档案名)")
+@click.option("--overwrite", is_flag=True, help="覆盖同名档案/权重文件")
+def voice_import(package: str, name: str | None, overwrite: bool) -> None:
+    """导入 .adrvoice 音色档案包。"""
+    from adr.models.voice_package import import_voice
+
+    def _log(msg: str) -> None:
+        click.echo(f"  {msg}")
+
+    try:
+        r = import_voice(package, name=name, overwrite=overwrite, progress=_log)
+    except ValueError as e:
+        click.echo(f"✗ {e}")
+        sys.exit(1)
+    click.echo(f"✓ 已导入档案: {r['name']}")
+    for kind, p in r["weights"].items():
+        click.echo(f"  {kind}: {p}")
+
+
 # ===== 占位命令 (Day 5 完整实现) =====
 @main.command()
 @click.option("--input", "-i", required=True, help="输入音频路径")

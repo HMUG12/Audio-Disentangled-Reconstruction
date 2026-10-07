@@ -13,8 +13,21 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from adr.server import create_app
+from adr.server import create_app, tts_cache
 from adr.server.pathsafe import is_safe_name, resolve_within
+
+
+@pytest.fixture(autouse=True)
+def _clean_tts_cache(monkeypatch, tmp_path):
+    """tts_cache 模块级全局 + 落盘持久: 不隔离则上次全量跑写入的缓存条目
+    会在本次重跑时命中 (basetemp 固定 → tmp_path 编号复现 → 权重路径与
+    key 完全相同), 绕过引擎致 synth_calls 断言挂 (批次47 实测暴露)。
+    模式与 test_server_api._clean_tts_cache 一致。"""
+    monkeypatch.delenv("ADR_TTS_CACHE", raising=False)
+    monkeypatch.setenv("ADR_TTS_CACHE_DIR", str(tmp_path / "tts_cache"))
+    tts_cache.clear()
+    yield
+    tts_cache.clear()
 
 
 # ─── pathsafe 单元 ───
