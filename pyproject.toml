@@ -69,10 +69,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/HMUG12/ADR-GPT-things"
-Documentation = "https://github.com/HMUG12/ADR-GPT-things/tree/main/docs"
-Repository = "https://github.com/HMUG12/ADR-GPT-things"
-Issues = "https://github.com/HMUG12/ADR-GPT-things/issues"
+Homepage = "https://github.com/HMUG12/Audio-Disentangled-Reconstruction"
+Documentation = "https://github.com/HMUG12/Audio-Disentangled-Reconstruction/tree/main/docs"
+Repository = "https://github.com/HMUG12/Audio-Disentangled-Reconstruction"
+Issues = "https://github.com/HMUG12/Audio-Disentangled-Reconstruction/issues"
 
 [project.scripts]
 adr = "adr.cli:main"

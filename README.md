@@ -17,7 +17,7 @@
 
 ### 方式一：Windows 安装包（推荐）
 
-1. 从 [Releases](https://github.com/HMUG12/ADR-GPT-things/releases) 页下载 `ADR-Studio-1.0.0-x64-setup.exe`（约 2.2GB）
+1. 从 [Releases](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases) 页下载 `ADR-Studio-1.0.0-x64-setup.exe`（约 2.2GB）
 2. 双击安装，按向导阅读并接受许可协议（per-user 安装，无需管理员权限）
 3. 首次启动会自动进行环境预热：下载预训练底模 pretrained_models.zip（约 4.35GB，界面实时显示进度）；完成后进入就绪状态，此后**完全离线**运行
 
