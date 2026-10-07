@@ -7,7 +7,7 @@ name = "adr-clone"
 version = "1.0.0"
 description = "ADR: Audio Disentangled Reconstruction — low-resource fast voice cloning training framework"
 readme = "README.md"
-license = {text = "MIT"}
+license = {text = "AGPL-3.0"}
 authors = [{name = "ADR Team"}]
 requires-python = ">=3.10"
 keywords = ["tts", "voice-cloning", "low-resource", "training-framework"]
@@ -15,7 +15,7 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",

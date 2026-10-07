@@ -46,6 +46,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; \
 
 [Files]
 Source: "{#ReleaseDir}\adr-desktop.exe"; DestDir: "{app}"; Flags: ignoreversion
+; Ship the AGPL-3.0 license text alongside the program (AGPL section 4)
+Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RuntimeDir}\*"; DestDir: "{app}\runtime"; \
     Flags: ignoreversion recursesubdirs createallsubdirs
 
