@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -81,6 +81,69 @@ async def profile_ref(name: str):
                             content={"message": f"profile not found: {name}",
                                      "code": "profile_not_found"})
     return FileResponse(str(ref), media_type="audio/wav", filename="ref.wav")
+
+
+@router.get("/profiles/{name}/export", summary="导出音色档案包 (.adrvoice, 含权重)")
+async def profile_export(name: str):
+    """导出 .adrvoice 包 (参考音频 + 绑定微调权重)。
+
+    注意: 权重即声音本体, 包内含生物特征性质数据, 分享时自行斟酌。
+    """
+    import asyncio
+    import os
+    import tempfile
+
+    from adr.models import voice_package
+    from starlette.background import BackgroundTask
+
+    if not pathsafe.is_safe_name(name):
+        return JSONResponse(status_code=400,
+                            content={"message": f"invalid profile name: {name}",
+                                     "code": "invalid_name"})
+    fd, tmp = tempfile.mkstemp(suffix=".adrvoice")
+    os.close(fd)
+    try:
+        await asyncio.to_thread(voice_package.export_voice, name, tmp)
+    except ValueError as e:
+        os.unlink(tmp)
+        return JSONResponse(
+            status_code=404 if "不存在" in str(e) else 400,
+            content={"message": str(e), "code": "export_failed"})
+    return FileResponse(tmp, media_type="application/zip",
+                        filename=f"{name}.adrvoice",
+                        background=BackgroundTask(os.unlink, tmp))
+
+
+@router.post("/profiles/import", summary="导入音色档案包 (.adrvoice)")
+async def profile_import(package: UploadFile = File(...),
+                         name: str = Form(None),
+                         overwrite: bool = Form(False)):
+    """导入 .adrvoice 包; 权重落位 GSV/RVC 标准目录并过 validate_weights_file。"""
+    import asyncio
+    import os
+    import tempfile
+    import zipfile as _zipfile
+
+    from adr.models import voice_package
+    from starlette.background import BackgroundTask
+
+    suffix = Path(package.filename or "import.adrvoice").suffix or ".adrvoice"
+    fd, tmp = tempfile.mkstemp(suffix=suffix)
+    try:
+        with os.fdopen(fd, "wb") as out:
+            while True:
+                chunk = await package.read(1 << 20)
+                if not chunk:
+                    break
+                out.write(chunk)
+        r = await asyncio.to_thread(voice_package.import_voice, tmp,
+                                    name, overwrite)
+    except (ValueError, _zipfile.BadZipFile) as e:
+        return JSONResponse(status_code=400,
+                            content={"message": str(e), "code": "import_failed"})
+    finally:
+        os.unlink(tmp)
+    return {"imported": r}
 
 
 class NativeTTS_Request(BaseModel):
