@@ -677,3 +677,17 @@
 - [x] **全量回归**: pytest 全量零失败 (见 commit); cargo release 编译零错误; GetDiagnostics 零诊断
 - **留白 (向用户明示)**: ① 安装包体积实况 — 安装态 3.82GB / setup.exe 2.24GB, 远超批次 42 预告的 200-300MB (torch CPU + GSV 全依赖所致, 为"别的机器开箱即用"的必要代价); ② `data/voices` (5GB 音色库) 与训练产物不入包 — 用户自定义声音在新机器暂不可用, 需后续做档案导出/导入; ③ 底模首启需联网下载 4.35GB, 无网环境不可用 (后续可做离线底模包)
 - **约定后续**: 开源协议选型 + license.rtf 定稿 + README (md 仓库介绍) 编写 — 与用户商量后落批次 45; v1.0.0 tag 指向坏包处置仍待确认
+
+### 批次 45 (2026-10-06): AGPL-3.0 定稿 + README 重写 — 开源发布文档齐套
+
+> 用户拍板: 协议采用 AGPL-3.0, README 按提案结构 (项目定位/特性/安装/N.E.KO 对接/技术架构/FAQ) 编写。
+
+- [x] **根目录 LICENSE → AGPL-3.0 官方全文** (34020 字节): gnu.org 直连不可达 (Invoke-WebRequest TLS 握手失败 / curl exit 35 / http 明文 0 字节, WebFetch 亦截断), 改走国内可达的 raw.githubusercontent.com 拉 SPDX license-list-data 权威副本 — SPDX 政策保证与官方文本逐字一致, 仅排版为长行 (235 行 vs 官方 661 折行; 唯一历史文本差异 fsf.org 为 http 而非 https); 头尾与全文校验通过
+- [x] **协议页定稿** (`desktop/src-tauri/resources/license.source.txt` 重写): 中文附加条款六节 (一 授权范围: 声明 AGPL-3.0 发布 + §13 网络服务源码义务 + 附加条款冲突时以 AGPL 为准 / 二 声音伦理与使用边界 / 三 本地运行与隐私 / 四 第三方组件与模型 / 五 免责声明 / 六 联系方式) + 分隔引导 + AGPL 英文全文拼接; 重跑 `scripts/gen_license.ps1` → license.rtf 41213 字节, 尾部以 AGPL 末句 + `}` 收尾校验通过
+- [x] **installer.iss 随附 LICENSE**: [Files] 新增 `Source: "..\..\LICENSE"; DestDir: "{app}"` — AGPL §4 要求 convey 时向接收者提供许可副本, 协议页全文之外再落一份实体文件到安装目录
+- [x] **pyproject.toml 同步**: `license = {text = "MIT"}` → `"AGPL-3.0"`; classifiers `License :: OSI Approved` 同步 AGPL v3
+- [x] **README.md 重写** (旧版为面向源码开发者的简版, 重写为仓库主页): 项目定位 (本地语音克隆/TTS, 全程本地推理不上传) / 特性六条 / 安装方式两路 (安装包: 2.2GB setup + 首启 4.35GB 底模下载 + 静默参数; 源码: pip extras + 常用命令表) / API 一览 (GSV v3 + OpenAI /v1 + health, 局域网安全三凭据) / N.E.KO 对接三步 / 技术架构 (mermaid: 桌面端-引擎-模型族) / FAQ 六问 (预热/CPU/端口/数据目录/与 GSV 关系/商用) / 第三方组件许可表 / License / 联系方式
+- [x] **事实核对纠错**: 训练配置预设实际位于根 `configs/` (default/vram_4/6/8gb.yaml), 旧 README 的 `adr/configs/` 链接已修正; pyproject extras m1/m2 与 README 写法核对一致
+- [x] **重打包**: `scripts/build_installer.ps1` 后台首跑 cargo 增量 11.67s 成功但 ISCC 报"系统找不到指定的文件"瞬态失败 (五项依赖路径 Test-Path 全 True, 未复现); 改手动直跑 ISCC 成功 (1233 秒), 产出带 AGPL 协议页 + LICENSE 随附的 `ADR-Studio-1.0.0-x64-setup.exe` (2297.5 MB)
+- **留白**: ① v1.0.0 git tag 指向坏包 commit 的处置仍待用户确认; ② README Releases 下载链接为相对路径 `../../releases`, 待仓库托管地址确定后可换直链; ③ pyproject `[project.urls]` 仍是占位 GitHub 地址 (adr-team/adr), 发布前待用户确认实际仓库地址
+- **合规要点**: AGPL-3.0 与集成栈无冲突 — GPT-SoVITS MIT / BigVGAN MIT / python-build-standalone MIT / Tauri MIT/Apache-2.0, MIT 组件可并入 AGPL 项目且各自许可声明保留; 本项目附加的声音伦理条款定位为使用条款 (协议页呈现, 不修改 LICENSE 内 AGPL 官方文本)
