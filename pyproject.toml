@@ -69,10 +69,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/adr-team/adr"
-Documentation = "https://adr-team.github.io/adr"
-Repository = "https://github.com/adr-team/adr"
-Issues = "https://github.com/adr-team/adr/issues"
+Homepage = "https://github.com/HMUG12/ADR-GPT-things"
+Documentation = "https://github.com/HMUG12/ADR-GPT-things/tree/main/docs"
+Repository = "https://github.com/HMUG12/ADR-GPT-things"
+Issues = "https://github.com/HMUG12/ADR-GPT-things/issues"
 
 [project.scripts]
 adr = "adr.cli:main"
