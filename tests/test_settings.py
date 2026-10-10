@@ -142,3 +142,30 @@ def test_keep_switches(monkeypatch):
         assert fn() is True
         monkeypatch.setenv(name, "0")
         assert fn() is False
+
+
+# ===== 低配加速 (批次49) =====
+def test_tts_device(monkeypatch):
+    monkeypatch.delenv("ADR_TTS_DEVICE", raising=False)
+    assert settings.tts_device() == "auto"
+    monkeypatch.setenv("ADR_TTS_DEVICE", "cpu")
+    assert settings.tts_device() == "cpu"
+    monkeypatch.setenv("ADR_TTS_DEVICE", " CUDA ")  # 大小写/空白容错
+    assert settings.tts_device() == "cuda"
+    monkeypatch.setenv("ADR_TTS_DEVICE", "")        # 空串回退 auto
+    assert settings.tts_device() == "auto"
+    monkeypatch.setenv("ADR_TTS_DEVICE", "npu")     # 非法值回退 auto
+    assert settings.tts_device() == "auto"
+
+
+def test_torch_threads(monkeypatch):
+    monkeypatch.delenv("ADR_TORCH_THREADS", raising=False)
+    assert settings.torch_threads() == 0            # 未设置 = 默认
+    monkeypatch.setenv("ADR_TORCH_THREADS", "4")
+    assert settings.torch_threads() == 4
+    monkeypatch.setenv("ADR_TORCH_THREADS", "0")    # 0 = 合法 (用默认)
+    assert settings.torch_threads() == 0
+    monkeypatch.setenv("ADR_TORCH_THREADS", "-2")   # 负数钳 0
+    assert settings.torch_threads() == 0
+    monkeypatch.setenv("ADR_TORCH_THREADS", "abc")  # 非法回退 0
+    assert settings.torch_threads() == 0
