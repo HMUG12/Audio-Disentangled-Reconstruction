@@ -354,6 +354,58 @@ def test_native_profile_ref_404(client, voice_dir):
     assert r.status_code == 404
 
 
+# ─── 批次50: 版本化端点 (history / rollback / profiles 新字段) ───
+
+def test_native_profiles_version_fields(client, voice_dir):
+    """批次50: profiles 输出版本面 — 新档案 versions=1, 无 sim/退化。"""
+    r = client.get("/api/adr/v1/profiles")
+    p = r.json()["profiles"][0]
+    assert p["versions"] == 1
+    assert p["last_sim"] is None
+    assert p["degraded"] is None
+
+
+def test_native_profile_history_empty(client, voice_dir):
+    r = client.get("/api/adr/v1/profiles/demo/history")
+    assert r.status_code == 200
+    assert r.json() == {"name": "demo", "history": []}
+
+
+def test_native_profile_history_bad_name_400(client, voice_dir):
+    # %2e%2e 编码穿越名 → is_safe_name 拦截 (400 + code)
+    r = client.get("/api/adr/v1/profiles/%2e%2e/history")
+    assert r.status_code == 400
+    assert r.json()["code"] == "invalid_name"
+
+
+def test_native_profile_rollback_no_history_400(client, voice_dir):
+    r = client.post("/api/adr/v1/profiles/demo/rollback")
+    assert r.status_code == 400
+    assert r.json()["code"] == "rollback_failed"
+
+
+def test_native_profile_rollback_roundtrip(client, voice_dir):
+    """写一版历史 → 回滚恢复上一版权重, 现行版本入史。"""
+    mp = voice_dir / "demo" / "meta.json"
+    meta = json.loads(mp.read_text(encoding="utf-8"))
+    meta["weights_history"] = [{
+        "vits": "SoVITS_weights_v2/old.pth", "t2s": None, "sim": 0.81,
+        "bound_at": "2026-01-01 00:00:00", "note": "被新版本替换"}]
+    mp.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+
+    r = client.post("/api/adr/v1/profiles/demo/rollback")
+    assert r.status_code == 200
+    prof = r.json()["profile"]
+    assert prof["vits_weights"] == "SoVITS_weights_v2/old.pth"
+    assert prof["last_sim"] == 0.81
+    # 回滚后历史里留着回滚前的 demo.pth (raw meta 无 versions 计算字段)
+    assert len(prof["weights_history"]) == 1
+    # 现行 (回滚前) 版本已入史
+    hist = client.get("/api/adr/v1/profiles/demo/history").json()["history"]
+    assert hist[-1]["vits"] == "SoVITS_weights_v2/demo.pth"
+    assert hist[-1]["note"] == "回滚前版本"
+
+
 def test_native_tts_post(client, engine, voice_dir):
     r = client.post("/api/adr/v1/tts",
                     json={"text": "hi", "profile": "demo", "seed": 7})
@@ -653,3 +705,40 @@ def test_v2_stream_speed_factor_passthrough(client, engine):
     assert r.status_code == 200
     _assert_stream_wav(r.content)
     assert engine.stream_calls[0]["speed_factor"] == 1.2
+
+
+# ─── 批次50: console 续训校验 (train/start resume_from 透传前置检查) ───
+
+def _mk_train_audio(tmp_path):
+    p = tmp_path / "in.wav"
+    p.write_bytes(b"RIFF0000WAVEfmt ")  # 只过存在性检查, 不会真起训练
+    return str(p)
+
+
+def test_train_resume_ghost_profile_400(client, tmp_path, monkeypatch):
+    """续训档案不存在 → 400, 不起任何子进程。"""
+    from adr.models import voice_library
+    monkeypatch.setattr(voice_library, "VOICES_DIR", tmp_path / "voices")
+    r = client.post("/api/adr/v1/train/start", json={
+        "audio_path": _mk_train_audio(tmp_path),
+        "gate_on": False, "resume_from": "幽灵"})
+    assert r.status_code == 400
+    assert "续训档案不存在" in r.json()["detail"]
+    assert client.get("/api/adr/v1/train/status").json()["state"] != "running"
+
+
+def test_train_resume_profile_without_weights_400(client, tmp_path, monkeypatch):
+    """档案无微调权重 (纯零样本建档) → 400 提示先完成一次普通微调。"""
+    from adr.models import voice_library
+    vd = tmp_path / "voices"
+    (vd / "裸档").mkdir(parents=True)
+    (vd / "裸档" / "meta.json").write_text(json.dumps(
+        {"name": "裸档", "prompt_text": "", "vits_weights": None}),
+        encoding="utf-8")
+    monkeypatch.setattr(voice_library, "VOICES_DIR", vd)
+    r = client.post("/api/adr/v1/train/start", json={
+        "audio_path": _mk_train_audio(tmp_path),
+        "gate_on": False, "resume_from": "裸档"})
+    assert r.status_code == 400
+    assert "无微调权重" in r.json()["detail"]
+    assert client.get("/api/adr/v1/train/status").json()["state"] != "running"

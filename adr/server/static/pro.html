@@ -313,6 +313,8 @@
         style="padding:2px 10px;font-size:11.5px;margin-left:8px" title="导出 .adrvoice 包 (参考音频 + 绑定权重, 可跨机导入)">导出档案包</button>
         <button class="btn" id="pImportBtn"
         style="padding:2px 10px;font-size:11.5px;margin-left:8px" title="导入 .adrvoice 音色档案包">导入档案包</button>
+        <button class="btn" id="pRollback"
+        style="padding:2px 10px;font-size:11.5px;margin-left:8px" title="恢复到上一版微调权重 (现行版本自动入史, 可再次回滚逐版回退)">↩ 回滚上一版</button>
         <input type="file" id="pImportFile" accept=".adrvoice,.zip" style="display:none"></label>
       <select id="pSel"><option value="">加载中…</option></select>
 
@@ -681,13 +683,22 @@ async function loadBindOptions() {
     const sel = $("tBind");
     sel.innerHTML = '<option value="__auto__">自动建档绑定（用实验名, 推荐）</option>' +
       '<option value="">不绑定（仅产出权重）</option>' +
-      d.profiles.map(p => `<option value="${esc(p.name)}">绑定到: ${esc(p.name)}</option>`).join("");
+      d.profiles.map(p => {
+        // 批次50: 有微调权重的档案可续训 — 用新录音在旧权重基础上练, 效果迭代
+        const tag = p.last_sim != null ? ` · sim ${Number(p.last_sim).toFixed(2)}` : "";
+        const ver = p.versions > 1 ? ` · v${p.versions}` : "";
+        const opts = [`<option value="${esc(p.name)}">绑定到: ${esc(p.name)}${ver}${tag}</option>`];
+        if (p.vits_weights)
+          opts.push(`<option value="resume:${esc(p.name)}">↻ 续训并绑回: ${esc(p.name)}${ver}${tag}</option>`);
+        return opts.join("");
+      }).join("");
   } catch {}
 }
 loadBindOptions();
 
 $("tStart").onclick = async () => {
   if (!audioPath) { toast("请先上传录音文件", true); return; }
+  const v = $("tBind").value;
   const body = {
     audio_path: audioPath,
     exp_name: $("tExp").value.trim() || "my_voice",
@@ -695,10 +706,17 @@ $("tStart").onclick = async () => {
     recipe: $("tRecipe").value,
     gate_on: $("tGate").checked,
     // __auto__ = 用实验名自动建档绑定 (后端支持档案不存在时自动新建)
-    bind_voice: $("tBind").value === "__auto__"
+    bind_voice: v === "__auto__"
       ? ($("tExp").value.trim() || "my_voice")
-      : $("tBind").value,
+      : v,
+    resume_from: "",       // 批次50: 续训源档案 (v 以 "resume:" 开头时启用)
   };
+  if (v.startsWith("resume:")) {
+    body.resume_from = v.slice(7);
+    body.bind_voice = "";  // 后端自动绑回同一档案 (闭环)
+    if (!confirm(`将以「${body.resume_from}」现有权重为起点续训 (需 NVIDIA GPU)。\n训完自动绑定新版, 若相似度明显退化可一键回滚。继续？`))
+      return;
+  }
   try {
     $("tStart").disabled = true;
     await jfetch("/api/adr/v1/train/start", {
@@ -724,7 +742,7 @@ function pollTrain() {
   });
 }
 
-let lastCurve = [], lastBase = null;
+let lastCurve = [], lastBase = null, lastTrainState = null;
 function updateTrain(d) {
   const running = d.state === "running";
   $("tStop").disabled = !running;
@@ -751,6 +769,10 @@ function updateTrain(d) {
   lastCurve = d.gate_curve || [];
   lastBase = d.zero_shot;
   if (curTab === "train") drawCurve();
+  // 批次50: 训练完成退化警告 (running→done 边沿触发, 防轮询重复弹)
+  if (d.state === "done" && lastTrainState === "running" && d.degraded && d.bind_voice)
+    toast(`⚠ 训练完成但相似度退化 (${d.degraded.new_sim.toFixed(2)} < 旧版 ${d.degraded.old_sim.toFixed(2)}) — 建议到「语音合成」页对「${d.bind_voice}」点「↩ 回滚上一版」`, true);
+  lastTrainState = d.state;
 }
 
 /* 门禁相似度曲线 (canvas 手绘) */
@@ -842,12 +864,35 @@ async function loadProfiles() {
       return;
     }
     const prev = sel.value;
-    sel.innerHTML = d.profiles.map(p =>
-      `<option value="${esc(p.name)}">${esc(p.name)}${p.style ? " · " + esc(p.style) : ""}</option>`).join("");
+    sel.innerHTML = d.profiles.map(p => {
+      // 批次50: 版次/相似度/退化标注
+      const tag = p.versions > 1 ? ` (v${p.versions})` : "";
+      const sim = p.last_sim != null ? ` · sim ${Number(p.last_sim).toFixed(2)}` : "";
+      const warn = p.degraded ? " ⚠退化" : "";
+      return `<option value="${esc(p.name)}">${esc(p.name)}${tag}${sim}${warn}${p.style ? " · " + esc(p.style) : ""}</option>`;
+    }).join("");
     if (prev) sel.value = prev;
+    const cur = d.profiles.find(p => p.name === sel.value);
+    $("pRollback").disabled = !cur || cur.versions <= 1;
+    if (cur && cur.degraded)
+      toast(`⚠ 档案「${cur.name}」当前版本相似度明显退化 (${Number(cur.degraded.new_sim).toFixed(2)} < ${Number(cur.degraded.old_sim).toFixed(2)}), 建议回滚上一版`, true);
   } catch (e) { toast("档案加载失败: " + e.message, true); }
 }
 $("pRefresh").onclick = loadProfiles;
+
+/* 批次50: 权重版本回滚 — 现行入史, 上一版恢复现行 (可连续调用逐版回退) */
+$("pRollback").onclick = async () => {
+  const name = $("pSel").value;
+  if (!name) { toast("请先选择音色档案", true); return; }
+  if (!confirm(`将「${name}」回滚到上一版权重？\n当前版本会保留在历史中 (可再次回滚/重训恢复)。`)) return;
+  try {
+    await jfetch("/api/adr/v1/profiles/" + encodeURIComponent(name) + "/rollback",
+                 { method: "POST" });
+    toast("已回滚到上一版权重");
+    loadBindOptions();
+    loadProfiles();
+  } catch (e) { toast("回滚失败: " + e.message, true); }
+};
 
 /* 批次47: 音色档案导出/导入 (.adrvoice 包, 含绑定权重) */
 $("pExport").onclick = () => {

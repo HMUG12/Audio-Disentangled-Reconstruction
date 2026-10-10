@@ -219,7 +219,11 @@
         <div class="big" id="upTxt">📱 点这里选择录音文件</div>
         <div>也可以把文件拖进来 · 支持 wav / mp3 / flac / m4a / ogg</div>
       </div>
-      <div class="lbl">给这个声音起个名字</div>
+      <label class="lbl" id="wImproveRow" style="display:none;cursor:pointer">
+        <input type="checkbox" id="wImprove" checked style="accent-color:#10b981">
+        🔁 改进已有声音「<span id="wImproveName"></span>」— 用新录音继续训练，让它更像（旧版本自动保留，变差可回滚）
+      </label>
+      <div class="lbl" id="vNameRow">给这个声音起个名字</div>
       <input type="text" id="vName" value="我的声音" maxlength="20">
       <div style="margin-top:26px;display:flex;gap:12px">
         <button class="btn w" id="cBack">← 上一步</button>
@@ -370,6 +374,12 @@ function renderVoices() {
   $("addCard").onclick = () => {
     $("vList").classList.add("hidden");
     $("vCreate").classList.remove("hidden");
+    // 批次50: 已选声音有微调权重 → 可切换"改进"模式 (续训)
+    const v = voices.find(p => p.name === selected);
+    const can = !!(v && v.vits_weights);
+    $("wImproveRow").style.display = can ? "" : "none";
+    if (can) $("wImproveName").textContent = selected;
+    syncImproveMode();
   };
   if (selected) $("goStep2").disabled = false;
 }
@@ -403,17 +413,39 @@ function pick(f) {
     });
 }
 $("vName").oninput = e => { $("cGo").disabled = !audioPath || !e.target.value.trim(); };
+/* 批次50: 改进模式开关 — 勾上时不用起名 (绑回原档案), 按钮文案切换 */
+function syncImproveMode() {
+  const improve = $("wImproveRow").style.display !== "none" && $("wImprove").checked;
+  $("vNameRow").style.visibility = improve ? "hidden" : "visible";
+  $("vName").style.visibility = improve ? "hidden" : "visible";
+  $("vName").disabled = improve;
+  $("cGo").textContent = improve ? `开始改进「${selected}」` : "开始学习这个声音";
+  $("cGo").disabled = !audioPath || (!improve && !$("vName").value.trim());
+}
+$("wImprove").onchange = syncImproveMode;
 $("cBack").onclick = () => {
   $("vCreate").classList.add("hidden");
   $("vList").classList.remove("hidden");
 };
 $("cGo").onclick = async () => {
   try {
-    await jf("/api/adr/v1/profiles/create", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: $("vName").value.trim(), audio_path: audioPath })
-    });
-    startWork("profile");
+    const improve = $("wImproveRow").style.display !== "none" && $("wImprove").checked;
+    if (improve) {
+      // 批次50: 续训改进 — 旧权重初始化, 训完自动版本化绑回同一档案 (退化门兜底)
+      await jf("/api/adr/v1/train/start", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ audio_path: audioPath, exp_name: selected,
+                               epochs: 8, recipe: await pickRecipe(), gate_on: true,
+                               resume_from: selected })
+      });
+      startWork("train");
+    } else {
+      await jf("/api/adr/v1/profiles/create", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: $("vName").value.trim(), audio_path: audioPath })
+      });
+      startWork("profile");
+    }
   } catch (e) { toast(human(e)); }
 };
 
@@ -503,18 +535,20 @@ function workNext() {
 $("wNext").onclick = workNext;
 
 /* 可选加练: 显存够用 8gb 配方, 否则 4gb */
-$("wTrain").onclick = async () => {
-  let recipe = "4gb";
+async function pickRecipe() {
   try {
     const st = await jf("/api/adr/v1/system/stats");
-    if (st.gpu && st.gpu.total_gb >= 7) recipe = "8gb";
+    if (st.gpu && st.gpu.total_gb >= 7) return "8gb";
   } catch {}
+  return "4gb";
+}
+$("wTrain").onclick = async () => {
   try {
     await jf("/api/adr/v1/train/start", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         audio_path: audioPath, exp_name: "easy_" + Date.now() % 100000,
-        epochs: 8, recipe, gate_on: true, bind_voice: selected
+        epochs: 8, recipe: await pickRecipe(), gate_on: true, bind_voice: selected
       })
     });
     startWork("train");

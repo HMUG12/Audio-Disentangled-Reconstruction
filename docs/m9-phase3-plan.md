@@ -743,3 +743,17 @@
 - [x] **壳侧低配预设** (批次 48 骨架复用): ShellSettings + `device`/`torch_threads` 字段 → env_overrides 注入 (auto/空 与 threads=0 均**不注入**, 零副作用); launcher.html 高级抽屉新增 "推理设备" 下拉 (自动/GPU/CPU) + "CPU 线程上限"; cargo 单测更新 (映射 8 项断言) 4 passed
 - [x] **全量回归**: pytest 全绿 (基线保持); cargo test 4 passed
 - **留白**: ① **t2s int8 CPU 实验** — addmm 小 GEMM 占 35% 仍是最大可压缩点, 但 AR int8 音质风险高, 须 MOS 门 + 音质比对基建, 留后续批次; ② VITS decoder conv (22%) mkldnn/半精度调优留白; ③ 低配真机 (4 核核显) 实测缺位 — 本机数据为 20 线程台式机, 低配机器 RTF 线性外推 ~4-6 待真实机器验证; ④ OMP_NUM_THREADS / 进程亲和未做 (torch.set_num_threads 已覆盖主要面)
+
+### 批次 50 (2026-10-10): M10-E 续训闭环 — 权重版本化 + 退化门 + API 透传 + UI 入口
+
+> E 节既定四项全部落地。底层 CLI `--resume-from`/`--bind-voice` 前批已通, 本批补齐版本化安全网 (续训翻车可退回) 与三端 (console API / native 端点 / 双 UI) 入口。
+
+- [x] **voice_library 版本化** (m10 E 节 "档案版本化" 落点): `bind_weights` (旧绑定入 weights_history 带 last_sim/note, 清除旧 degraded 标记; 新绑定写 vits/t2s/last_sim/weights_bound_at) + `finalize_bind_sim` 两步结算 — bind 时子进程拿不到最终门禁曲线, 先绑 (sim=None), console._train_reader 收尾用门禁 entries 最优 max sim 结算 (Δ<-0.05 置 degraded={new_sim,old_sim}); `voice_history` 查询 + 旧 meta 无新字段全兼容
+- [x] **rollback 逐版回退修复** (本批核心发现): 原实现 `hist.pop()` + `append(现行)` 在相邻两版间振荡 (v3 回滚到 v2 后再回滚弹回 v3), 与 UI "可再次回滚逐版回退" 承诺不符; 改 **redo 标记** — 回滚时现行版本带 `redo: True` 原位 insert 入史 (保持时间序), pop 从末尾扫描跳过 redo 取末个非回滚版; 连续调用 = v3→v2→v1; bind-after-rollback 场景验证 (新绑定推非 redo 条目, 旧 meta 无 redo 键自然兼容)
+- [x] **console API 透传**: TrainStartReq +`resume_from`; train_start 前置校验在 Popen 之前 (档案不存在 → 400 "续训档案不存在" / 无 vits_weights → 400 "无微调权重", 负向测试零子进程副作用); `bind_voice = bind_voice or resume_from` 自动接通闭环 (续训默认绑回同一档案); _train 状态 +bind_voice/degraded 并 snapshot 透出; 收尾退化门 (rc==0 且有绑定 → 门禁非 zero_shot 条目 max sim 结算, 失败只记日志不炸)
+- [x] **native 端点**: GET /profiles/{name}/history (旧→新, 现行绑定不在 history) + POST /profiles/{name}/rollback; pathsafe 拦截 → 400 invalid_name / rollback_failed; /profiles 新字段 last_sim/degraded/versions (=len(history)+1, 仅输出层计算, raw meta 无此字段)
+- [x] **gsv_finetune bind 改调 bind_weights**: --bind-voice 档案已存在时走版本化绑定 (旧版自动入史), 不再直写 meta.json 绕过版本链
+- [x] **UI pro**: 绑定下拉分列 "绑定到 / ↻ 续训并绑回" (vN · sim 标注, resume: 前缀协议 → resume_from, confirm 提示); 档案选择器 vN/sim/⚠退化标注 + 加载时退化 toast 警告; "↩ 回滚上一版" 按钮 (versions>1 才可用); 训练完成退化警告 (running→done 边沿触发防轮询重复弹)
+- [x] **UI easy**: "改进已有声音" 勾选 (选中有微调权重的档案时出现, 隐藏起名框, 按钮文案 "开始改进「X」") → 直接走 train/start resume_from, 旧版本自动保留可回滚; pickRecipe() 抽函数两处复用
+- [x] **单测 +14** (全量基线 417→431): test_voice_library 7 新 (bind 入史/未建档报错/空史回滚报错/首训无基线只写 last_sim/退化门真实时序 + 恰差 0.05 边界/逐版回退 roundtrip + 回滚后再训/旧 meta 兼容) — 修复 2 处测试数据流错误 (缺 import pytest; finalize 测试未先写 last_sim 导致断言必败); test_server_api 7 新 (profiles 版本字段/history 空/%2e%2e 穿越名 400/无史回滚 400/回滚 roundtrip + console resume 幽灵档案与无权重档案 400); 两文件组跑 72 passed
+- **留白**: ① weights_history 无上限且各版权重文件只增不删 (~170MB/版), 高频续训用户待观察后议清理策略; ② easy 改进入口仅 API 层验证, 端到端实机待点检 (批次 47 同口径); ③ UI 动态点检待实机

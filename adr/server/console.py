@@ -187,6 +187,8 @@ _train: dict = {
     "started_at": 0.0,
     "exit_code": None,
     "early_stop": False,
+    "bind_voice": "",    # 批次50: 绑定目标 (收尾相似度结算用)
+    "degraded": None,    # 批次50: 收尾退化门结果 {new_sim, old_sim} | None
     "logs": deque(maxlen=400),
 }
 
@@ -219,6 +221,8 @@ def _train_snapshot() -> dict:
                             else None),
             "exit_code": _train["exit_code"],
             "early_stop": _train["early_stop"],
+            "bind_voice": _train.get("bind_voice", ""),
+            "degraded": _train.get("degraded"),
             "log_tail": list(_train["logs"])[-80:],
         }
     entries = _gate_entries(snap["exp"]) if snap["exp"] else []
@@ -254,6 +258,20 @@ def _train_reader(proc: subprocess.Popen) -> None:
         except Exception:
             gate.kill()
     _train["gate"] = None
+    # 批次50: 退化门收尾 — 训练成功且有绑定档案时, 用门禁最优 sim 结算
+    # (与 history[-1].sim 比对, 退化 Δ<-0.05 置标记; voice_library.finalize_bind_sim)
+    if rc == 0 and _train.get("bind_voice"):
+        _train["degraded"] = None
+        try:
+            from adr.models.voice_library import finalize_bind_sim
+            entries = _gate_entries(_train["exp"])
+            sims = [e["sim"] for e in entries
+                    if e.get("kind") != "zero_shot" and "sim" in e]
+            if sims:
+                _train["degraded"] = finalize_bind_sim(
+                    _train["bind_voice"], max(sims))
+        except Exception as e:
+            _train["logs"].append(f"[finalize] 相似度结算失败: {e}")
 
 
 class TrainStartReq(BaseModel):
@@ -263,6 +281,7 @@ class TrainStartReq(BaseModel):
     recipe: str = "8gb"      # 8gb: bs4 | 4gb: bs1 + clip≤10s
     gate_on: bool = True
     bind_voice: str = ""
+    resume_from: str = ""    # 批次50: 从已有档案续训 (voice:名字 的名字)
 
 
 @router.post("/train/start", summary="启动声音克隆微调 (gsv_finetune 子进程)")
@@ -288,8 +307,21 @@ async def train_start(body: TrainStartReq):
                "--skip-s1"]  # s1 全量微调降相似度 (webui 实测结论)
         if recipe == "4gb":
             cmd += ["--max-clip-sec", "10"]
-        if body.bind_voice:
-            cmd += ["--bind-voice", body.bind_voice]
+        # 批次50: 续训默认绑回同一档案 (训完自动版本化绑定, 闭环)
+        bind_voice = body.bind_voice or body.resume_from
+        if bind_voice:
+            cmd += ["--bind-voice", bind_voice]
+        if body.resume_from:
+            # 批次50: 续训 — 档案须存在且有微调权重 (CLI --resume-from voice:名)
+            from adr.models.voice_library import load_voice
+            try:
+                rv = load_voice(body.resume_from)
+            except Exception:
+                raise HTTPException(400, f"续训档案不存在: {body.resume_from}")
+            if not rv.get("vits_weights"):
+                raise HTTPException(
+                    400, f"档案「{body.resume_from}」无微调权重, 无法续训 (先完成一次普通微调)")
+            cmd += ["--resume-from", f"voice:{body.resume_from}"]
 
         # 质量门禁: CPU 打分, 与训练并行, sim≥0.80 写 STOP 早停
         gate_proc = None
@@ -323,7 +355,8 @@ async def train_start(body: TrainStartReq):
 
         _train.update(state="running", proc=proc, gate=gate_proc, exp=exp,
                       recipe=recipe, epochs=epochs, started_at=time.time(),
-                      exit_code=None, early_stop=False)
+                      exit_code=None, early_stop=False,
+                      bind_voice=bind_voice, degraded=None)
         _train["logs"].clear()
         _train["logs"].append(f"[CMD] {' '.join(cmd)}")
 

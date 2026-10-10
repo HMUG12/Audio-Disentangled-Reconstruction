@@ -88,6 +88,14 @@ def _materialize_ref(src: str, dst: Path) -> dict:
             "orig_s": round(dur, 2)}
 
 
+def _write_meta(vdir: Path, meta: dict) -> None:
+    """meta 原子写 (.tmp 中转 + os.replace) — 断电/并发读不会见到半截 JSON。"""
+    tmp_path = vdir / "meta.json.tmp"
+    tmp_path.write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(str(tmp_path), str(vdir / "meta.json"))
+
+
 def save_voice(
     name: str,
     ref_audio: str,
@@ -134,12 +142,135 @@ def save_voice(
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     meta_path = vdir / "meta.json"
-    # 批次41a: 原子写 (.tmp 中转 + os.replace) — 断电/并发读不会见到半截 JSON
-    tmp_path = vdir / "meta.json.tmp"
-    tmp_path.write_text(
-        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(str(tmp_path), str(meta_path))
+    _write_meta(vdir, meta)
     return vdir
+
+
+def bind_weights(
+    name: str,
+    vits_weights: Optional[str],
+    t2s_weights: Optional[str] = None,
+    sim: Optional[float] = None,
+    note: str = "",
+) -> dict:
+    """批次50 (m10 E 节): 绑定续训/重训产出的新权重, 旧绑定自动入
+    weights_history — 续训翻车可回滚 (rollback_voice)。
+
+    与 save_voice 的区别: 只动权重面, 不重建 ref/prompt (续训闭环不改参考音)。
+    sim = 新权重相似度 (门禁曲线 best_sim, 可 None); 旧绑定的 last_sim 随其
+    入史。档案不存在 / 无既有绑定时报错 (首绑走 save_voice / 微调建档)。
+    """
+    if not is_safe_name(name):
+        raise ValueError(f"音色档案名非法: {name!r}")
+    vdir = VOICES_DIR / name
+    meta_path = vdir / "meta.json"
+    if not meta_path.exists():
+        raise ValueError(f"档案不存在: {name} (首次建档走微调建档或 save_voice)")
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    old_vits = meta.get("vits_weights")
+    if not old_vits:
+        raise ValueError(f"档案「{name}」无既有绑定权重, 无需版本化 (首绑走 save_voice)")
+    hist = meta.get("weights_history") or []
+    hist.append({
+        "vits": old_vits,
+        "t2s": meta.get("t2s_weights"),
+        "sim": meta.get("last_sim"),
+        "bound_at": meta.get("weights_bound_at") or meta.get("created_at", ""),
+        "note": note or "被新版本替换",
+    })
+    meta["weights_history"] = hist
+    meta["vits_weights"] = vits_weights
+    meta["t2s_weights"] = t2s_weights
+    meta["last_sim"] = sim
+    meta["weights_bound_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    meta.pop("degraded", None)  # 新绑定重置退化标记 (以最新绑定为准)
+    _write_meta(vdir, meta)
+    return meta
+
+
+def finalize_bind_sim(name: str, sim: float) -> Optional[dict]:
+    """批次50 (m10 E 节): 训练门禁收尾 — 新绑定权重相似度写回 last_sim,
+    与旧版本 (history[-1].sim) 比对; 退化 (Δ < -0.05) 时置 degraded 标记
+    并返回 {new_sim, old_sim}。首训无基线返回 None。
+
+    门禁曲线 best_sim 由调用方 (console._train_reader) 计算, 本函数只做
+    结算落盘 — bind 时子进程拿不到最终门禁曲线 (并行时序), 故拆两步。
+    """
+    if not is_safe_name(name):
+        raise ValueError(f"音色档案名非法: {name!r}")
+    meta_path = VOICES_DIR / name / "meta.json"
+    if not meta_path.exists():
+        return None
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    hist = meta.get("weights_history") or []
+    old_sim = hist[-1].get("sim") if hist else None
+    meta["last_sim"] = sim
+    degraded = None
+    if old_sim is not None and sim < old_sim - 0.05:
+        degraded = {"new_sim": sim, "old_sim": old_sim}
+        meta["degraded"] = degraded
+    else:
+        meta.pop("degraded", None)
+    _write_meta(vdir := VOICES_DIR / name, meta)
+    return degraded
+
+
+def voice_history(name: str) -> list[dict]:
+    """权重版本历史 (旧→新; 现行绑定不在其中, 见 load_voice 的 vits_weights)。"""
+    if not is_safe_name(name):
+        raise ValueError(f"音色档案名非法: {name!r}")
+    meta_path = VOICES_DIR / name / "meta.json"
+    if not meta_path.exists():
+        return []
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return meta.get("weights_history") or []
+
+
+def rollback_voice(name: str) -> dict:
+    """回滚到上一版权重: 现行绑定入史 (带 redo 标记), history 末个非回滚版
+    恢复为现行 — 连续调用 = v3→v2→v1 逐版回退 (回滚让位的版本不再被
+    当作"上一版"反复弹回, 只作再绑定前的备查记录)。
+
+    无非回滚历史版 / 档案不存在报错。
+    """
+    if not is_safe_name(name):
+        raise ValueError(f"音色档案名非法: {name!r}")
+    vdir = VOICES_DIR / name
+    meta_path = vdir / "meta.json"
+    if not meta_path.exists():
+        raise ValueError(f"档案不存在: {name}")
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    hist = meta.get("weights_history") or []
+    # 末个非回滚条目 = 上一现行 ("redo" 条目是此前回滚时让位的版本, 跳过)
+    idx = next((i for i in range(len(hist) - 1, -1, -1)
+                if not hist[i].get("redo")), None)
+    if idx is None:
+        raise ValueError(f"档案「{name}」无历史版本可回滚")
+    prev = hist.pop(idx)
+    cur_vits = meta.get("vits_weights")
+    if cur_vits:  # 现行绑定入史 (回滚动作本身也是一次版本变更)
+        hist.insert(idx, {
+            "vits": cur_vits,
+            "t2s": meta.get("t2s_weights"),
+            "sim": meta.get("last_sim"),
+            "bound_at": meta.get("weights_bound_at") or meta.get("created_at", ""),
+            "note": "回滚前版本",
+            "redo": True,
+        })
+    meta["weights_history"] = hist
+    meta["vits_weights"] = prev.get("vits")
+    meta["t2s_weights"] = prev.get("t2s")
+    meta["last_sim"] = prev.get("sim")
+    meta["weights_bound_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    meta.pop("degraded", None)
+    _write_meta(vdir, meta)
+    return meta
 
 
 def list_voices() -> list[str]:
