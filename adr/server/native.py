@@ -67,8 +67,42 @@ async def profiles():
             "t2s_weights": meta.get("t2s_weights"),
             "vits_weights": meta.get("vits_weights"),
             "created_at": meta.get("created_at", ""),
+            # 批次50: 版本化 — 现行版次 = 历史数 + 1; 退化标记供 UI 警示
+            "last_sim": meta.get("last_sim"),
+            "degraded": meta.get("degraded"),
+            "versions": len(meta.get("weights_history") or []) + 1,
         })
     return {"profiles": out}
+
+
+@router.get("/profiles/{name}/history", summary="档案权重版本历史 (批次50)")
+async def profile_history(name: str):
+    # 旧→新; 现行绑定不在 history 里 (见 /profiles 的 vits_weights)
+    if not pathsafe.is_safe_name(name):
+        return JSONResponse(status_code=400,
+                            content={"message": f"invalid profile name: {name}",
+                                     "code": "invalid_name"})
+    try:
+        hist = voice_library.voice_history(name)
+    except ValueError as e:
+        return JSONResponse(status_code=400,
+                            content={"message": str(e), "code": "invalid_name"})
+    return {"name": name, "history": hist}
+
+
+@router.post("/profiles/{name}/rollback", summary="回滚到上一版权重 (批次50)")
+async def profile_rollback(name: str):
+    # 现行绑定入史, history 末版恢复现行; 连续调用 = 逐版回退
+    if not pathsafe.is_safe_name(name):
+        return JSONResponse(status_code=400,
+                            content={"message": f"invalid profile name: {name}",
+                                     "code": "invalid_name"})
+    try:
+        meta = voice_library.rollback_voice(name)
+    except ValueError as e:
+        return JSONResponse(status_code=400,
+                            content={"message": str(e), "code": "rollback_failed"})
+    return {"name": name, "profile": meta}
 
 
 @router.get("/profiles/{name}/ref", summary="下载档案参考音频")

@@ -253,11 +253,11 @@ def main():
                 from adr.models.voice_library import VOICES_DIR, save_voice
                 meta_p = VOICES_DIR / args.bind_voice / "meta.json"
                 if meta_p.exists():
-                    meta = json.loads(meta_p.read_text(encoding="utf-8"))
-                    meta["vits_weights"] = str(ws[-1].resolve())
-                    meta_p.write_text(json.dumps(meta, ensure_ascii=False, indent=2),
-                                      encoding="utf-8")
-                    print(f"[bind] 档案「{args.bind_voice}」已绑定最新权重: {ws[-1].name}")
+                    # 批次50: 版本化绑定 — 旧权重自动入 weights_history, 翻车可回滚
+                    from adr.models.voice_library import bind_weights
+                    bind_weights(args.bind_voice, str(ws[-1].resolve()),
+                                 note="续训/重训新版本 (gsv_finetune)")
+                    print(f"[bind] 档案「{args.bind_voice}」已绑定最新权重 (旧版入史): {ws[-1].name}")
                 else:
                     # 首次训练用户无档案: 用本次切片当 ref 自动建档
                     # (切片已静音修剪, 免 GPU 探测; t2s 留空 = 预训练 s1, 与 skip-s1 训练一致)
