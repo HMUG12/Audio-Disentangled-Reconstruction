@@ -13,6 +13,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+# 同分支连推时取消仍在跑的旧工作流, 避免重复排队烧 runner 时长
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest

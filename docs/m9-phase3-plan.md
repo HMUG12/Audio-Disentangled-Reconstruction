@@ -771,3 +771,12 @@
 - [x] **平台兼容修复**: test_resolve_within_rejects_other_drive 加 `skipif(非 win32)` — "C:/Windows" 在 POSIX 下是合法单段相对名 (resolve_within 正确放行), 换盘符越界语义仅 Windows 成立; 该文件 27 passed 复验; 全 tests 扫 winreg/startfile/盘符面仅此 1 处
 - [x] **examples/samples (方案 A 定稿)**: 不入库音频 (个人声音属生物特征 + 公共样张授权成本); .gitignore 改 `examples/*` + 仅 samples/README.md 豁免 (未来放公共样张的 `!examples/samples/*.wav` 追加规则已注释留位); README 写明样张三件构成 (ref / zero_shot / finetuned) + eval_secs / mos_ab_test / render_sample_pack 生成命令 + 云盘链接占位
 - **留白**: ① smoke.yml 需首次 push 后观察 ubuntu 实跑 (本机无法验证 linux 行为, 平台面已静态扫过); ② 公共样张云盘链接占位待发布时替换; ③ MOS 人评数据积累 (盲测协议就绪, 待真实听众参与)
+
+### 批次 51r (2026-10-10): 关键代码审查修复 — 双代理交叉验证 5 项 low 级全修
+
+> TRAE-code-review 流程对 commit 643be2b 关键代码审查: 8 候选 → 2 独立代理交叉验证 → 5 项确认 (均 low) / 1 项带注 (45min timeout 风险有限, 已属留白①观察) / 2 项排除 (占位 ref.wav 为有意隔离设计; 测试 REPO_ROOT 已 monkeypatch 至 tmp_path 无仓库污染)。用户选"修复全部"。
+
+- [x] **eval_secs.py 三处健壮性**: ① `assert` 校验 --texts 句数改显式 `if + sys.exit` (python -O 下 assert 剥离会静默放行); ② --texts 文件缺失裸 FileNotFoundError 改存在性检查 + 中文提示 (与 L48 风格统一); ③ eval_secs_wavs 重跑残留旧 wav — mkdir 后 `glob("*_p*.wav")` 清理, 句数变少不混新旧产物
+- [x] **smoke.yml**: 加 `concurrency: group=smoke-<ref> cancel-in-progress` — 同分支连推取消旧跑, 免重复排队烧 runner
+- [x] **eval_secs.py L110 超长行**: 113 字符拆行至 ≤100 (pyproject black/ruff line-length)
+- 回归: py_compile + yaml.safe_load 复验通过; 全量 pytest 本轮遇环境异常 — Temp 目录 `pytest-of-Admin` ACL 全面锁死 (连 takeown/icacls 均拒) 致 139 个 tmp_path 用例 fixture PermissionError (与本次改动无关, 纯环境); 改 `--basetemp` 复跑超 25 分钟未归 (CPU 满载活跃非挂起, 基线 5 分钟), 收尾时终止, **明日首批复跑全量确认**
