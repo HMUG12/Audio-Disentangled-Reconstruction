@@ -136,6 +136,12 @@ struct ShellSettings {
     numba_cache_dir: Option<String>,
     /// ADR_T2S_CUDAGRAPH=1 — t2s CUDA Graph 加速 (音质有损, 默认关)
     cudagraph: Option<bool>,
+    /// ADR_TTS_DEVICE — 推理设备走向 (批次49 低配预设): auto/cuda/cpu;
+    /// auto/空 = 不注入 (后端按可用性探测)
+    device: Option<String>,
+    /// ADR_TORCH_THREADS — torch CPU 线程上限 (批次49 低配预设);
+    /// 0/None = 不注入 (PyTorch 自按物理核)
+    torch_threads: Option<u16>,
 }
 
 static SHELL_CFG: std::sync::OnceLock<Mutex<ShellSettings>> = std::sync::OnceLock::new();
@@ -191,6 +197,16 @@ fn env_overrides(c: &ShellSettings) -> Vec<(String, String)> {
     }
     if let Some(d) = c.numba_cache_dir.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         v.push(("NUMBA_CACHE_DIR".into(), d.into()));
+    }
+    // 批次49 低配预设: 设备走向 (auto/空 = 不注入, 后端按可用性探测);
+    // 线程上限 (>0 才注入, 0 = PyTorch 自按物理核)
+    if let Some(d) = c.device.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if d == "cpu" || d == "cuda" {
+            v.push(("ADR_TTS_DEVICE".into(), d.into()));
+        }
+    }
+    if let Some(n) = c.torch_threads.filter(|n| *n > 0) {
+        v.push(("ADR_TORCH_THREADS".into(), n.to_string()));
     }
     v
 }
@@ -1265,6 +1281,8 @@ mod tests {
             service_port: Some(9900),        // 端口走 start_server 探测, 不进环境变量
             numba_cache_dir: Some(" F:/nc ".into()),
             cudagraph: Some(true),
+            device: Some(" cpu ".into()),    // 批次49 低配预设
+            torch_threads: Some(4),
         };
         let m: std::collections::HashMap<String, String> = env_overrides(&c).into_iter().collect();
         assert_eq!(m.get("ADR_TTS_API_KEY").unwrap(), "k1,k2");
@@ -1273,7 +1291,9 @@ mod tests {
         assert_eq!(m.get("ADR_TTS_DEFAULT_PROFILE").unwrap(), "my_voice");
         assert_eq!(m.get("NUMBA_CACHE_DIR").unwrap(), "F:/nc");
         assert_eq!(m.get("ADR_T2S_CUDAGRAPH").unwrap(), "1");
-        assert_eq!(m.len(), 6);
+        assert_eq!(m.get("ADR_TTS_DEVICE").unwrap(), "cpu");
+        assert_eq!(m.get("ADR_TORCH_THREADS").unwrap(), "4");
+        assert_eq!(m.len(), 8);
     }
 
     #[test]

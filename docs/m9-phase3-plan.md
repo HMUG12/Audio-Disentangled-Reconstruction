@@ -728,3 +728,18 @@
 - [x] **launcher.html 设置模态框** (foot "设置" 入口, 风格沿用关于框): 分区 调用 (局域网开关 + API Key + Authorization 提示 + LAN IP/引擎地址/复制) / 声音档案 (存放目录展示当前生效 + 打开 + 默认档案 datalist 引擎就绪时拉 GET /profiles) / 下载与启动 (HF 源单选 + 开机自启) / 维护 (打开日志目录 + 检查更新 + 版本) / **高级抽屉** (details: 端口 + numba 缓存目录 + CUDAGraph); 保存 → toast + data_dir 变更单独迁移提示 + 三卡片 expose 勾选联动 lan_expose; showToast 支持成功态 (绿)
 - [x] 编译修复两错: proc_log PathBuf 需 .display(); UdpSocket::connect 消费 self 返回 Result<()> 非链式 (改两步式)
 - **留白**: ① 下载并发/限速、日志级别、训练 workers (ADR_S2_NUM_WORKERS)、推理设备切换 — 后端均无读取面, 批次 49/50 顺手建; ② 档案目录**自动迁移**不做 (GB 级权重复制不适合壳内, 仅提示 + 打开目录引导); ③ 壳内设置模态框动态点检待用户实机 (批次 47 同口径); ④ release 全量编译未重跑 (cargo test 已覆盖 lib 编译, main.rs 未动)
+
+### 批次 49 (2026-10-10): M10-C 低配加速 v1 — profiling 格局修正 + 设备/线程读取面 + 低配预设
+
+> C 节既定第一步 "CPU 全链路 profiling 先行" 落地, 实测数据**修正了计划预期**: BigVGAN→ORT 不适用当前 v2 路径。音质绝对优先原则贯穿: 本批零音质敏感改动, 只建开关面。
+
+- [x] **格局修正 (profiling 实锤)**: 底模 `version="v2"` (gsv_engine.py L193) 的声码在 **VITS decoder 内部** — third_party BigVGAN 仅 v3/v4 系 init_vocoder 挂载 (TTS.py L616 分支) → m10 C 节 "BigVGAN→ORT 预期最大收益" 前提不成立, **降级留白** (v3/v4 用户另议); CPU 档真身 = t2s AR + VITS decode
+- [x] **profiling 脚本** (scripts/bench_cpu_e2e.py 新建): 端到端 RTF 计时 (三句 × reps 取 min, 沿 bench_sync_ab 口径跨批可比) + torch.profiler 算子归因 (cut0 seed0 确定性单句, top 表落 output/); --device/--threads/--profile 参数
+- [x] **本机实测** (RTX 台式机, 20 线程, 档案 我的声音V2):
+  - GPU 档: 首包 1.09-1.43s / **RTF 0.92-1.02**; CPU 档: 首包 1.47-1.81s / **RTF 1.31-1.43** — CPU 档远好于预期 (实时率的 1.3-1.4 倍耗时), 20 线程台式机 CPU 完全可用
+  - CPU 归因 (short_12, self CPU 4.95s): **aten::addmm 35%** (8600 次, t2s AR 逐步小 GEMM 主体) + **mkldnn_convolution 22%** (178 次 × 6.2ms, VITS decoder = v2 声码真身) + AR 拼接 cat 7% + SDPA 4%
+  - 数据落 output/bench_cpu_e2e_{cuda,cpu}.json + _profile.txt
+- [x] **设备/线程读取面** (批次 48 留白收编): settings.py 新增 `tts_device()` (ADR_TTS_DEVICE: auto/cuda/cpu, 非法值回退) + `torch_threads()` (ADR_TORCH_THREADS); gsv_engine _lazy_init: env 仅在 config.device=="auto" 时决定走向 (config 显式传参优先), threads>0 早期 set_num_threads; 单测 2 项 (16 passed)
+- [x] **壳侧低配预设** (批次 48 骨架复用): ShellSettings + `device`/`torch_threads` 字段 → env_overrides 注入 (auto/空 与 threads=0 均**不注入**, 零副作用); launcher.html 高级抽屉新增 "推理设备" 下拉 (自动/GPU/CPU) + "CPU 线程上限"; cargo 单测更新 (映射 8 项断言) 4 passed
+- [x] **全量回归**: pytest 全绿 (基线保持); cargo test 4 passed
+- **留白**: ① **t2s int8 CPU 实验** — addmm 小 GEMM 占 35% 仍是最大可压缩点, 但 AR int8 音质风险高, 须 MOS 门 + 音质比对基建, 留后续批次; ② VITS decoder conv (22%) mkldnn/半精度调优留白; ③ 低配真机 (4 核核显) 实测缺位 — 本机数据为 20 线程台式机, 低配机器 RTF 线性外推 ~4-6 待真实机器验证; ④ OMP_NUM_THREADS / 进程亲和未做 (torch.set_num_threads 已覆盖主要面)

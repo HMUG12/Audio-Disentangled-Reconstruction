@@ -133,11 +133,13 @@
     accent-color: #2dd4bf; width: 16px; height: 16px; cursor: pointer; margin: 0; }
   .st-input-row { display: block; }
   .st-input-row > span { display: block; margin-bottom: 6px; }
-  #set input[type=text], #set input[type=number] {
+  #set input[type=text], #set input[type=number], #set select {
     width: 100%; background: #0b1120; border: 1px solid #223050; border-radius: 8px;
     color: #e8ecf4; font-size: 12.5px; padding: 8px 11px; outline: none;
     font-family: inherit; }
-  #set input[type=text]:focus, #set input[type=number]:focus { border-color: #2dd4bf66; }
+  #set input[type=text]:focus, #set input[type=number]:focus, #set select:focus {
+    border-color: #2dd4bf66; }
+  #set select { width: auto; min-width: 150px; cursor: pointer; }
   #set input::placeholder { color: #47556e; }
   .st-hint { font-size: 11px; color: #64748b; line-height: 1.6; margin: 3px 0 6px; }
   .st-hint code { font-family: Consolas, monospace; font-size: 11px; color: #7dd3fc;
@@ -313,6 +315,20 @@
           <input type="text" id="st-numba" placeholder="留空 = 默认" spellcheck="false">
         </div>
         <div class="st-row">
+          <span>推理设备 (低配/核显机器强制 CPU 排障)</span>
+          <span class="st-inline">
+            <select id="st-device">
+              <option value="auto">自动 (按可用性)</option>
+              <option value="cuda">GPU (CUDA)</option>
+              <option value="cpu">CPU</option>
+            </select>
+          </span>
+        </div>
+        <div class="st-row st-input-row">
+          <span>CPU 线程上限 (0 = PyTorch 默认按物理核)</span>
+          <input type="number" id="st-threads" min="0" max="128" placeholder="0">
+        </div>
+        <div class="st-row">
           <span>t2s CUDA Graph 加速 (3.77x 但音质有损，默认关)</span>
           <input type="checkbox" id="st-cuda">
         </div>
@@ -444,6 +460,8 @@ async function openSettings() {
     $st("st-port").value = cfg.service_port || "";
     $st("st-numba").value = cfg.numba_cache_dir || "";
     $st("st-cuda").checked = !!cfg.cudagraph;
+    $st("st-device").value = (cfg.device === "cuda" || cfg.device === "cpu") ? cfg.device : "auto";
+    $st("st-threads").value = cfg.torch_threads || "";
     stAutostart = await inv("autostart_get");
     $st("st-autostart").checked = stAutostart;
     $st("st-lan-ip").textContent = lan?.ip || "未获取到 (离线?)";
@@ -470,6 +488,8 @@ async function saveSettings() {
       service_port: port,
       numba_cache_dir: $st("st-numba").value.trim(),
       cudagraph: $st("st-cuda").checked,
+      device: $st("st-device").value,
+      torch_threads: Math.min(Math.max(parseInt($st("st-threads").value, 10) || 0, 0), 128),
     };
     await inv("save_shell_settings", { settings: cfg });
     if (cfg.autostart !== stAutostart) {

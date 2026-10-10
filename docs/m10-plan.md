@@ -26,15 +26,15 @@
   - [x] 打开日志目录 / 更新检查与版本信息入口（open_path 支持目录与 URL 直达 Releases）
 - [x] **高级抽屉**：服务端口（`service_port` 覆盖 9881 探测）、NUMBA 缓存目录（`NUMBA_CACHE_DIR`，与批次 47 沙箱根因闭环）、CUDAGraph 开关（`ADR_T2S_CUDAGRAPH`）；**留白**：日志级别、训练 workers（`ADR_S2_NUM_WORKERS`）、推理设备切换——后端均无读取面，批次 49/50 顺手建；低配模式预设联动批次 49 C 节
 
-### C. 低配设备推理加速（候选批次 49）
+### C. 低配设备推理加速（批次 49，v1 已交付 + 格局修正）
 
 - **边界（实测结论，不碰）**：单流延迟已近框架层极限（t2s AR ~22-26 it/s 物理地板，首包 0.92s / 2.3s 音频 2.5s）；CUDAGraph 3.77x 但音质崩（上游 SDPA 语义不等价），仅跟进上游
-- [ ] **CPU 全链路 profiling 先行**：逐组件计时（ORT BERT 已完成 63s→6.7s；剩余大头 t2s AR / VITS / BigVGAN 待测）
-- [ ] **BigVGAN → ONNX Runtime**：声码器是 CPU 经典热点，确定性网络音质风险低，预期最大收益
-- [ ] **线程 / 亲和调优**：torch 线程数、OMP 配置，低配核少机器敏感，近零成本
-- [ ] **t2s int8 实验**：GPU 上无收益（瓶颈在 BERT/初始化），CPU 上 ORT BERT 修完后的格局不同，值得一试
-- [ ] **音质取舍原则（已定）**：设置中心提供"极速模式"开关，**默认关**，用户自选；任何提速改动必须过 MOS 音质门，不可用版本一律不上
-- [ ] 产出落进设置中心"低配模式预设"（CPU 优先 / 线程数 / 量化开关）
+- **⚠ 格局修正（批次 49 profiling 实锤）**：ADR 底模 v2 系的声码在 **VITS decoder 内部**，不走 BigVGAN 外挂（仅 v3/v4 系挂 BigVGAN）→ "BigVGAN→ORT 预期最大收益"不适用当前 v2 路径，降级留白（v3/v4 用户另议）
+- [x] **CPU 全链路 profiling**（scripts/bench_cpu_e2e.py 新建：端到端 RTF 计时 + torch.profiler 算子归因）：本机 RTX 台式机实测 **GPU 档 RTF 0.92-1.02 / CPU 档 RTF 1.31-1.43**（20 线程，首包 GPU 1.1s vs CPU 1.5s）——CPU 档远好于预期；归因：**aten::addmm 线性层 35%**（t2s AR 主体 + VITS FFN）+ **VITS decoder mkldnn_conv 22%**（v2 声码真身）+ AR 拼接 cat 7%
+- [x] **设备/线程读取面**：`ADR_TTS_DEVICE`（auto/cuda/cpu，仅 config=="auto" 时生效）+ `ADR_TORCH_THREADS`（>0 时 _lazy_init 早期 set_num_threads）——settings.py 单源 + 单测 2 项
+- [x] **低配模式预设落设置中心**：高级抽屉"推理设备"下拉 + "CPU 线程上限"，壳注入 ADR_TTS_DEVICE/ADR_TORCH_THREADS（auto/0 不注入，零副作用）；极速模式音质取舍原则保留（默认 auto，用户自选）
+- [ ] **t2s int8 CPU 实验**：CPU 格局实测后仍值得试（addmm 小 GEMM 占 35%），但音质门把关，留白后续批次
+- [ ] BigVGAN→ORT：留白（见上格局修正；v3/v4 用户可行）
 
 ### D. 音色档案导入导出（候选批次 50）
 

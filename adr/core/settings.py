@@ -143,3 +143,24 @@ def keep_tqdm() -> bool:
 def keep_empty_cache() -> bool:
     """ADR_TTS_KEEP_EMPTY_CACHE=1 回退每句 empty_cache (默认节流, 批次33)。"""
     return os.environ.get("ADR_TTS_KEEP_EMPTY_CACHE", "") == "1"
+
+
+# ===== 低配加速 (批次49, m10 C 节) =====
+def tts_device() -> str:
+    """ADR_TTS_DEVICE — 引擎设备走向: auto (默认) / cuda / cpu。
+
+    仅在 EngineConfig.device=="auto" 时生效 (config 显式传参优先);
+    非法值回退 auto。低配/核显机器强制 CPU 排障用, 壳设置中心注入。
+    """
+    raw = (os.environ.get("ADR_TTS_DEVICE") or "").strip().lower()
+    return raw if raw in ("auto", "cuda", "cpu") else "auto"
+
+
+def torch_threads() -> int:
+    """ADR_TORCH_THREADS — torch.set_num_threads 线程数; 0/未设置/非法 = 默认
+    (PyTorch 自按物理核)。低配核少机器 (如 4 核) 跑满会抢系统资源, 手动
+    压线程可减争抢; >0 时引擎 _lazy_init 早期设置一次。"""
+    try:
+        return max(0, int(os.environ.get("ADR_TORCH_THREADS", 0)))
+    except ValueError:
+        return 0

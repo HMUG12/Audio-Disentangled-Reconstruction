@@ -334,9 +334,17 @@ class GSVEngine:
                     pass
             from TTS_infer_pack.TTS import TTS, TTS_Config
 
+            # 批次49: 低配机器线程上限 (核少机器跑满会抢系统资源), 越早设越好
+            _th = settings.torch_threads()
+            if _th > 0:
+                torch.set_num_threads(_th)
             device = self.config.device
             if device == "auto":
-                device = "cuda" if torch.cuda.is_available() else "cpu"
+                # 批次49: ADR_TTS_DEVICE 决定 auto 的走向 (壳设置中心/低配机器
+                # 强制 CPU); config 显式传参不受影响
+                env_dev = settings.tts_device()
+                device = env_dev if env_dev != "auto" \
+                    else ("cuda" if torch.cuda.is_available() else "cpu")
             # 批次4 yaml 漂移修复: GSV 的 init_vits_weights 会把热换权重写回
             # tts_infer.yaml 的 custom 段 (实测两次进程启动基线 0.812→0.759 漂移,
             # 任何引擎重启都会静默换权重)。对策: 只取 yaml 的 v2 原始段 (预训练
