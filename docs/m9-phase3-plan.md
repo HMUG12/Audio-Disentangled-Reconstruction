@@ -757,3 +757,17 @@
 - [x] **UI easy**: "改进已有声音" 勾选 (选中有微调权重的档案时出现, 隐藏起名框, 按钮文案 "开始改进「X」") → 直接走 train/start resume_from, 旧版本自动保留可回滚; pickRecipe() 抽函数两处复用
 - [x] **单测 +14** (全量基线 417→431): test_voice_library 7 新 (bind 入史/未建档报错/空史回滚报错/首训无基线只写 last_sim/退化门真实时序 + 恰差 0.05 边界/逐版回退 roundtrip + 回滚后再训/旧 meta 兼容) — 修复 2 处测试数据流错误 (缺 import pytest; finalize 测试未先写 last_sim 导致断言必败); test_server_api 7 新 (profiles 版本字段/history 空/%2e%2e 穿越名 400/无史回滚 400/回滚 roundtrip + console resume 幽灵档案与无权重档案 400); 两文件组跑 72 passed
 - **留白**: ① weights_history 无上限且各版权重文件只增不删 (~170MB/版), 高频续训用户待观察后议清理策略; ② easy 改进入口仅 API 层验证, 端到端实机待点检 (批次 47 同口径); ③ UI 动态点检待实机
+
+### 批次 51 (2026-10-10): 公信力批次 — SECS 口径落地 + 复现/验证文档 + 轻量 CI
+
+> m10 G 节公信力挂账四件套全部落地 (REPRODUCE.md / examples+samples / smoke.yml / eval_secs.py / VERIFY.md), 并完成 PESQ/ESTOI → SECS/MOS/CER 评估口径修正。
+
+- [x] **探测集收敛** `adr/eval/probes.py`: PROBES 5 句 + PRE_T2S/PRE_S2G 官方预训练钉死常量 + `clip_ref` (>10s 裁前 8s, librosa trim top_db=30) + `score_probes` 统一打分入口; train_gate.py / eval_heldout.py 各自复制的 PROBES 双源漂移风险消除 (改 import, 行为不变); 单测 test_eval_probes.py 5 项 (常量钉死 / 裁剪 passthrough / 8s 上限 / mock 打分链路同 ref 计数)
+- [x] **eval_secs.py SECS 口径** (PESQ/ESTOI 修正主体): 零样本 (官方底模) vs 微调 (档案权重) 同探测集逐句对比 + `--anchor` 锚点 (ref 自相似 = 灵敏度上限) → JSON 落盘 `output/eval_secs_<voice>.json`; 实测 (CPU, 档案 "我的声音V2" user_holdout_e8_s176): 锚点 0.9324 > 微调 0.8052 > 零样本 0.7729, **Δ+0.0323 微调正收益**, 锚点 > 合成条件 → 打分链路灵敏度成立
+- [x] **docs 口径修正**: 全仓 grep PESQ/ESTOI 确认无残留 (仅 architecture-design.md 的 Qwen3-TTS 对比描述与 m10 挂账原文, 均非本项目口径); 三份新文档统一写明三件套分工 — SECS (音色保持, ERes2NetV2 余弦, 经验区间 >0.70 同人 / 0.55-0.70 接近) + MOS (自然度人评, mos_ab_test 盲测协议) + CER (内容可懂度, render_sample_pack 回译, ≤0.15 达标)
+- [x] **REPRODUCE.md**: 7 节复现链全抽实测命令 — 0 环境准备 (NUMBA_CACHE_DIR + GSV 底模 4.35GB bootstrap + download_pretrained) / 1 安装自检 (adr doctor 实测 8 ok 1 警告) / 2 测试基线 (pytest 431+1 · 294.55s 命令原文 + cargo --lib 4) / 3 服务与合成 (Invoke-RestMethod /v1/audio/speech 实测) / 4 训练复现 (gsv_finetune 步骤链 + train_gate --target 0.80 --once + probes 收敛说明 + 版本化 rollback) / 5 评估三件套 (SECS 实测数字表 + MOS 双模式命令 + CER) / 6 打包复现 (check_runtime + tauri --no-bundle + Inno Setup, 3.89→1.78GB) / 7 环境冻结 (build_freeze.txt)
+- [x] **VERIFY.md**: 14 条声明→验证步骤→预期 映射表 (版本四面 1.0.0 / doctor / pytest / cargo / health 200 / RIFF wav / SECS Δ>0 / 锚点序 / 盲测混淆 / CER / 门禁 STOP+rollback / `git ls-files` 零个人数据 / 0.0.0.0 无 key 警告 / check_runtime exit 0) + 尾节 "评估口径说明 (为何不是 PESQ/ESTOI)"
+- [x] **轻量 CI `.github/workflows/smoke.yml`**: ubuntu-latest + py3.11 + CPU torch 轮子先行 (免 PyPI 默认 ~2.5GB CUDA 面) + `pip install -e .[all,dev]` + pytest 全量 (--run-asr 默认 False 自动跳真实 ASR); **CI 甄别结论: tests 目录零引用 third_party/gpt_sovits** — GSVEngine `__init__` 无 third_party 依赖 (懒加载在 `_lazy_init`), 现有测试全部旁路 (seg_cache monkeypatch `_lazy_init`/`_gsv_context`)、`__new__` 手工装状态 (stream_latency) 或占位引擎 (server_security), 纯 checkout 即可跑全量
+- [x] **平台兼容修复**: test_resolve_within_rejects_other_drive 加 `skipif(非 win32)` — "C:/Windows" 在 POSIX 下是合法单段相对名 (resolve_within 正确放行), 换盘符越界语义仅 Windows 成立; 该文件 27 passed 复验; 全 tests 扫 winreg/startfile/盘符面仅此 1 处
+- [x] **examples/samples (方案 A 定稿)**: 不入库音频 (个人声音属生物特征 + 公共样张授权成本); .gitignore 改 `examples/*` + 仅 samples/README.md 豁免 (未来放公共样张的 `!examples/samples/*.wav` 追加规则已注释留位); README 写明样张三件构成 (ref / zero_shot / finetuned) + eval_secs / mos_ab_test / render_sample_pack 生成命令 + 云盘链接占位
+- **留白**: ① smoke.yml 需首次 push 后观察 ubuntu 实跑 (本机无法验证 linux 行为, 平台面已静态扫过); ② 公共样张云盘链接占位待发布时替换; ③ MOS 人评数据积累 (盲测协议就绪, 待真实听众参与)

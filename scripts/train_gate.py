@@ -5,8 +5,8 @@
 
 机制:
   1. 轮询 SoVITS_weights_v2/<exp>_e*.pth, 新权重出现即克隆+ERes2Net 打分
-  2. 每个权重用 5 句探测集 (与 eval_heldout.py 同源) 逐句打分取均值 —
-     单句探测方差大 (短句天然弱, 波动 ±0.03+), 均值更稳
+  2. 每个权重用 5 句探测集 (adr/eval/probes.py, 与 eval_heldout.py 同源)
+     逐句打分取均值 — 单句探测方差大 (短句天然弱, 波动 ±0.03+), 均值更稳
   3. 分数曲线写 output/train_gate_<exp>.jsonl (含逐句分)
   4. mean sim ≥ target → 在 logs/<exp>/ 下放 STOP 信号文件 → s2_train 每轮末检查后退出
 """
@@ -18,58 +18,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 GSV = REPO / "third_party" / "gpt_sovits"
 
-# 与 scripts/eval_heldout.py PROBES 保持同源 (长/中/短/混合/叙事 全覆盖)
-PROBES = [
-    "人工智能技术正在以前所未有的速度发展，语音合成系统已经能够生成接近真人水平的自然流畅音频。",
-    "今天早上我喝了一杯咖啡，然后在公园里散了一会儿步，天气非常不错。",
-    "您好，请问有什么可以帮您的吗？",
-    "这是一段用于测试声音克隆效果的文本，包含数字一二三四五和英文 Hello World。",
-    "夜色渐深，城市的灯火次第亮起，街道上行人渐渐稀少。",
-]
-
-# 显式钉死官方预训练 s1/s2: tts_infer.yaml 的 custom 段可能被外部改写指向
-# 微调权重 (实测发生过), 隐式默认会让"零样本基线"和打分条件漂移
-PRE_T2S = str(GSV / "GPT_SoVITS" / "pretrained_models" / "gsv-v2final-pretrained"
-              / "s1bert25hz-5kh-longer-epoch=12-step=369668.ckpt")
-PRE_S2G = str(GSV / "GPT_SoVITS" / "pretrained_models" / "gsv-v2final-pretrained"
-              / "s2G2333k.pth")
-
-
-def _score_probes(eng, ref: str, vits: str = PRE_S2G, t2s: str = PRE_T2S,
-                  sents=None):
-    """5 句探测逐句克隆打分, 返回 (均值, 逐句分列表)。
-
-    s1 固定用官方预训练 (与 --skip-s1 训练条件一致), s2 传被测权重 —
-    不传任何权重时即真零样本基线。
-    sents: 自定义句集 (批次 8, 人设定制门禁) — 基线与训练后必须同句集,
-    否则分数不可比。
-    """
-    from adr.eval.speaker_sim import similarity
-    sims = []
-    for text in (sents or PROBES):
-        wav, sr = eng.synthesize(text, ref, t2s_weights=t2s, vits_weights=vits)
-        sims.append(similarity(ref, str(_save_tmp(wav, sr))))
-    return sum(sims) / len(sims), sims
-
-
-def _clip_ref(ref: str, exp: str) -> str:
-    """参考音频超 10s (GSV 合成硬限制 3~10s) 时自动裁剪: 去首尾静音后取前 8s。
-
-    实测事故: 控制台把完整训练录音 (--ref output/uploads/xxx) 直接传进门禁,
-    零样本基线合成即抛 "参考音频在3~10秒范围外" → 门禁进程崩 → 无曲线/无早停。
-    基线与逐轮打分用同一裁剪 ref, 可比性不变。
-    """
-    import librosa
-    import soundfile as sf
-    y, sr = librosa.load(ref, sr=None, mono=True)
-    if len(y) / sr <= 10.0:
-        return ref
-    y, _ = librosa.effects.trim(y, top_db=30)          # 去首尾静音
-    y = y[: int(8.0 * sr)]                              # 8s < 10s 上限, 留安全边
-    out = REPO / "output" / f"gate_ref_{exp}.wav"
-    sf.write(str(out), y, sr)
-    print(f"[gate] ref 超长已裁剪: {Path(ref).name} -> {out.name} (8s, 去静音)", flush=True)
-    return str(out)
+# 探测集 / 预训练钉死常量 / 克隆打分 / ref 裁剪 — 批次 51 收敛到 adr.eval.probes
+# (此前与 eval_heldout.py 各自复制一份 PROBES, 有双源漂移风险)
+from adr.eval.probes import PRE_S2G, PRE_T2S, clip_ref, score_probes
 
 
 def main():
@@ -105,8 +56,8 @@ def main():
         eng = get_gsv_engine()
 
     # 基线: 真零样本 (官方预训练 s1+s2), 不受 tts_infer.yaml custom 段漂移影响
-    args.ref = _clip_ref(args.ref, args.exp)
-    base, base_sims = _score_probes(eng, args.ref, sents=sents)
+    args.ref = clip_ref(args.ref, args.exp)
+    base, base_sims = score_probes(eng, args.ref, sents=sents)
     print(f"[gate] 零样本基线 mean={base:.3f} 逐句={['%.3f' % s for s in base_sims]}, "
           f"目标 {args.target}", flush=True)
     with open(curve_path, "a", encoding="utf-8") as f:
@@ -121,7 +72,7 @@ def main():
             seen.add(w.name)
             time.sleep(5)  # 等写盘完
             try:
-                mean, sims = _score_probes(eng, args.ref, vits=str(w), sents=sents)
+                mean, sims = score_probes(eng, args.ref, vits=str(w), sents=sents)
                 ep = w.name.split("_e")[1].split("_")[0]
                 print(f"[gate] {w.name}: mean={mean:.3f} 逐句={['%.3f' % s for s in sims]}", flush=True)
                 with open(curve_path, "a", encoding="utf-8") as f:
@@ -139,13 +90,6 @@ def main():
             print("[gate] --once 模式, 一轮打分完成, 退出", flush=True)
             return
         time.sleep(args.poll)
-
-
-def _save_tmp(wav, sr):
-    import soundfile as sf
-    p = REPO / "output" / "_gate_probe.wav"
-    sf.write(str(p), wav, sr)
-    return p
 
 
 if __name__ == "__main__":

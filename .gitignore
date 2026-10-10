@@ -17,13 +17,21 @@ data/opencpop_npz/
 
 # ---- 模型权重 / 第三方仓库 (GB 级) ----
 third_party/
-examples/
 output/
 *.pth
 *.ckpt
 *.onnx
 *.pt
 *.safetensors
+
+# ---- examples: 默认整目录不入库; 仅样张说明文档豁免 (批次51) ----
+# 音频仍被上面全局 *.wav 拦截, 且个人声音属生物特征 (REPRODUCE.md 方案A: 只放
+# 生成命令 + 云盘链接, 不放音频)。若未来决定放公共样张, 在此追加:
+#   !examples/samples/*.wav
+examples/*
+!examples/samples/
+examples/samples/*
+!examples/samples/README.md
 
 # ---- 构建产物 (v1.0.0 打包输出, 不入库) ----
 dist/

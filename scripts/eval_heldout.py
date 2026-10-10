@@ -31,13 +31,8 @@ SLICES_DIR = REPO / "third_party" / "gpt_sovits" / "output" / "slicer_opt" / "us
 OUT_JSON = REPO / "output" / "heldout_eval.json"
 WAV_DIR = REPO / "output" / "heldout_wavs"
 
-PROBES = [
-    "人工智能技术正在以前所未有的速度发展，语音合成系统已经能够生成接近真人水平的自然流畅音频。",
-    "今天早上我喝了一杯咖啡，然后在公园里散了一会儿步，天气非常不错。",
-    "您好，请问有什么可以帮您的吗？",
-    "这是一段用于测试声音克隆效果的文本，包含数字一二三四五和英文 Hello World。",
-    "夜色渐深，城市的灯火次第亮起，街道上行人渐渐稀少。",
-]
+# 探测句集 — 批次 51 收敛到 adr.eval.probes (与 train_gate.py / eval_secs.py 同源)
+from adr.eval.probes import PROBES
 
 
 def find_clean_weights() -> Path:

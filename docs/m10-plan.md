@@ -71,7 +71,7 @@
 - [x] **双包拍板**：CPU 包（现状）+ GPU 包（--allow-cuda 构建，CUDA torch +2.5GB）两条安装包线，为未来多平台包铺路；安装态当前为纯 CPU 推理（GPU RTF 0.92 仅开发环境可达）是双包动机
 - [ ] **缓行**：在线依赖档（安装包瘦到 ~200MB + 首启 pip 走国内镜像）——待双包腰斩结果评估是否值得引入首启等待与网络失败面
 - 冷备份（防第三方镜像失活的全量冷备 ≈8GB）：**用户自理**（123 云盘现状 + 自选对象存储）
-- 公信力批次（REPRODUCE.md / examples/samples / smoke.yml 轻量 CI / eval_secs.py SECS / VERIFY.md）：**挂账**，批次 50 后穿插；PESQ/ESTOI → SECS/MOS/CER 口径修正；REPRODUCE 全部抽实测命令（docs 数据均为实测）
+- [x] **公信力批次（批次 51 落地，2026-10-10）**：REPRODUCE.md（7 节复现链全抽实测命令）/ VERIFY.md（14 条声明→验证→预期映射表）/ examples/samples README（方案 A：不入库音频，生成命令 + 云盘占位）/ .github/workflows/smoke.yml（ubuntu 全量 pytest，CPU torch 轮子先行，tests 零依赖 third_party 已甄别）/ scripts/eval_secs.py SECS 口径（实测锚点 0.9324 / 零样本 0.7729 / 微调 0.8052，Δ+0.0323）；**PESQ/ESTOI → SECS/MOS/CER 口径修正完成**（详见 REPRODUCE.md 第 5 节）
 
 ## 原则
 

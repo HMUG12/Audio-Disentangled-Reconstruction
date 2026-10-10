@@ -1,0 +1,37 @@
+# ADR 轻量 CI (批次51): 每次 push/PR 跑全量单测 (431+ 基线)。
+# 约定与 REPRODUCE.md 一致:
+# - tests/conftest.py 的 --run-asr 默认 False → 真实 ASR 用例自动 skip,
+#   CI 无需任何额外参数;
+# - tests 不依赖 third_party/ (GSVEngine 懒加载, 测试全部旁路或占位),
+#   也不依赖个人数据/底模权重 → 纯 checkout 即可跑;
+# - torch 先装 CPU 轮子, 避免 PyPI 默认拉 ~2.5GB CUDA 运行时。
+name: smoke
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 安装依赖 (CPU torch + 全量 extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install -e .[all,dev]
+
+      - name: 单测全量
+        env:
+          NUMBA_CACHE_DIR: /tmp/numba_cache
+        run: pytest -q --tb=short
