@@ -714,3 +714,17 @@
 - [x] **环境回归修复 (音素字典)**: 全量 pytest 7 failed 全是 `PhonemeDict(vocab_size=6 fallback)` — 批次 46 E 盘清盘删 DiffSinger×2 连带 `third_party/DiffSinger/dictionaries/opencpop-extension.txt` 消失, 三级回退路径全空; jsDelivr CDN (raw.githubusercontent 直连被重置) 拉官方字典 601 音素落 `F:\ADR_data\dictionaries\` (adr_data_dir 持久目录, 免疫 third_party 清理, 零代码改动) →  vocab 607 与基准一致 → 三失败模块重跑 44 passed 全绿
 - [x] **全量回归** ✅: **408 passed + 1 skipped 零失败** (恢复批次 43 基线; test_voice_package 7 用例含在内)
 - **留白**: ① Tauri 壳内页 (launcher/prewarm/loading) 浏览器自动化不可达, prewarm 状态机经 /health 轮询数据源验证 (64s 完整走通), 壳内 UI 呈现待用户实机确认; ② pro.html 导入 toast 反馈未最终确认; ③ **安装态机器同样缺音素字典** (批次 44 便携 runtime 未含 third_party 字典, prewarm 将退化 fallback-special-only) — 后续批次在 bootstrap/安装器附带字典
+
+### 批次 48 (2026-10-10): M10-B 设置中心 v1 — shell.json + sidecar 进程环境变量注入
+
+> 技术路线 (m10 B 节已定): 壳自带 `%LOCALAPPDATA%\ADR\shell.json`, 启动 sidecar 时以**进程环境变量注入** — 不污染系统环境, CLI 源码用户不受影响。配置落点/格式随本批定稿 (m10 待定 3 关闭)。
+
+- [x] **Rust 配置面** (lib.rs): ShellSettings 全字段 Option + `#[serde(default)]` — 旧文件缺字段/未知字段/坏 JSON 一律回退默认, 壳不炸; 启动即 `reload_shell_config()` 进 OnceLock 进程内缓存 (避免每条 proc_log 碰盘), 保存命令写盘后刷新
+- [x] **注入统一收敛 start_server()**: `env_overrides` 纯函数映射 → prewarm_flow 与 launch_console 自动共用; 只写子进程环境。注入项: `ADR_TTS_API_KEY` (鉴权) / `ADR_DATA_DIR` (档案目录) / `HF_ENDPOINT` (hf-mirror 国内源) / `ADR_TTS_DEFAULT_PROFILE` / `ADR_T2S_CUDAGRAPH` / `NUMBA_CACHE_DIR` (与批次 47 沙箱根因闭环, 设置页即现成解法入口); 全部注入项后端读取面现成, **Python 零改动**
+- [x] **数据目录同源收编**: adr_data_dir() 优先级改为 shell.json data_dir (最高) > ADR_DATA_DIR env > F:/ADR_data legacy > %LOCALAPPDATA% — 日志路径/目录推导/子进程注入三处永远一致
+- [x] **端口覆盖**: service_port > 0 最高优先 (仍被占回退默认逻辑); "9881 被占用" 提示仅默认逻辑回退时出
+- [x] **新命令 7 → 注册 14**: load/save_shell_settings; lan_info (UDP connect 默认路由出口 IP 零依赖 + 引擎地址 + expose, **还批次 45 Review 的债**: LAN IP/端口展示与可复制 URL); app_paths (数据/日志/shell.json 路径); autostart_get|set (**HKCU Run 注册表, reg.exe 零新依赖** — 回避 tauri-plugin-autostart 引入的 crates.io 网络风险; delete 键不存在幂等); open_path (本地路径存在校验 + http(s) URL 透传直达 Releases)
+- [x] **单元测试 4 passed** (cargo test --lib, 增量 15s): env_overrides 全映射/空串跳过/默认零注入、serde roundtrip + 旧版宽松解析、autostart 路径引号
+- [x] **launcher.html 设置模态框** (foot "设置" 入口, 风格沿用关于框): 分区 调用 (局域网开关 + API Key + Authorization 提示 + LAN IP/引擎地址/复制) / 声音档案 (存放目录展示当前生效 + 打开 + 默认档案 datalist 引擎就绪时拉 GET /profiles) / 下载与启动 (HF 源单选 + 开机自启) / 维护 (打开日志目录 + 检查更新 + 版本) / **高级抽屉** (details: 端口 + numba 缓存目录 + CUDAGraph); 保存 → toast + data_dir 变更单独迁移提示 + 三卡片 expose 勾选联动 lan_expose; showToast 支持成功态 (绿)
+- [x] 编译修复两错: proc_log PathBuf 需 .display(); UdpSocket::connect 消费 self 返回 Result<()> 非链式 (改两步式)
+- **留白**: ① 下载并发/限速、日志级别、训练 workers (ADR_S2_NUM_WORKERS)、推理设备切换 — 后端均无读取面, 批次 49/50 顺手建; ② 档案目录**自动迁移**不做 (GB 级权重复制不适合壳内, 仅提示 + 打开目录引导); ③ 壳内设置模态框动态点检待用户实机 (批次 47 同口径); ④ release 全量编译未重跑 (cargo test 已覆盖 lib 编译, main.rs 未动)

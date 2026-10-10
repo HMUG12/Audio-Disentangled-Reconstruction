@@ -12,6 +12,11 @@
 //!    启动预热前按命令行特征扫描收编 (kill 整棵树)
 //! 6. 托盘: 显示窗口 / 返回启动器 / 浏览器打开 / 退出 (退出时 taskkill /T 杀整棵进程树)
 //! 7. 关窗 = 隐藏到托盘, 真正退出只走托盘菜单
+//! 8. 设置中心 (批次48): 壳自带 shell.json (%LOCALAPPDATA%\ADR\shell.json),
+//!    启动 sidecar 时以**进程环境变量**注入 (ADR_TTS_API_KEY / ADR_DATA_DIR /
+//!    HF_ENDPOINT / ADR_TTS_DEFAULT_PROFILE / ADR_T2S_CUDAGRAPH / NUMBA_CACHE_DIR /
+//!    端口覆盖) — 不污染系统环境变量, CLI 源码用户不受影响; 开机自启走
+//!    HKCU Run 注册表 (reg.exe, 零新依赖)
 //!
 //! Python 解释器解析优先级:
 //! 1. 便携模式: ``<exe目录>/runtime/python/python.exe`` (打包后的绿色运行时)
@@ -101,6 +106,105 @@ impl ServerState {
 /// 重启场景 (launch_console 切换模式) 只杀 sidecar, 不动该标记。
 static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 
+// ---------------------------------------------------------------------------
+// 设置中心 (批次48): shell.json 配置 + sidecar 环境变量注入
+// ---------------------------------------------------------------------------
+
+/// 设置中心配置 (launcher.html 设置模态框读写, sidecar 启动时注入)。
+/// 全字段 Option: 旧版本文件缺字段/坏 JSON 一律回退默认, 不炸壳。
+#[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct ShellSettings {
+    // --- 常用层 ---
+    /// 局域网开关默认值 (launcher 卡片勾选框可本次覆盖)
+    lan_expose: Option<bool>,
+    /// ADR_TTS_API_KEY — 逗号分隔多 key, 空串 = 鉴权关闭
+    api_key: Option<String>,
+    /// ADR_DATA_DIR 覆盖 (声音档案存放位置); 空串 = 用推导默认
+    data_dir: Option<String>,
+    /// true → HF_ENDPOINT=https://hf-mirror.com (国内模型下载镜像)
+    hf_mirror: Option<bool>,
+    /// 开机自启 (HKCU Run 注册表, 与本文件无关的独立持久化)
+    autostart: Option<bool>,
+    /// ADR_TTS_DEFAULT_PROFILE — /tts 缺省档案
+    default_profile: Option<String>,
+    // --- 高级抽屉 ---
+    /// 服务端口覆盖; 0/None = 默认逻辑 (9881 探测 → 随机回退)
+    service_port: Option<u16>,
+    /// NUMBA_CACHE_DIR — numba JIT 缓存重定向 (批次47: 沙箱/杀软禁写
+    /// site-packages 时预热会卡死, 重定向到可写目录即解)
+    numba_cache_dir: Option<String>,
+    /// ADR_T2S_CUDAGRAPH=1 — t2s CUDA Graph 加速 (音质有损, 默认关)
+    cudagraph: Option<bool>,
+}
+
+static SHELL_CFG: std::sync::OnceLock<Mutex<ShellSettings>> = std::sync::OnceLock::new();
+
+fn shell_cell() -> &'static Mutex<ShellSettings> {
+    SHELL_CFG.get_or_init(|| Mutex::new(ShellSettings::default()))
+}
+
+/// shell.json 落点: %LOCALAPPDATA%\ADR\shell.json (LOCALAPPDATA 缺失 → 数据目录旁)。
+fn shell_settings_path() -> PathBuf {
+    if let Ok(la) = std::env::var("LOCALAPPDATA") {
+        if !la.trim().is_empty() {
+            return PathBuf::from(la).join(r"ADR\shell.json");
+        }
+    }
+    adr_data_dir().unwrap_or_else(std::env::temp_dir).join("shell.json")
+}
+
+/// 从盘加载配置并刷新进程内缓存 (启动时 / 保存后调用; 平时读缓存避免
+/// 每条 proc_log 都碰文件系统)。坏 JSON / 读取失败 → 默认值。
+fn reload_shell_config() -> ShellSettings {
+    let cfg = std::fs::read_to_string(shell_settings_path())
+        .ok()
+        .and_then(|s| serde_json::from_str::<ShellSettings>(&s).ok())
+        .unwrap_or_default();
+    *shell_cell().lock().unwrap() = cfg.clone();
+    cfg
+}
+
+/// 进程内缓存读取 (未加载过 → 读盘)。
+fn shell_config() -> ShellSettings {
+    shell_cell().lock().unwrap().clone()
+}
+
+/// shell.json → sidecar 环境变量映射 (纯函数, 单测覆盖)。
+/// 只影响子进程, 不写壳进程自身环境; 空串字段一律跳过 (= 未配置)。
+fn env_overrides(c: &ShellSettings) -> Vec<(String, String)> {
+    let mut v: Vec<(String, String)> = Vec::new();
+    if let Some(k) = c.api_key.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        v.push(("ADR_TTS_API_KEY".into(), k.into()));
+    }
+    if let Some(d) = c.data_dir.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        v.push(("ADR_DATA_DIR".into(), d.into()));
+    }
+    if c.hf_mirror.unwrap_or(false) {
+        v.push(("HF_ENDPOINT".into(), "https://hf-mirror.com".into()));
+    }
+    if let Some(p) = c.default_profile.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        v.push(("ADR_TTS_DEFAULT_PROFILE".into(), p.into()));
+    }
+    if c.cudagraph.unwrap_or(false) {
+        v.push(("ADR_T2S_CUDAGRAPH".into(), "1".into()));
+    }
+    if let Some(d) = c.numba_cache_dir.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        v.push(("NUMBA_CACHE_DIR".into(), d.into()));
+    }
+    v
+}
+
+/// 自启注册表值: exe 全路径加引号 (含空格路径必需)。
+fn autostart_cmd_value(exe: &std::path::Path) -> String {
+    format!("\"{}\"", exe.display())
+}
+
+#[cfg(windows)]
+const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+#[cfg(windows)]
+const RUN_VALUE: &str = "ADR Studio";
+
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -114,6 +218,9 @@ pub fn run() {
                 expose: AtomicBool::new(false),
                 phase: AtomicU8::new(Phase::Stopped as u8),
             });
+
+            // 设置中心: 启动即加载 shell.json (数据目录推导/日志路径/后续注入全依赖)
+            reload_shell_config();
 
             // 主窗口: 代码创建 (替代 tauri.conf.json windows), 以便挂 on_download —
             // WebView2 对网页 a[download] 默认静默取消下载 (控制台"下载音频"失败根因),
@@ -215,7 +322,14 @@ pub fn run() {
             engine_status,
             skip_prewarm,
             retry_prewarm,
-            back_to_launcher
+            back_to_launcher,
+            load_shell_settings,
+            save_shell_settings,
+            lan_info,
+            app_paths,
+            autostart_get,
+            autostart_set,
+            open_path
         ])
         .on_window_event(|window, event| {
             // 关窗 = 隐藏到托盘; 真正退出走托盘菜单 (保证 sidecar 被清理)
@@ -354,14 +468,142 @@ fn back_to_launcher(app: AppHandle) {
 }
 
 // ---------------------------------------------------------------------------
+// 设置中心命令 (批次48): launcher.html 设置模态框经 invoke 调用
+// ---------------------------------------------------------------------------
+
+/// 读取设置 (进程内缓存, 启动时已从盘加载)。
+#[tauri::command]
+fn load_shell_settings() -> ShellSettings {
+    shell_config()
+}
+
+/// 保存设置: 写 %LOCALAPPDATA%\ADR\shell.json + 刷新缓存。
+/// 环境变量注入在下次 sidecar 启动时生效 (前端提示"重启引擎后生效")。
+#[tauri::command]
+fn save_shell_settings(settings: ShellSettings) -> Result<(), String> {
+    let path = shell_settings_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("创建配置目录失败: {e}"))?;
+    }
+    let body = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    std::fs::write(&path, body).map_err(|e| format!("写入 shell.json 失败: {e}"))?;
+    reload_shell_config();
+    proc_log("settings", &format!("shell.json 已保存: {}", path.display()));
+    Ok(())
+}
+
+/// 本机默认路由出口 IP (UDP connect 不发包探测, 零依赖);
+/// 离线/多网卡异常时返回空串 — 前端降级提示。
+fn local_lan_ip() -> Option<String> {
+    let s = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    s.connect("223.5.5.5:80").ok()?; // 阿里公共 DNS: 仅路由决策, 不发数据
+    s.local_addr().ok().map(|a| a.ip().to_string())
+}
+
+/// 局域网调用信息: 出口 IP + 当前服务地址 + 本次 expose 状态。
+/// 还批次 45 Review 的债: key 输入框旁展示 LAN IP:端口与可复制完整 URL。
+#[tauri::command]
+fn lan_info(app: AppHandle) -> serde_json::Value {
+    let state: State<ServerState> = app.state();
+    serde_json::json!({
+        "ip": local_lan_ip().unwrap_or_default(),
+        "url": state.base_url.lock().unwrap().clone(),
+        "expose": state.expose.load(Ordering::Relaxed),
+    })
+}
+
+/// 壳常用路径 (设置页展示 + 打开按钮数据源)。
+#[tauri::command]
+fn app_paths() -> serde_json::Value {
+    serde_json::json!({
+        "data_dir": adr_data_dir().map(|p| p.to_string_lossy().into_owned()),
+        "log_dir": server_log_path().parent().map(|p| p.to_string_lossy().into_owned()),
+        "shell_json": shell_settings_path().to_string_lossy(),
+    })
+}
+
+/// 开机自启状态 (HKCU Run 注册表查询; 非 Windows 恒 false)。
+#[tauri::command]
+#[cfg(windows)]
+fn autostart_get() -> bool {
+    let mut cmd = Command::new("reg");
+    cmd.args(["query", RUN_KEY, "/v", RUN_VALUE]);
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+#[cfg(not(windows))]
+fn autostart_get() -> bool {
+    false
+}
+
+/// 开/关开机自启: reg add / delete HKCU Run 键, 值为壳 exe 全路径。
+#[tauri::command]
+#[cfg(windows)]
+fn autostart_set(enable: bool) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| format!("解析 exe 路径失败: {e}"))?;
+    let mut cmd = Command::new("reg");
+    if enable {
+        cmd.args([
+            "add", RUN_KEY, "/v", RUN_VALUE, "/t", "REG_SZ",
+            "/d", &autostart_cmd_value(&exe), "/f",
+        ]);
+    } else {
+        cmd.args(["delete", RUN_KEY, "/v", RUN_VALUE, "/f"]);
+    }
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let out = cmd.output().map_err(|e| format!("reg.exe 执行失败: {e}"))?;
+    if !out.status.success() {
+        // delete 时键不存在也算成功 (幂等)
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if !enable && stderr.contains("unable to find") {
+            return Ok(());
+        }
+        return Err(format!("注册表操作失败: {}", stderr.trim()));
+    }
+    proc_log("settings", &format!("开机自启 → {enable}"));
+    Ok(())
+}
+
+#[tauri::command]
+#[cfg(not(windows))]
+fn autostart_set(_enable: bool) -> Result<(), String> {
+    Err("仅支持 Windows".into())
+}
+
+/// 用系统默认程序打开目标: 目录 (日志/数据/迁移引导) 或 URL (检查更新直达
+/// Releases 页)。URL 不做存在性校验, 本地路径必须存在。
+#[tauri::command]
+fn open_path(path: String) -> Result<(), String> {
+    if path.starts_with("http://") || path.starts_with("https://") {
+        return open::that(&path).map_err(|e| format!("打开失败: {e}"));
+    }
+    let p = PathBuf::from(&path);
+    if !p.exists() {
+        return Err(format!("路径不存在: {path}"));
+    }
+    open::that(&p).map_err(|e| format!("打开失败: {e}"))
+}
+
+// ---------------------------------------------------------------------------
 // 启动与守护
 // ---------------------------------------------------------------------------
 
 /// 与 adr/core/config.py adr_data_dir() 同序推导 (批次27 复审 ISSUE-2 对齐):
-/// ADR_DATA_DIR > F:/ADR_data (legacy, 存在即沿用) > %LOCALAPPDATA%\ADR\data。
+/// shell.json data_dir (批次48 设置中心, 最高优先) > ADR_DATA_DIR env >
+/// F:/ADR_data (legacy, 存在即沿用) > %LOCALAPPDATA%\ADR\data。
 /// 返回 None 表示交由 Python 侧默认 (~/.adr/data), 不注入子进程。
 /// 空串环境变量视为未设置 (批次27 复审 ISSUE-4: PathBuf("") 会落到进程 CWD)。
 fn adr_data_dir() -> Option<PathBuf> {
+    // 批次48: 设置中心显式指定的档案目录最高优先 (读进程内缓存, 不碰盘)
+    if let Some(v) = shell_config().data_dir {
+        if !v.trim().is_empty() {
+            return Some(PathBuf::from(v));
+        }
+    }
     if let Ok(v) = std::env::var("ADR_DATA_DIR") {
         if !v.trim().is_empty() {
             return Some(PathBuf::from(v));
@@ -486,9 +728,13 @@ fn start_server(
     let host = if state.expose.load(Ordering::Relaxed) { "0.0.0.0" } else { "127.0.0.1" };
     // pro/easy 承载 TTS 服务: 优先绑定 9881 (NEKO GPT-SoVITS provider 默认端口, 零配置直连);
     // 9881 被占用则回退随机端口并提示。legacy 是 Gradio WebUI, 不承载 TTS, 恒用随机端口。
-    let (port, using_preferred) = if mode != "legacy"
-        && probe_fixed_port(ADR_PREFERRED_PORT, host)
+    // 批次48: 设置中心 service_port > 0 时最高优先 (仍被占则回退默认逻辑)。
+    let cfg = shell_config();
+    let cfg_port = cfg.service_port.unwrap_or(0);
+    let (port, using_preferred) = if mode != "legacy" && cfg_port > 0 && probe_fixed_port(cfg_port, host)
     {
+        (cfg_port, true)
+    } else if mode != "legacy" && probe_fixed_port(ADR_PREFERRED_PORT, host) {
         (ADR_PREFERRED_PORT, true)
     } else {
         let Some(p) = free_tcp_port() else {
@@ -497,7 +743,7 @@ fn start_server(
         };
         (p, false)
     };
-    if mode != "legacy" && !using_preferred {
+    if mode != "legacy" && !using_preferred && cfg_port == 0 {
         update_status(window, &format!(
             "9881 被其他程序占用, 本次改用端口 {port} (NEKO 侧需手动填写该端口)"
         ));
@@ -531,6 +777,12 @@ fn start_server(
     // 优先读此环境变量) 与壳的目录推导永远同源
     if let Some(d) = adr_data_dir() {
         cmd.env("ADR_DATA_DIR", &d);
+    }
+    // 批次48: 设置中心 shell.json → 进程环境变量注入 (API Key / HF 镜像 /
+    // 默认档案 / CUDAGraph / numba 缓存目录 / data_dir 覆盖)。
+    // 只写子进程环境, 不污染系统; 同 key 后写覆盖前写 (data_dir 双写值一致)
+    for (k, v) in env_overrides(&cfg) {
+        cmd.env(k, v);
     }
     // 服务日志落盘 (排错必需: 此前服务崩溃/卡死均无日志可查)
     // 路径见 server_log_path(): ADR_LOG_DIR > <adr_data_dir()>\logs
@@ -991,4 +1243,77 @@ fn navigate(window: &Option<WebviewWindow>, url: &str) {
 
 fn js_quote(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into())
+}
+
+// ---------------------------------------------------------------------------
+// 单元测试 (批次48): cargo test --lib
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn env_overrides_maps_all_fields() {
+        let c = ShellSettings {
+            lan_expose: Some(true),          // 不进环境变量 (launch_console 参数语义)
+            api_key: Some(" k1,k2 ".into()), // trim 保留 key 内部
+            data_dir: Some(" D:/voices ".into()),
+            hf_mirror: Some(true),
+            autostart: Some(true),           // 独立注册表持久化, 不进环境变量
+            default_profile: Some(" my_voice ".into()),
+            service_port: Some(9900),        // 端口走 start_server 探测, 不进环境变量
+            numba_cache_dir: Some(" F:/nc ".into()),
+            cudagraph: Some(true),
+        };
+        let m: std::collections::HashMap<String, String> = env_overrides(&c).into_iter().collect();
+        assert_eq!(m.get("ADR_TTS_API_KEY").unwrap(), "k1,k2");
+        assert_eq!(m.get("ADR_DATA_DIR").unwrap(), "D:/voices");
+        assert_eq!(m.get("HF_ENDPOINT").unwrap(), "https://hf-mirror.com");
+        assert_eq!(m.get("ADR_TTS_DEFAULT_PROFILE").unwrap(), "my_voice");
+        assert_eq!(m.get("NUMBA_CACHE_DIR").unwrap(), "F:/nc");
+        assert_eq!(m.get("ADR_T2S_CUDAGRAPH").unwrap(), "1");
+        assert_eq!(m.len(), 6);
+    }
+
+    #[test]
+    fn env_overrides_default_and_empty_skip() {
+        // 全默认 → 零注入 (鉴权关闭/HF 官方源等后端原语义)
+        assert!(env_overrides(&ShellSettings::default()).is_empty());
+        // 空串 = 未配置, 一律跳过
+        let c = ShellSettings {
+            api_key: Some("   ".into()),
+            data_dir: Some("".into()),
+            default_profile: Some("".into()),
+            numba_cache_dir: Some("".into()),
+            ..Default::default()
+        };
+        assert!(env_overrides(&c).is_empty());
+        // hf_mirror=false / cudagraph=false → 不注入
+        let c = ShellSettings { hf_mirror: Some(false), cudagraph: Some(false), ..Default::default() };
+        assert!(env_overrides(&c).is_empty());
+    }
+
+    #[test]
+    fn shell_settings_serde_roundtrip_and_defaults() {
+        let c = ShellSettings { api_key: Some("k".into()), hf_mirror: Some(true), ..Default::default() };
+        let s = serde_json::to_string(&c).unwrap();
+        let back: ShellSettings = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.api_key.as_deref(), Some("k"));
+        assert_eq!(back.hf_mirror, Some(true));
+        // 旧版本文件缺字段 / 含未知字段 → 宽松解析不炸
+        let legacy: ShellSettings = serde_json::from_str(r#"{"api_key":"x","unknown_field":1}"#).unwrap();
+        assert_eq!(legacy.api_key.as_deref(), Some("x"));
+        assert_eq!(legacy.service_port, None);
+        // 坏 JSON → 默认 (reload_shell_config 同口径)
+        assert!(serde_json::from_str::<ShellSettings>("{oops").is_err());
+    }
+
+    #[test]
+    fn autostart_value_quotes_path() {
+        assert_eq!(
+            autostart_cmd_value(std::path::Path::new("C:/Program Files/ADR/adr-desktop.exe")),
+            r#""C:/Program Files/ADR/adr-desktop.exe""#
+        );
+    }
 }

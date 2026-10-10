@@ -107,6 +107,58 @@
   #about .ab-close:hover { color: #e8ecf4; background: #1a2440; }
   #about .ab-note { font-size: 11px; line-height: 1.7; color: #47556e;
     border-top: 1px solid #1c2742; padding-top: 14px; }
+
+  /* 设置模态框 (批次48) */
+  #set-ov { position: fixed; inset: 0; z-index: 50; display: none;
+    place-items: center; background: #000000b3; }
+  #set-ov.on { display: grid; }
+  #set {
+    width: min(560px, 92vw); max-height: 86vh; overflow-y: auto;
+    background: linear-gradient(165deg, #141b2e, #0d1322);
+    border: 1px solid #263252; border-radius: 18px; padding: 26px 28px 22px;
+    box-shadow: 0 24px 70px #000d; position: relative;
+  }
+  #set .st-close { position: absolute; top: 12px; right: 14px; width: 28px; height: 28px;
+    display: grid; place-items: center; color: #64748b; font-size: 18px;
+    cursor: pointer; border-radius: 8px; border: none; background: none; }
+  #set .st-close:hover { color: #e8ecf4; background: #1a2440; }
+  .st-title { font-size: 19px; font-weight: 700; margin-bottom: 3px; }
+  .st-sub { font-size: 11.5px; color: #64748b; margin-bottom: 14px; }
+  .st-sec { font-size: 11.5px; font-weight: 650; color: #2dd4bf; letter-spacing: 1px;
+    margin: 16px 0 6px; border-top: 1px solid #1c2742; padding-top: 13px; }
+  .st-row { display: flex; align-items: center; justify-content: space-between;
+    gap: 14px; font-size: 13px; padding: 7px 0; }
+  .st-row > span:first-child { color: #d7deeb; }
+  .st-row input[type=checkbox], .st-row input[type=radio] {
+    accent-color: #2dd4bf; width: 16px; height: 16px; cursor: pointer; margin: 0; }
+  .st-input-row { display: block; }
+  .st-input-row > span { display: block; margin-bottom: 6px; }
+  #set input[type=text], #set input[type=number] {
+    width: 100%; background: #0b1120; border: 1px solid #223050; border-radius: 8px;
+    color: #e8ecf4; font-size: 12.5px; padding: 8px 11px; outline: none;
+    font-family: inherit; }
+  #set input[type=text]:focus, #set input[type=number]:focus { border-color: #2dd4bf66; }
+  #set input::placeholder { color: #47556e; }
+  .st-hint { font-size: 11px; color: #64748b; line-height: 1.6; margin: 3px 0 6px; }
+  .st-hint code { font-family: Consolas, monospace; font-size: 11px; color: #7dd3fc;
+    background: #0d334055; border-radius: 5px; padding: 1px 6px; }
+  .st-hint a, .st-links a { color: #64748b; cursor: pointer; text-decoration: none; }
+  .st-hint a:hover, .st-links a:hover { color: #2dd4bf; }
+  .st-inline { display: flex; gap: 16px; font-size: 12px; color: #8391ab; flex-wrap: wrap; }
+  .st-inline label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+  .st-adv { margin-top: 14px; border: 1px dashed #223050; border-radius: 10px;
+    padding: 10px 14px 6px; }
+  .st-adv summary { font-size: 12px; color: #7f92b5; cursor: pointer; user-select: none; }
+  .st-adv summary:hover { color: #2dd4bf; }
+  .st-adv[open] summary { margin-bottom: 6px; }
+  .st-foot { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
+  .st-foot .st-eff { font-size: 11px; color: #fbbf24; margin-right: auto; }
+  #st-save { background: #0d3a2b; border: 1px solid #34d39955; color: #34d399;
+    font-size: 13px; font-weight: 600; border-radius: 10px; padding: 8px 26px;
+    cursor: pointer; font-family: inherit; }
+  #st-save:hover { background: #0f4734; }
+  #st-save.busy { opacity: .6; pointer-events: none; }
+  .st-links { font-size: 12.5px; color: #8391ab; display: flex; gap: 6px; align-items: center; }
 </style>
 </head>
 <body>
@@ -185,7 +237,7 @@
     </div>
   </div>
 
-  <div class="foot">经典控制台按需启动；专业 / 新手复用常驻引擎（启动时已预热），进出秒级切换 · <a id="about-link">关于 ADR Studio</a></div>
+  <div class="foot">经典控制台按需启动；专业 / 新手复用常驻引擎（启动时已预热），进出秒级切换 · <a id="set-link">设置</a> · <a id="about-link">关于 ADR Studio</a></div>
   <div id="toast"></div>
 
   <div id="about-ov">
@@ -202,16 +254,90 @@
     </div>
   </div>
 
+  <div id="set-ov">
+    <div id="set">
+      <button class="st-close" id="set-x" title="关闭">✕</button>
+      <div class="st-title">设置</div>
+      <div class="st-sub">改动以进程环境变量注入本地引擎，不污染系统环境；保存后下次启动引擎时生效。</div>
+
+      <div class="st-sec">调用</div>
+      <div class="st-row">
+        <span>对外提供调用 (局域网)</span>
+        <input type="checkbox" id="st-lan">
+      </div>
+      <div class="st-hint">本机局域网地址: <code id="st-lan-ip">…</code> · 引擎地址: <code id="st-lan-url">…</code> <a id="st-copy-url" style="display:none">复制</a></div>
+      <div class="st-row st-input-row">
+        <span>API Key (多把逗号分隔)</span>
+        <input type="text" id="st-key" placeholder="留空 = 不鉴权；仅本机调用时可留空" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="st-hint">开启局域网后调用方请求头需带 <code>Authorization: Bearer &lt;key&gt;</code>。</div>
+
+      <div class="st-sec">声音档案</div>
+      <div class="st-row st-input-row">
+        <span>存放目录</span>
+        <input type="text" id="st-datadir" placeholder="留空 = 默认位置 (%LOCALAPPDATA%\ADR\data)" spellcheck="false">
+      </div>
+      <div class="st-hint">当前生效: <code id="st-datadir-now">…</code> <a id="st-open-data">打开</a> · 更改后旧目录档案不会自动迁移，需手动复制。</div>
+      <div class="st-row st-input-row">
+        <span>默认声音档案</span>
+        <input type="text" id="st-profile" list="st-profiles" placeholder="留空 = 每次手动选择" spellcheck="false">
+        <datalist id="st-profiles"></datalist>
+      </div>
+
+      <div class="st-sec">下载与启动</div>
+      <div class="st-row">
+        <span>模型下载源</span>
+        <span class="st-inline">
+          <label><input type="radio" name="st-hf" value="off" checked> HuggingFace 官方</label>
+          <label><input type="radio" name="st-hf" value="mirror"> hf-mirror (国内)</label>
+        </span>
+      </div>
+      <div class="st-row">
+        <span>开机自启</span>
+        <input type="checkbox" id="st-autostart">
+      </div>
+
+      <div class="st-sec">维护</div>
+      <div class="st-row st-links">
+        <a id="st-open-log">打开日志目录</a> · <a id="st-update">检查更新</a> · <span id="st-ver"></span>
+      </div>
+
+      <details class="st-adv">
+        <summary>高级设置</summary>
+        <div class="st-row st-input-row">
+          <span>服务端口 (0 = 默认 9881，被占自动回退)</span>
+          <input type="number" id="st-port" min="0" max="65535" placeholder="0">
+        </div>
+        <div class="st-row st-input-row">
+          <span>NUMBA 缓存目录 (预热卡死在 numba 缓存时重定向可解)</span>
+          <input type="text" id="st-numba" placeholder="留空 = 默认" spellcheck="false">
+        </div>
+        <div class="st-row">
+          <span>t2s CUDA Graph 加速 (3.77x 但音质有损，默认关)</span>
+          <input type="checkbox" id="st-cuda">
+        </div>
+      </details>
+
+      <div class="st-foot">
+        <span class="st-eff">环境变量类改动下次启动引擎生效</span>
+        <button id="st-save">保存</button>
+      </div>
+    </div>
+  </div>
+
 <script>
 const cards = document.querySelectorAll(".card");
 const toast = document.getElementById("toast");
 let timer = null;
 
-function showToast(msg) {
+function showToast(msg, ok) {
   toast.textContent = msg;
   toast.style.display = "block";
+  toast.style.background = ok ? "#0d2a1b" : "#2a1215";
+  toast.style.borderColor = ok ? "#34d39988" : "#7f1d1d88";
+  toast.style.color = ok ? "#86efac" : "#fca5a5";
   clearTimeout(timer);
-  timer = setTimeout(() => (toast.style.display = "none"), 6000);
+  timer = setTimeout(() => (toast.style.display = "none"), ok ? 8000 : 6000);
 }
 
 async function launch(mode, card) {
@@ -275,6 +401,126 @@ document.getElementById("about-qq").addEventListener("click", e => {
   const t = e.currentTarget.textContent.replace(/^QQ\s*/, "");
   navigator.clipboard?.writeText(t).then(() => showToast("QQ 号已复制"), () => {});
 });
+
+// ===== 设置中心 (批次48): shell.json 读写 + 环境变量注入面 =====
+const RELEASES_URL = "https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/latest";
+const setOv = document.getElementById("set-ov");
+const $st = id => document.getElementById(id);
+let stAutostart = false;   // 注册表当前真值 (保存时比对, 避免无谓写注册表)
+let stPaths = {};          // app_paths 缓存 (打开日志/数据目录)
+
+// 引擎就绪 → 拉档案列表填默认档案下拉 (datalist)
+async function fillProfiles(base) {
+  const dl = $st("st-profiles");
+  dl.innerHTML = "";
+  if (!base) return;
+  try {
+    const r = await fetch(base + "/api/adr/v1/profiles");
+    const j = await r.json();
+    for (const p of (j.profiles || [])) {
+      const o = document.createElement("option");
+      o.value = p.name;
+      dl.appendChild(o);
+    }
+  } catch (_) { /* 服务未就绪/网络失败: 下拉留空, 文本输入不受影响 */ }
+}
+
+async function openSettings() {
+  setOv.classList.add("on");
+  const inv = window.__TAURI__?.core.invoke;
+  if (!inv) { showToast("请在 ADR Studio 桌面应用内使用"); return; }
+  try {
+    const [cfg, paths, lan] = await Promise.all([
+      inv("load_shell_settings"), inv("app_paths"), inv("lan_info")
+    ]);
+    stPaths = paths || {};
+    $st("st-lan").checked = !!cfg.lan_expose;
+    $st("st-key").value = cfg.api_key || "";
+    $st("st-datadir").value = cfg.data_dir || "";
+    $st("st-datadir").dataset.now = cfg.data_dir || "";
+    $st("st-datadir-now").textContent = paths?.data_dir || "(默认位置)";
+    document.querySelector('input[name="st-hf"][value="' + (cfg.hf_mirror ? "mirror" : "off") + '"]').checked = true;
+    $st("st-profile").value = cfg.default_profile || "";
+    $st("st-port").value = cfg.service_port || "";
+    $st("st-numba").value = cfg.numba_cache_dir || "";
+    $st("st-cuda").checked = !!cfg.cudagraph;
+    stAutostart = await inv("autostart_get");
+    $st("st-autostart").checked = stAutostart;
+    $st("st-lan-ip").textContent = lan?.ip || "未获取到 (离线?)";
+    $st("st-lan-url").textContent = lan?.url || "引擎未运行";
+    $st("st-copy-url").style.display = lan?.url ? "" : "none";
+    fillProfiles(lan?.url || "");
+  } catch (e) { showToast("加载设置失败: " + e); }
+}
+
+async function saveSettings() {
+  const inv = window.__TAURI__?.core.invoke;
+  const btn = $st("st-save");
+  if (!inv) { showToast("请在 ADR Studio 桌面应用内使用"); return; }
+  btn.classList.add("busy");
+  try {
+    const port = Math.min(Math.max(parseInt($st("st-port").value, 10) || 0, 0), 65535);
+    const cfg = {
+      lan_expose: $st("st-lan").checked,
+      api_key: $st("st-key").value.trim(),
+      data_dir: $st("st-datadir").value.trim(),
+      hf_mirror: document.querySelector('input[name="st-hf"]:checked').value === "mirror",
+      autostart: $st("st-autostart").checked,
+      default_profile: $st("st-profile").value.trim(),
+      service_port: port,
+      numba_cache_dir: $st("st-numba").value.trim(),
+      cudagraph: $st("st-cuda").checked,
+    };
+    await inv("save_shell_settings", { settings: cfg });
+    if (cfg.autostart !== stAutostart) {
+      await inv("autostart_set", { enable: cfg.autostart });
+      stAutostart = cfg.autostart;
+    }
+    // 三卡片"对外提供调用"勾选框联动新默认值
+    document.querySelectorAll(".exp input").forEach(b => { if (b) b.checked = cfg.lan_expose; });
+    const oldDir = $st("st-datadir").dataset.now || "";
+    const moved = oldDir && cfg.data_dir && cfg.data_dir !== oldDir;
+    $st("st-datadir").dataset.now = cfg.data_dir;
+    showToast(moved
+      ? "已保存。档案目录已变更: 旧目录档案不会自动迁移, 请手动复制 (维护区可打开目录)"
+      : "已保存, 下次启动引擎时生效", true);
+  } catch (e) { showToast("保存失败: " + e); }
+  btn.classList.remove("busy");
+}
+
+$st("set-link").addEventListener("click", openSettings);
+$st("set-x").addEventListener("click", () => setOv.classList.remove("on"));
+setOv.addEventListener("click", e => { if (e.target === setOv) setOv.classList.remove("on"); });
+$st("st-save").addEventListener("click", saveSettings);
+$st("st-open-data").addEventListener("click", () => {
+  stPaths?.data_dir && window.__TAURI__?.core.invoke("open_path", { path: stPaths.data_dir })
+    .catch(e => showToast(String(e)));
+});
+$st("st-open-log").addEventListener("click", () => {
+  stPaths?.log_dir && window.__TAURI__?.core.invoke("open_path", { path: stPaths.log_dir })
+    .catch(e => showToast(String(e)));
+});
+$st("st-update").addEventListener("click", () => {
+  window.__TAURI__?.core.invoke("open_path", { path: RELEASES_URL })
+    .catch(e => showToast(String(e)));
+});
+$st("st-copy-url").addEventListener("click", () => {
+  const url = $st("st-lan-url").textContent;
+  if (url && url !== "引擎未运行") {
+    navigator.clipboard?.writeText(url).then(() => showToast("地址已复制", true), () => {});
+  }
+});
+// 维护区版本号 (与关于框一致)
+(async () => {
+  try { $st("st-ver").textContent = "v" + await window.__TAURI__.app.getVersion(); }
+  catch (_) { $st("st-ver").textContent = ""; }
+})();
+
+// 设置中心: 三卡片 expose 勾选默认值联动 (lan_expose)
+window.__TAURI__ && window.__TAURI__.core.invoke("load_shell_settings")
+  .then(cfg => document.querySelectorAll(".exp input")
+    .forEach(b => { if (b) b.checked = !!cfg.lan_expose; }))
+  .catch(() => {});
 </script>
 </body>
 </html>

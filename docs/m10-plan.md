@@ -12,18 +12,19 @@
 - [ ] **修复**：死按钮当场修（历史上踩过：命令未注册、下载事件静默取消、fallback 导航缺失）
 - [ ] **交互反馈统一**：所有有副作用的按钮统一 loading 态 / 错误提示 / 成功反馈形态
 
-### B. 设置中心 v1（候选批次 48）
+### B. 设置中心 v1（批次 48，已交付主体）
 
 - **技术路线（已定）**：壳自带配置文件管理，启动 sidecar 时以**进程环境变量注入**——不污染系统环境变量，CLI 源码用户不受影响
-- [ ] **常用层**（目标 ≤7 项，门槛优先）：
-  - [ ] 局域网开关 + API Key（进程级注入；还批次 45 Review 的债：key 输入框 / LAN IP 与端口展示 / 可复制完整 URL）
-  - [ ] 声音档案存放位置（改 `ADR_DATA_DIR` 注入；含已有数据迁移引导）
-  - [ ] 模型下载源切换（HuggingFace 官方 / hf-mirror.com，注入 `HF_ENDPOINT`；4.35GB 底模首启下载是国内用户第一道坎）
-  - [ ] 下载体验项（并发 / 限速）
-  - [ ] 开机自启（Tauri autostart）
-  - [ ] 默认声音档案选择
-  - [ ] 打开日志目录 / 更新检查与版本信息入口
-- [ ] **高级抽屉**：服务端口、NUMBA 缓存目录、日志级别、训练 workers 数（`ADR_S2_NUM_WORKERS`）、CUDAGraph 开关（`ADR_T2S_CUDAGRAPH`）、推理设备切换（GPU/CPU 强制，双显卡/核显机器排障用）、低配模式预设（联动 C 节）
+- **落点（已定）**：`%LOCALAPPDATA%\ADR\shell.json`（全字段 Option + 宽松解析，坏文件不炸壳）；注入统一收敛在 start_server()（prewarm 与 launch_console 自动共用）
+- [x] **常用层**：
+  - [x] 局域网开关 + API Key（`lan_expose`/`api_key` → 注入 `ADR_TTS_API_KEY`；LAN IP 与引擎地址展示 + 复制完整 URL，还批次 45 Review 的债；三卡片 expose 勾选框联动默认值）
+  - [x] 声音档案存放位置（`data_dir` → 注入 `ADR_DATA_DIR`，壳 adr_data_dir() 同源收编；迁移引导 = 变更提示 + 打开目录，**自动迁移留白**）
+  - [x] 模型下载源切换（`hf_mirror` → 注入 `HF_ENDPOINT`=hf-mirror.com，4.35GB 底模国内首启下载）
+  - [ ] 下载体验项（并发 / 限速）——后端无注入面，留白（批次 49/50 顺手）
+  - [x] 开机自启（HKCU Run 注册表，reg.exe 零新依赖，删除键不存在幂等）
+  - [x] 默认声音档案选择（`default_profile` → 注入 `ADR_TTS_DEFAULT_PROFILE`；引擎就绪时拉 GET /profiles 填 datalist）
+  - [x] 打开日志目录 / 更新检查与版本信息入口（open_path 支持目录与 URL 直达 Releases）
+- [x] **高级抽屉**：服务端口（`service_port` 覆盖 9881 探测）、NUMBA 缓存目录（`NUMBA_CACHE_DIR`，与批次 47 沙箱根因闭环）、CUDAGraph 开关（`ADR_T2S_CUDAGRAPH`）；**留白**：日志级别、训练 workers（`ADR_S2_NUM_WORKERS`）、推理设备切换——后端均无读取面，批次 49/50 顺手建；低配模式预设联动批次 49 C 节
 
 ### C. 低配设备推理加速（候选批次 49）
 
@@ -58,7 +59,7 @@
 
 1. ~~批次顺序~~ **已定（2026-10-07）**：批次 47 = A 壳体检全扫 + D 音色导入导出 + 性能测量埋点（GPU 利用率曲线提前备料）；后续 48 = B 设置中心 → 49 = C 低配加速 → 50 = E 续训 → F 多语言插入位置待定
 2. 多语言 F 拆分（合成 / UI 是否拆两批）
-3. 设置中心配置文件格式与位置（TOML/JSON、放 `%LOCALAPPDATA%\ADR\shell.json`？）
+3. ~~设置中心配置文件格式与位置~~ **已定（批次 48）**：JSON、`%LOCALAPPDATA%\ADR\shell.json`
 4. 导入导出容器细节：版本兼容策略、是否需要（可选）导出加密
 5. 续训的追加录音 UX（复用现有录音/上传通道的方式）
 6. 性能测量是否提前：GPU 利用率曲线（训练全程）可作为 A 批次顺带产出，为 C 批次备料
