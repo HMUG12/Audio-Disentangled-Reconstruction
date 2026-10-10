@@ -50,9 +50,13 @@ def main():
 
     sents = None
     if args.texts:
-        sents = [ln.strip() for ln in Path(args.texts).read_text(
+        p_texts = Path(args.texts)
+        if not p_texts.exists():
+            sys.exit(f"--texts 文件不存在: {args.texts}")
+        sents = [ln.strip() for ln in p_texts.read_text(
             encoding="utf-8-sig").splitlines() if ln.strip()]
-        assert len(sents) >= 3, f"自定义句集至少 3 句, 当前 {len(sents)}"
+        if len(sents) < 3:  # 显式校验 (assert 在 python -O 下会被剥离)
+            sys.exit(f"自定义句集至少 3 句, 当前 {len(sents)} ({args.texts})")
         print(f"[secs] 自定义句集 {len(sents)} 句 (来自 {args.texts})")
 
     from adr.models.gsv_engine import GSVEngine, GSVEngineConfig
@@ -63,6 +67,8 @@ def main():
 
     wav_dir = REPO / "output" / "eval_secs_wavs" / args.voice
     wav_dir.mkdir(parents=True, exist_ok=True)
+    for old in wav_dir.glob("*_p*.wav"):  # 清上次产物, 句数变少时避免新旧混淆
+        old.unlink()
     ref = clip_ref(ref, args.voice)
 
     import numpy as np
@@ -107,7 +113,8 @@ def main():
         "weights": str(vits),
         "probe_source": args.texts or "adr.eval.probes.PROBES",
         "sents": sents_probe,
-        "anchor": {"path": args.anchor, "secs_vs_ref": round(anchor_sim, 4)} if anchor_sim is not None else None,
+        "anchor": ({"path": args.anchor, "secs_vs_ref": round(anchor_sim, 4)}
+                   if anchor_sim is not None else None),
         "conditions": {},
     }
     for kind, kw in conditions.items():
