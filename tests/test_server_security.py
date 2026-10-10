@@ -7,6 +7,7 @@
   ?api_key= 放行 / Sec-WebSocket-Protocol 子协议放行且回显 /
   未配置 key 默认放行 (NEKO 零改造兼容红线)
 """
+import sys
 from pathlib import Path
 
 import pytest
@@ -50,6 +51,8 @@ def test_resolve_within_rejects_escape(tmp_path):
     assert resolve_within(tmp_path, tmp_path.parent / "outside") is None
 
 
+@pytest.mark.skipif(sys.platform != "win32",
+                    reason="盘符 (C:/) 是 Windows 特有越界语义; POSIX 下为普通相对名")
 def test_resolve_within_rejects_other_drive(tmp_path):
     """越界候选 (含换盘符): relative_to 抛 ValueError → None。"""
     assert resolve_within(tmp_path, "C:/Windows") is None
