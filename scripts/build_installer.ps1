@@ -20,9 +20,11 @@ $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 if (-not (Test-Path $iscc)) { throw "Inno Setup 6 not found at: $iscc" }
 
 # 打包前 runtime 体检 (批次 49b 固化规则, 防垃圾权重/个人数据面/底模混入)
-$rtPy = Join-Path $root "build\runtime\python\python.exe"
+$rtDirName = if ($Gpu) { "runtime-gpu" } else { "runtime-cpu" }
+$rtPy = Join-Path $root "build\$rtDirName\python\python.exe"
 if (Test-Path $rtPy) { $py = $rtPy } else { $py = "python" }
-$checkArgs = @((Join-Path $PSScriptRoot "check_runtime.py"))
+$checkArgs = @((Join-Path $PSScriptRoot "check_runtime.py"),
+               "--runtime", (Join-Path $root "build\$rtDirName"))
 if ($Gpu) { $checkArgs += "--allow-cuda" }
 Write-Host "[build_installer] runtime check: $py $checkArgs" -ForegroundColor Cyan
 & $py @checkArgs
@@ -37,7 +39,9 @@ try {
 finally { Pop-Location }
 
 $isccArgs = @()
-if ($Gpu) { $isccArgs += "/DGPU_BUILD" }
+if ($Gpu) {
+  $isccArgs += "/DGPU_BUILD", "/DRUNTIME_DIR_NAME=runtime-gpu"
+}
 $isccArgs += (Join-Path $PSScriptRoot "installer\installer.iss")
 & $iscc @isccArgs
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
