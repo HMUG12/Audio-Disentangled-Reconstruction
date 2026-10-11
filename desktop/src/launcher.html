@@ -411,7 +411,7 @@ aboutOv.addEventListener("click", e => { if (e.target === aboutOv) aboutOv.class
   try {
     const v = await window.__TAURI__.app.getVersion();
     el.textContent = `version ${v}`;
-  } catch (_) { el.textContent = "version 1.0.0"; }
+  } catch (_) { el.textContent = "version 1.0.1"; }
 })();
 document.getElementById("about-qq").addEventListener("click", e => {
   const t = e.currentTarget.textContent.replace(/^QQ\s*/, "");

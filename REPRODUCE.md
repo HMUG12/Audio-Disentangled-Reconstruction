@@ -131,17 +131,17 @@ CER 与打分解耦：`--score-only` 复用已合成 wav，不重跑合成。
 ## 6. 打包复现（实测）
 
 ```powershell
-# 双包构建线 (批次 52): CPU 包为默认, GPU 包构建全程加 -AllowCuda / -Gpu
-powershell -File scripts\build_runtime.ps1             # CPU runtime (PyPI torch, Windows 轮子即 CPU 版)
-powershell -File scripts\build_runtime.ps1 -AllowCuda  # GPU runtime (torch 2.10.0+cu130 + nvidia_* 库, ~+2.5GB; 冒烟断言 CUDA 可用)
+# 双包构建线 (批次 52): CPU/GPU runtime 变体隔离目录, 重建互不覆盖
+powershell -File scripts\build_runtime.ps1             # → build\runtime-cpu (PyPI torch, Windows 轮子即 CPU 版)
+powershell -File scripts\build_runtime.ps1 -AllowCuda  # → build\runtime-gpu (torch 2.10.0+cu130 + CUDA DLL, ~+2.5GB; 冒烟断言 CUDA 可用)
 
-powershell -File scripts\build_installer.ps1           # CPU 包: 体检 + tauri + Inno Setup
-powershell -File scripts\build_installer.ps1 -Gpu      # GPU 包: 体检 --allow-cuda + ISCC /DGPU_BUILD → 文件名带 -gpu
+powershell -File scripts\build_installer.ps1           # CPU 包: 体检(runtime-cpu) + tauri + Inno Setup
+powershell -File scripts\build_installer.ps1 -Gpu      # GPU 包: 体检(runtime-gpu) --allow-cuda + ISCC /DGPU_BUILD → 文件名带 -gpu
 ```
 
-`check_runtime.py` 也可单独跑（build_installer.ps1 已内置为打包前置步骤）：根级裸 .pth / 个人数据面 / pretrained_models / nvidia_*（GPU 包放行）/ 体积告警 >2.2GB。
+`check_runtime.py` 也可单独跑（build_installer.ps1 已内置为打包前置步骤，按变体自动指目录）：根级裸 .pth / 个人数据面 / pretrained_models / CUDA payload（nvidia_* 目录 + torch/lib/cudart64_*.dll）/ 体积告警（CPU >2.2GB / GPU >4.6GB）。
 
-实测体积：runtime 3.89GB → **1.78GB**（CPU 基线，批次 49b 清理根级实验权重副本后）；GPU runtime ≈ 4.3GB（1.78 + cu130 torch/nvidia 库）。安装包发布件见 [README](README.md) 123 云盘链接。
+实测体积：CPU runtime **1.78GB**（批次 49b 清理根级实验权重副本后基线）；GPU runtime **3.98GB**（+cu130 torch/CUDA DLL）；安装包实测 v1.0.1：CPU（腰斩重建见发布记录）/ GPU 1.92GB。安装包发布件见 [README](README.md) 123 云盘链接。
 
 ## 7. 环境冻结
 

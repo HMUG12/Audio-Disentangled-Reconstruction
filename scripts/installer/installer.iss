@@ -15,11 +15,16 @@
 ; 双包共用同一 AppId: GPU 包装在 CPU 包上 = 原地升级 runtime, 不产生双份安装。
 
 #define MyAppName "ADR Studio"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.0.1"
 #define MyAppPublisher "未知之致"
 #define MyAppExe "adr-desktop.exe"
 #define ReleaseDir "..\..\desktop\src-tauri\target\release"
-#define RuntimeDir "..\..\build\runtime"
+; runtime 载荷目录按变体隔离 (build_runtime.ps1 产出 runtime-cpu / runtime-gpu),
+; GPU 包构建由 build_installer.ps1 传 /DRUNTIME_DIR_NAME="runtime-gpu"
+#ifndef RUNTIME_DIR_NAME
+#define RUNTIME_DIR_NAME "runtime-cpu"
+#endif
+#define RuntimeDir "..\..\build\" + RUNTIME_DIR_NAME
 
 ; GPU 变体: ISCC /DGPU_BUILD → 文件名带 -gpu 后缀 (runtime 内容由
 ; build_runtime.ps1 -AllowCuda 产出, 本脚本只负责命名区分)
