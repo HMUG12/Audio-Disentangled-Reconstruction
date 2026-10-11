@@ -52,8 +52,38 @@
 
 ### F. 多语言（已定：两者都要；批次位置待定）
 
-- [ ] **合成多语言**：GSV v2 底模支持中英日韩混说——语言参数暴露（合成 API + 控制台）+ 音色语言标记 + 多语言测试矩阵
-- [ ] **UI 界面多语言**：控制台页面 i18n（中/英），面向海外发布
+- [ ] **合成多语言**（批次 53）：GSV v2 底模支持中英日韩混说——语言参数暴露（合成 API + 控制台）+ 音色语言标记 + 多语言测试矩阵。**底子盘点（2026-10-11）**：gsv_engine synthesize 已有 text_lang/prompt_lang 面，native/openai_compat 已透传——本批主要是 v2 兼容层透传 + 控制台语言选择 + 档案语言标记 + 实测（微调权重纯中文数据，日韩口音/相似度需探底定宣传口径）
+- [ ] **UI 界面多语言**（批次 54）：控制台页面 i18n（中/英），面向海外发布。后做的理由：批次 53 会新增语言选择 UI，先 i18n 会返工
+
+## H. 下阶段路线图（2026-10-11 规划）
+
+**版本梯子**：v1.0.1（双包发布）→ v1.1（批次 53/54 多语言+i18n）→ v1.2（多形态分发）→ v1.3（推理加速）→ v1.4（训练加速）；B 分发生态/HF Space demo 零散穿插。
+
+### H1. v1.2 多形态分发（用户拍板优先）
+- **容器版（Docker，优先）**：标准服务器版——无 UI、CLI/HTTP API 操作；Linux CUDA/CPU torch + adr server + compose；GSV 上游有官方镜像先例（amd64/arm64）
+- **Windows 无 UI 服务版**：同一 runtime 跳过 Tauri 壳，`python -m adr.server` 服务化脚本（低工作量）
+- **Windows 桌面版**：现状即此形态
+- 与 v1.3 协同：服务器多用户场景正是连续批处理（continuous batching）的价值面
+
+### H2. v1.3 推理加速（参考项目落地，2026-10-11 调研实锤）
+- **GSV-TTS-Lite**（chinokikiss，MIT，PyPI gsv-tts-lite）：V2/V2Pro/V2ProPlus 专用——RTX 3050 TTFT 436→133ms、RTF 0.381→0.108、**显存 1.6→0.8GB**；核心技术 = CUDA Graph + **Nested/静态 KV Cache（原地写入）** + 连续批处理 + FA2
+- **Aqua-TTS**（Lucas1479，PyPI aqua-tts）：**上游内存内 overlay 补丁式**（只 patch infer_panel，生成器/流式契约保留）——静态 KV（scatter_ 原写）+ 分桶 CUDA Graph（6 桶 15 键）+ FA2→SDPA→动态三级降级 + **v2/v2Pro/v2ProPlus 可载**；RTX 4070TiS T2S 145→568-645 it/s，TTFP 417→233ms
+- **对项目意义**：批次 10 CUDAGraphRunner 音质崩的根因（动态 KV + SDPA 语义不等价）被这两个项目实锤解决——静态 KV 原地写 + 分桶 + 降级路径即正解；Aqua 的 overlay 模式与我们 third_party 钉版 + 补丁架构同构，优先借鉴
+- 落地门：音质门把关（同种子位等价或 SECS/MOS 无回退）；流式 cut3/节奏过滤/热切换语义需重验
+- 顺带：**v2ProPlus 推理档评估**（官方口径速度≈v2 而相似度超 v4——推理成本不变抬质量上限，训练侧 v2 仍是 4GB 冠军）
+- 长线参考：gpt-sovits-onnx-rs / Genie（全 ONNX Rust 跨平台端侧，含安卓）——容器瘦身/端侧另议
+
+### H3. v1.4 训练加速（参考项目评估，不承诺）
+- **AMP bf16**（梯度检查点已备，patch #16）：s2 训练 autocast 实验，预期显存 -30~40%，低成本先试
+- **Unsloth QLoRA**（2-5x/显存 -30~90%，宣称支持 TTS 微调）：GSV s2 是 VITS+peft LoRA，Unsloth 内核面向 LLM Transformer——兼容性评估批次，达标才转正
+- **bitsandbytes-CPU**（纯 CPU LoRA，AVX2/NEON，12-16GB RAM）：差异化卖点"无 GPU 也能训"，但墙钟时间分钟→小时级，预期管理后评估
+- D 训练诊断面板与本线合并考虑
+
+### 学习规划（随版本走）
+- 近期（批次 53/54）：GSV text_lang 分支与混说边界；vanilla 前端 i18n 方案
+- v1.2 前：Docker 多阶段构建 + Linux CUDA 运行时 + compose；Linux 侧 ctranslate2/faiss 差异
+- v1.3 前：精读 GSV-TTS-Lite / Aqua-TTS 源码（DeepWiki 已索引）；Windows FA2 可得性（triton-windows 路线）；静态 KV + 分桶设计
+- v1.4 前：AMP/bf16 训练机制、QLoRA(NF4) 原理、bitsandbytes CPU 后端
 
 ## 待定（继续商量）
 
