@@ -69,6 +69,7 @@
 - **实测（v1.0.0 安装包 runtime 3.89GB 构成）**：2.06GB = third_party/gpt_sovits 根级实验临时权重副本（时间戳 .pth ×6，3×585MB 同文件三份，无任何代码/meta 引用）被全量拷贝带入；1.75GB = python + site-packages（torch 2.10.0 **CPU 版** 443MB）；36MB = gpt_sovits 代码 + 文本资源；底模/预训练**本就不在包内**（首启 bootstrap 走 HF）
 - [x] **止血（已做）**：删除垃圾 .pth ×12（源 6 + build 6）→ **runtime 3.89→1.78GB**，安装包预计腰斩；`scripts/check_runtime.py` 固化排除规则（根级裸 .pth / 个人数据面 / pretrained_models / nvidia_* 库 / 总量告警），打包前必跑
 - [x] **双包拍板**：CPU 包（现状）+ GPU 包（--allow-cuda 构建，CUDA torch +2.5GB）两条安装包线，为未来多平台包铺路；安装态当前为纯 CPU 推理（GPU RTF 0.92 仅开发环境可达）是双包动机
+- [x] **双包构建线落地（批次 52）**：`build_runtime.ps1 -AllowCuda`（torch/torchaudio 2.10.0+cu130 自 download.pytorch.org 先行安装，其余钉版依赖后装防解析器拉回 CPU 轮子；冒烟断言 `torch.cuda.is_available()` 防静默回退）；`build_installer.ps1 -Gpu`（打包前自动跑 check_runtime.py 按 --allow-cuda 放行 + ISCC /DGPU_BUILD）；installer.iss 文件名 `ADR-Studio-<ver>-x64-gpu-setup.exe`，双包共用 AppId（GPU 装上 CPU 包 = 原地升级）；顺手修 build_installer.ps1 里 installer.iss 挪入子目录后的失效路径
 - [ ] **缓行**：在线依赖档（安装包瘦到 ~200MB + 首启 pip 走国内镜像）——待双包腰斩结果评估是否值得引入首启等待与网络失败面
 - 冷备份（防第三方镜像失活的全量冷备 ≈8GB）：**用户自理**（123 云盘现状 + 自选对象存储）
 - [x] **公信力批次（批次 51 落地，2026-10-10）**：REPRODUCE.md（7 节复现链全抽实测命令）/ VERIFY.md（14 条声明→验证→预期映射表）/ examples/samples README（方案 A：不入库音频，生成命令 + 云盘占位）/ .github/workflows/smoke.yml（ubuntu 全量 pytest，CPU torch 轮子先行，tests 零依赖 third_party 已甄别）/ scripts/eval_secs.py SECS 口径（实测锚点 0.9324 / 零样本 0.7729 / 微调 0.8052，Δ+0.0323）；**PESQ/ESTOI → SECS/MOS/CER 口径修正完成**（详见 REPRODUCE.md 第 5 节）

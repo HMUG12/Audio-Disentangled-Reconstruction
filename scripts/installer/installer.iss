@@ -1,12 +1,18 @@
-﻿; ADR Studio installer script (Inno Setup 6)
+; ADR Studio installer script (Inno Setup 6)
 ; Batch 44: NSIS has a hard ~2GB data limit (makensis #12345 error on our
 ; 3.89GB runtime), switched to Inno Setup which supports large single-file
 ; setups. Provides: license agreement page + Simplified Chinese UI + LZMA2.
 ;
 ; Build order (from repo root):
-;   1. npx -y @tauri-apps/cli@2 build --no-bundle   (in desktop/src-tauri)
-;   2. ISCC.exe scripts\installer\installer.iss
-; Output: desktop/src-tauri/target/release/bundle/inno/ADR-Studio-<ver>-x64-setup.exe
+;   1. powershell -File scripts\build_runtime.ps1 [-AllowCuda]   (runtime payload)
+;   2. npx -y @tauri-apps/cli@2 build --no-bundle   (in desktop/src-tauri)
+;   3. ISCC.exe scripts\installer\installer.iss          (CPU 包)
+;      ISCC.exe /DGPU_BUILD scripts\installer\installer.iss  (GPU 包, cu130 runtime)
+; Output: desktop/src-tauri/target/release/bundle/inno/
+;   ADR-Studio-<ver>-x64-setup.exe        (CPU 包)
+;   ADR-Studio-<ver>-x64-gpu-setup.exe    (GPU 包)
+;
+; 双包共用同一 AppId: GPU 包装在 CPU 包上 = 原地升级 runtime, 不产生双份安装。
 
 #define MyAppName "ADR Studio"
 #define MyAppVersion "1.0.0"
@@ -14,6 +20,14 @@
 #define MyAppExe "adr-desktop.exe"
 #define ReleaseDir "..\..\desktop\src-tauri\target\release"
 #define RuntimeDir "..\..\build\runtime"
+
+; GPU 变体: ISCC /DGPU_BUILD → 文件名带 -gpu 后缀 (runtime 内容由
+; build_runtime.ps1 -AllowCuda 产出, 本脚本只负责命名区分)
+#ifdef GPU_BUILD
+#define VariantSuffix "-gpu"
+#else
+#define VariantSuffix ""
+#endif
 
 [Setup]
 AppId={{6E1F3C7A-59B2-4A8D-9C43-D2F0A1B65E42}
@@ -25,7 +39,7 @@ DefaultDirName={localappdata}\Programs\ADR Studio
 DisableProgramGroupPage=yes
 LicenseFile=..\..\desktop\src-tauri\resources\license.rtf
 OutputDir={#ReleaseDir}\bundle\inno
-OutputBaseFilename=ADR-Studio-{#MyAppVersion}-x64-setup
+OutputBaseFilename=ADR-Studio-{#MyAppVersion}-x64{#VariantSuffix}-setup
 SetupIconFile=..\..\desktop\src-tauri\icons\icon.ico
 WizardStyle=modern
 PrivilegesRequired=lowest

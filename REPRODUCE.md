@@ -131,16 +131,19 @@ CER 与打分解耦：`--score-only` 复用已合成 wav，不重跑合成。
 ## 6. 打包复现（实测）
 
 ```powershell
-python scripts/check_runtime.py            # 打包前体检: 根级裸 .pth / 个人数据面 / 底模 / nvidia_* / 体积告警
-# GPU 包构建传 --allow-cuda
+# 双包构建线 (批次 52): CPU 包为默认, GPU 包构建全程加 -AllowCuda / -Gpu
+powershell -File scripts\build_runtime.ps1             # CPU runtime (PyPI torch, Windows 轮子即 CPU 版)
+powershell -File scripts\build_runtime.ps1 -AllowCuda  # GPU runtime (torch 2.10.0+cu130 + nvidia_* 库, ~+2.5GB; 冒烟断言 CUDA 可用)
 
-npx tauri-cli build --no-bundle            # Tauri 主程序 (cargo 不在 PATH 时先前置 C:\Users\Admin\.cargo\bin)
-powershell -File scripts/build_installer.ps1   # Inno Setup 安装器 (NSIS 2GB 硬上限实锤后换装, 支持 >2GB 单 setup.exe)
+powershell -File scripts\build_installer.ps1           # CPU 包: 体检 + tauri + Inno Setup
+powershell -File scripts\build_installer.ps1 -Gpu      # GPU 包: 体检 --allow-cuda + ISCC /DGPU_BUILD → 文件名带 -gpu
 ```
 
-实测体积：runtime 3.89GB → **1.78GB**（批次 49b 清理根级实验权重副本后基线）；安装包发布件见 [README](README.md) 123 云盘链接。
+`check_runtime.py` 也可单独跑（build_installer.ps1 已内置为打包前置步骤）：根级裸 .pth / 个人数据面 / pretrained_models / nvidia_*（GPU 包放行）/ 体积告警 >2.2GB。
+
+实测体积：runtime 3.89GB → **1.78GB**（CPU 基线，批次 49b 清理根级实验权重副本后）；GPU runtime ≈ 4.3GB（1.78 + cu130 torch/nvidia 库）。安装包发布件见 [README](README.md) 123 云盘链接。
 
 ## 7. 环境冻结
 
-- Python 3.13.7 + `build_freeze.txt`（含 torch 2.10.0 CPU 版、faster-whisper、librosa 等全量版本钉子）
+- Python 3.13.7 + `build_freeze.txt`（开发环境全量版本钉子：torch 2.10.0+cu130、faster-whisper、librosa 等；安装包 runtime 的 CPU/GPU torch 装法见第 6 节双包构建线）
 - 关键约定：`NUMBA_CACHE_DIR` 可写目录；pytest `--basetemp` 绕开沙箱 Temp 权限；HF 走 hf-mirror（`HF_ENDPOINT` 内建于 download 脚本）
