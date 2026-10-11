@@ -141,7 +141,7 @@ powershell -File scripts\build_installer.ps1 -Gpu      # GPU 包: 体检(runtime
 
 `check_runtime.py` 也可单独跑（build_installer.ps1 已内置为打包前置步骤，按变体自动指目录）：根级裸 .pth / 个人数据面 / pretrained_models / CUDA payload（nvidia_* 目录 + torch/lib/cudart64_*.dll）/ 体积告警（CPU >2.2GB / GPU >4.6GB）。
 
-实测体积：CPU runtime **1.78GB**（批次 49b 清理根级实验权重副本后基线）；GPU runtime **3.98GB**（+cu130 torch/CUDA DLL）；安装包实测 v1.0.1：CPU（腰斩重建见发布记录）/ GPU 1.92GB。安装包发布件见 [README](README.md) 123 云盘链接。
+实测体积：CPU runtime **1.78GB**（批次 49b 清理根级实验权重副本后基线）；GPU runtime **3.98GB**（+cu130 torch/CUDA DLL）；安装包实测 v1.0.1：CPU **455MB** / GPU **1.92GB**（LZMA 对 CPU 轮子压得更狠，CUDA DLL 已预压缩难压所致差距）。安装包发布件见 [README](README.md) 123 云盘链接。
 
 ## 7. 环境冻结
 
