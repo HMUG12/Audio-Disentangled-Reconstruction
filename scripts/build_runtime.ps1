@@ -167,6 +167,10 @@ if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
 Step "5/6 copy adr + GSV sources (excluding models / artifacts / caches)"
 robocopy (Join-Path $RepoRoot "adr") (Join-Path $OutDir "adr") /E /NFL /NDL /NJH /NJS /NP /XD __pycache__ /XF *.pyc | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy adr failed ($LASTEXITCODE)" }
+# 训练 preset yaml 必须随包: adr.core.config 按 REPO/configs/*.yaml 加载,
+# 缺失会静默回落内置默认值 (安装机上 doctor 报 preset yaml 缺失, v1.0.1 前实装)
+robocopy (Join-Path $RepoRoot "configs") (Join-Path $OutDir "configs") /E /NFL /NDL /NJH /NJS /NP /XF *.pyc | Out-Null
+if ($LASTEXITCODE -ge 8) { throw "robocopy configs failed ($LASTEXITCODE)" }
 $gsvSrc = Join-Path $RepoRoot "third_party\gpt_sovits"
 $gsvDst = Join-Path $OutDir "third_party\gpt_sovits"
 robocopy $gsvSrc $gsvDst /E /NFL /NDL /NJH /NJS /NP `
