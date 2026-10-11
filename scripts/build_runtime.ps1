@@ -1,13 +1,17 @@
 #Requires -Version 5.1
 # =====================================================================
-# ADR portable runtime builder (batch 44)
+# ADR portable runtime builder (batch 44; batch 52 dual-variant)
 #
 # Output: <repo>/build/runtime
 #   python\               CPython 3.13 (python-build-standalone, win64)
-#                         + CPU torch stack + pinned deps (from PyPI,
-#                         Windows PyPI torch wheels are CPU builds)
+#                         + torch stack + pinned deps
 #   adr\                  adr package source (PYTHONPATH-friendly flat copy)
 #   third_party\gpt_sovits\  GSV source tree
+#
+# Variants (双包拍板, docs/m10-plan.md G 节):
+#   CPU (default): torch 2.10.0 from PyPI (Windows PyPI wheels are CPU builds)
+#   GPU (-AllowCuda): torch 2.10.0+cu130 from download.pytorch.org/whl/cu130
+#                     (+ nvidia_* CUDA 库 ~2.5GB); smoke 断言 cuda 可用
 #
 # NOT included (by design):
 #   - pretrained_models / G2PWModel  -> downloaded on first start (rt4 bootstrap)
@@ -15,7 +19,10 @@
 #   - tools/asr/models (GSV funasr ASR models, unused by adr)
 # =====================================================================
 [CmdletBinding()]
-param()
+param(
+    # GPU 包构建: 安装 CUDA torch, 供 GPU 用户开箱即用 (CPU 包为默认线)
+    [switch]$AllowCuda
+)
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -59,6 +66,9 @@ if (-not (Test-Path (Join-Path $pyDir "python.exe"))) { throw "python.exe not fo
 
 $py = Join-Path $pyDir "python.exe"
 $env:PYTHONUTF8 = "1"
+# 冒烟/pip check 只看 runtime 自身: 隔离开发机用户级 site-packages
+# (Roaming\Python\Python313 曾让 pip check 误报 mouseinfo 缺 pyperclip)
+$env:PYTHONNOUSERSITE = "1"
 $env:PIP_DISABLE_PIP_VERSION_CHECK = "1"
 $env:PIP_NO_WARN_SCRIPT_LOCATION = "1"
 
@@ -92,8 +102,6 @@ huggingface_hub==0.36.2
 fastapi==0.129.0
 uvicorn[standard]==0.41.0
 python-multipart==0.0.24
-torch==2.10.0
-torchaudio==2.10.0
 gradio==6.4.0
 gradio_client==2.0.3
 faster-whisper==1.2.1
@@ -128,10 +136,26 @@ sentencepiece==0.2.2
 chardet
 "@
 # ASCII on purpose: PowerShell 5.1 reads BOM-less files as ANSI.
+# torch/torchaudio 不在此清单: 按变体单独安装 (见下一步), 避免解析器
+# 从 PyPI 拉回 CPU 轮子覆盖 cu130 本地版本。
 Set-Content -Path $ReqFile -Value $requirements -Encoding ASCII
 Log ("requirements written: {0}" -f $ReqFile)
 
 Step "4/6 pip install (this downloads ~1 GB, progress bars below)"
+# 4a. torch 栈先行: 后续 requirements 中的 pytorch-lightning 等看到已装即满足
+if ($AllowCuda) {
+    Log "GPU variant: torch/torchaudio 2.10.0+cu130 from download.pytorch.org (~2.5 GB)"
+    & $py -m pip install --prefer-binary --cache-dir $PipCache --no-warn-script-location `
+        --index-url https://download.pytorch.org/whl/cu130 `
+        torch==2.10.0+cu130 torchaudio==2.10.0+cu130
+    if ($LASTEXITCODE -ne 0) { throw "pip install torch cu130 failed" }
+} else {
+    Log "CPU variant: torch/torchaudio 2.10.0 from PyPI (Windows PyPI wheels are CPU builds)"
+    & $py -m pip install --prefer-binary --cache-dir $PipCache --no-warn-script-location `
+        torch==2.10.0 torchaudio==2.10.0
+    if ($LASTEXITCODE -ne 0) { throw "pip install torch failed" }
+}
+# 4b. 其余钉版依赖 (torch 已满足, 不会重复解析)
 & $py -m pip install --prefer-binary --cache-dir $PipCache --no-warn-script-location -r $ReqFile
 if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
 
@@ -154,6 +178,12 @@ try {
     $env:PYTHONPATH = $OutDir
     & $py -c "import sys; print('python', sys.version.split()[0]); import torch, torchaudio; print('torch', torch.__version__, 'cuda_available', torch.cuda.is_available())"
     if ($LASTEXITCODE -ne 0) { throw "torch smoke failed" }
+    if ($AllowCuda) {
+        # GPU 包的立身之本: cu130 轮子必须真的能见到 CUDA, 否则装出的
+        # "GPU 包" 与 CPU 包无异 (静默回退正是要防的坑)
+        & $py -c "import torch; assert torch.version.cuda is not None, 'not a CUDA torch build'; assert torch.cuda.is_available(), 'CUDA torch installed but cuda unavailable (driver/runtime mismatch?)'; print('GPU variant smoke: CUDA OK,', torch.cuda.get_device_name(0))"
+        if ($LASTEXITCODE -ne 0) { throw "GPU smoke failed: CUDA not usable in built runtime" }
+    }
     & $py -c "import adr, adr.server, adr.models.gsv_engine, adr.models.rvc_engine, adr.models.hub, adr.data.asr, adr.webui; print('adr imports OK')"
     if ($LASTEXITCODE -ne 0) { throw "adr import smoke failed" }
     # GSV import 需与 gsv_engine._gsv_context 同款上下文: cwd=GSV 根
@@ -168,5 +198,6 @@ try {
 }
 
 Step "done"
+$variant = if ($AllowCuda) { "GPU (cu130)" } else { "CPU" }
 $sz = (Get-ChildItem $OutDir -Recurse -File | Measure-Object Length -Sum).Sum
-Log ("runtime total: {0:N0} MB  ->  {1}" -f ($sz / 1MB), $OutDir)
+Log ("runtime total: {0:N0} MB  [{1}]  ->  {2}" -f ($sz / 1MB), $variant, $OutDir)

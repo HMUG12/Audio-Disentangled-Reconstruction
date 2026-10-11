@@ -33,7 +33,8 @@ DEFAULT_RUNTIME = REPO / "build" / "runtime"
 PRIVATE_DIRS = ("data", "output", "logs", "GPT_weights_v2", "SoVITS_weights_v2")
 # GSV 运行时必需的代码/文本资源之外, 根级不允许出现的权重形态
 GSV_ROOT = Path("third_party") / "gpt_sovits"
-WARN_TOTAL_GB = 2.2  # 清理后基线 1.78GB + 余量
+WARN_TOTAL_GB_CPU = 2.2   # 清理后基线 1.78GB + 余量
+WARN_TOTAL_GB_GPU = 4.6   # cu130 torch + nvidia_* 库实测 3.98GB + 余量
 
 
 def dir_size_gb(p: Path) -> float:
@@ -90,18 +91,28 @@ def main() -> int:
         if nvidia:
             fails.append(f"CPU 包含 nvidia_* CUDA 库 ({', '.join(nvidia[:4])}) — "
                          "GPU 包请传 --allow-cuda")
+        # Windows cu13x 轮子把 CUDA DLL 打进 torch/lib (无独立 nvidia_* 包,
+        # 仅查 nvidia* 目录会漏检 — 批次 52 实测补丁)
+        torch_lib = sp / "torch" / "lib"
+        if torch_lib.is_dir():
+            cuda_dlls = sorted(f.name for f in torch_lib.glob("cudart64_*.dll"))
+            if cuda_dlls:
+                fails.append(f"CPU 包含 CUDA torch (torch/lib/{cuda_dlls[0]} 等) — "
+                             "GPU 包请传 --allow-cuda")
 
     # 5) 体积分布 + 总量
     total = dir_size_gb(rt)
+    warn_gb = WARN_TOTAL_GB_GPU if args.allow_cuda else WARN_TOTAL_GB_CPU
     rows = sorted(
         ((d.name, dir_size_gb(d)) for d in rt.iterdir() if d.is_dir()),
         key=lambda x: -x[1])
-    print(f"[体检] {rt}  总体积 {total:.2f}GB")
+    print(f"[体检] {rt}  总体积 {total:.2f}GB  "
+          f"[{'GPU' if args.allow_cuda else 'CPU'} 包]")
     for name, gb in rows:
         print(f"  {name:14s} {gb:6.2f}GB")
-    if total > WARN_TOTAL_GB:
-        warns.append(f"总体积 {total:.2f}GB 超告警线 {WARN_TOTAL_GB}GB "
-                     f"(清理后基线 1.78GB)")
+    if total > warn_gb:
+        warns.append(f"总体积 {total:.2f}GB 超告警线 {warn_gb}GB "
+                     f"(基线: CPU 1.78GB / GPU 3.98GB)")
 
     for w in warns:
         print(f"[WARN] {w}")
