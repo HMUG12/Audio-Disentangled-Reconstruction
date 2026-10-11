@@ -134,12 +134,8 @@ window.__adrPrewarm = function (stage, text) {
     steps.forEach((s, i) => { if (i < cur) s.className = "step done"; });
     if (cur >= 0) steps[cur].className = "step failed";
     steps[cur >= 0 ? cur : 3].querySelector("p").textContent = text || "预热失败";
-    setTip("预热失败, 可重试或先进入启动器 (引擎会在后台重载)", "warn");
+    setTip("预热失败, 可重试; 引擎就绪前启动器不开放 (也可点「仍要进入」强制进入)", "warn");
     acts.style.display = "flex";
-    return;
-  }
-  if (stage === "timeout") {
-    setTip(text || "预热超时, 即将进入启动器 (引擎后台继续加载)", "warn");
     return;
   }
   const idx = MAP[stage] ?? 0;
