@@ -10,20 +10,24 @@
 - **流式 TTS 服务** — 实现 GPT-SoVITS api_v3 双工流式协议（`/api/v3/voices` + `/api/v3/tts/stream-input`），流式返回 WAV 音频块
 - **OpenAI 兼容接口** — `POST /v1/audio/speech`、`GET /v1/models`，任何 OpenAI TTS 兼容客户端可直接接入
 - **N.E.K.O 零配置对接** — provider 选 GPT-SoVITS、地址保持默认 `http://127.0.0.1:9881` 即可，音色下拉自动列出 ADR 声音档案
-- **全离线桌面应用** — Tauri 桌面端内置便携 Python 运行时与全部依赖，安装即用；首次启动自动下载预训练底模（带进度提示），之后完全离线
+- **全离线桌面应用** — Tauri 桌面端内置便携 Python 运行时与全部依赖，安装即用；首次启动自动下载预训练底模（预热页实时显示进度，就绪后才进入），之后完全离线
 - **数据处理管线** — 音频切片 / ASR 转写 / F0 提取 / 音素化一条龙（`adr process`）
 
 ## 安装
 
 ### 方式一：Windows 安装包（推荐）
 
-1. 从 [123 云盘分享](https://1860775428.share.123pan.com/123pan/5KDqvd-oPPsv)（提取码 `ADRS`）下载 `ADR-Studio-1.0.0-x64-setup.exe`（约 2.2GB；安装包未经充分测试，如遇问题请提 [Issues](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/issues)）
-2. 双击安装，按向导阅读并接受许可协议（per-user 安装，无需管理员权限）
-3. 首次启动会自动进行环境预热：下载预训练底模 pretrained_models.zip（约 4.35GB，界面实时显示进度）；完成后进入就绪状态，此后**完全离线**运行
+1. 下载安装包（二选一；也可从 [123 云盘分享](https://1860775428.share.123pan.com/123pan/5KDqvd-oPPsv)（提取码 `ADRS`）下载）：
+   - **CPU 版**：[ADR-Studio-1.0.1-x64-setup.exe](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/download/v1.0.1/ADR-Studio-1.0.1-x64-setup.exe)（约 455MB，无独立显卡设备）
+   - **GPU 版**：[ADR-Studio-1.0.1-x64-gpu-setup.exe](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/download/v1.0.1/ADR-Studio-1.0.1-x64-gpu-setup.exe)（约 1.9GB，NVIDIA CUDA 加速）
 
-安装内容：Python 便携运行时 + 全部依赖 + GPT-SoVITS 代码 + ADR 引擎，磁盘占用约 3.8GB（不含底模与声音档案数据）。
+   SHA256 校验值见 [Release 页面](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/tag/v1.0.1)；安装包未经充分测试，如遇问题请提 [Issues](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/issues)
+2. 双击安装，按向导阅读并接受许可协议（per-user 安装，无需管理员权限）；两版共用同一 AppId，可原地升级覆盖旧版，已下载的底模与声音档案均保留
+3. 首次启动会自动进行环境预热：下载预训练底模（约 2GB，预热页实时显示进度，**下载 + 引擎加载完成后才进入启动器**）；完成后此后**完全离线**运行
 
-> 批量部署可使用静默安装：`ADR-Studio-1.0.0-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="安装目录"`
+安装内容：Python 便携运行时 + 全部依赖 + GPT-SoVITS 代码 + ADR 引擎，磁盘占用约 2GB（CPU 版）/ 4GB（GPU 版），不含底模与声音档案数据。
+
+> 批量部署可使用静默安装：`ADR-Studio-1.0.1-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="安装目录"`
 
 ### 方式二：源码安装
 
@@ -108,7 +112,7 @@ flowchart LR
 ## FAQ
 
 **Q：首次启动 / 预热很慢？**
-A：首次启动需下载约 4.35GB 的预训练底模，取决于网速可能需要较长时间；界面会实时显示下载进度，完成后不再需要网络。
+A：首次启动需下载约 2GB 的预训练底模，取决于网速可能需要较长时间；预热页会实时显示下载进度，**底模下载 + 引擎加载完成后才进入启动器**，此后不再需要网络。
 
 **Q：纯 CPU 机器能用吗？**
 A：可以。推理支持纯 CPU 运行（速度较慢）；训练建议 NVIDIA GPU（4-8GB VRAM 即可）。
