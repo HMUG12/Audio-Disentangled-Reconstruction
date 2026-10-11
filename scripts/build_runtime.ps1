@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 # =====================================================================
 # ADR portable runtime builder (batch 44; batch 52 dual-variant)
 #
