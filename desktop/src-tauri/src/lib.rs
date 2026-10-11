@@ -49,8 +49,6 @@ const MAX_FAILURES: u32 = 4;
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(180);
 /// 稳定运行超过该时长后重置失败计数
 const STABLE_UPTIME: Duration = Duration::from_secs(60);
-/// 启动预热总超时: 超时放行进启动器 (引擎继续后台加载, 控制台页有三态显示)
-const PREWARM_TIMEOUT: Duration = Duration::from_secs(240);
 
 /// WebView2 前端资源 origin (Windows)。
 /// 导航一律用绝对地址: 当前页面可能停在远端控制台 (http://127.0.0.1:P),
@@ -65,7 +63,7 @@ const TAURI_ORIGIN: &str = "tauri://localhost";
 /// - Stopped:    无服务进程 (初始 / kill_current / 探活失败)
 /// - Starting:   进程已 spawn, health 探活未过 (engine_status → "loading")
 /// - Prewarming: 服务已 healthy, prewarm_flow 轮询引擎预热中 ("loading")
-/// - Ready:      引擎就绪, 或用户强制放行 / 预热超时放行 (秒进通道开放, "ready")
+/// - Ready:      引擎就绪, 或预热页用户点「仍要进入」强制放行 (秒进通道开放, "ready")
 /// 两条不变式保证枚举与进程一致: pid 写入处必置 Starting, pid 清零处必置 Stopped。
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -882,7 +880,8 @@ fn fetch_engine_stage_info(base: &str) -> Option<(String, String)> {
 }
 
 /// 启动预热主流程: 拉服务 → 轮询引擎阶段 → ready 后自动放行进启动器。
-/// 失败停在预热页 (「重试/仍要进入」按钮); 超时自动放行 (引擎继续后台加载)。
+/// 失败停在预热页 (「重试/仍要进入」按钮)。无总超时: v1.0.1 拍板取消超时
+/// 自动放行 — 首启要下载 ~2GB 底模, 超时放行会让用户进面板才发现引擎没好。
 fn prewarm_flow(app: AppHandle) {
     let window = app.get_webview_window("main");
     let state: State<ServerState> = app.state();
@@ -907,7 +906,7 @@ fn prewarm_flow(app: AppHandle) {
     state.set_phase(Phase::Prewarming);
 
     // 轮询引擎预热阶段 (queued → importing → downloading → loading → kernel → ready)
-    let deadline = Instant::now() + PREWARM_TIMEOUT;
+    // 无总超时 (v1.0.1): downloading 阶段可能持续十几分钟 (底模 ~2GB), 必须等就绪才放行
     let mut last = String::new();
     loop {
         if SHUTTING_DOWN.load(Ordering::Relaxed) {
@@ -946,15 +945,10 @@ fn prewarm_flow(app: AppHandle) {
             }
             _ => {}
         }
-        if Instant::now() >= deadline {
-            // 超时放行: 引擎继续后台加载, 控制台页有三态显示兜底
-            eval_prewarm(&window, "timeout", "预热超时, 先进启动器 (引擎后台继续加载)");
-            break;
-        }
         std::thread::sleep(Duration::from_millis(500));
     }
 
-    // 就绪 (ready 或超时放行): 秒进通道开放 (批次37 状态机)
+    // 就绪 (ready): 秒进通道开放 (批次37 状态机)
     state.set_phase(Phase::Ready);
     if let Some(t) = app.tray_by_id("adr-tray") {
         let _ = t.set_tooltip(Some("ADR Studio — 引擎已预热 (启动器)"));
