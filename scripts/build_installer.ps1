@@ -1,4 +1,4 @@
-# Batch 44: build the ADR Studio installer (Inno Setup).
+﻿# Batch 44: build the ADR Studio installer (Inno Setup).
 # NSIS (tauri bundle) hit the hard ~2GB data limit on our 3.89GB runtime,
 # so the installer is produced by Inno Setup from the no-bundle output.
 #
