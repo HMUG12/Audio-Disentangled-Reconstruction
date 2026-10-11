@@ -14,6 +14,8 @@ runtime 1.78GB。本脚本固化排除规则, 防止垃圾再混入。
 4. CPU 包不得含 nvidia_* CUDA 库 (torch CUDA 版 ~2.5GB 经 pip 包拆分进入;
    GPU 包构建时传 --allow-cuda 放行) — 双包拍板见 docs/m10-plan.md G 节
 5. 体积分布 + 总量告警 (>2.2GB WARN: 高于清理后基线 1.78GB+余量)
+6. configs/*.yaml 必须随包 (v1.0.0 缺口: build_runtime.ps1 未拷 configs/,
+   安装机 preset 全部静默回落内置默认值, 日志报 default.yaml 缺失)
 
 用法:
   python scripts/check_runtime.py                 # 默认 build/runtime, CPU 包
@@ -113,6 +115,14 @@ def main() -> int:
     if total > warn_gb:
         warns.append(f"总体积 {total:.2f}GB 超告警线 {warn_gb}GB "
                      f"(基线: CPU 1.78GB / GPU 3.98GB)")
+
+    # 6) configs preset 必须随包 (adr.core.config 按 REPO/configs/*.yaml 加载,
+    #    缺失静默回落内置默认值 — v1.0.0 安装机日志实锤的打包缺口)
+    conf = rt / "configs"
+    if not conf.is_dir() or not any(conf.glob("*.yaml")):
+        fails.append("configs/*.yaml 缺失 (训练 preset 全部回落内置默认值)")
+    elif not (conf / "default.yaml").is_file():
+        fails.append("configs/default.yaml 缺失 (基础 preset)")
 
     for w in warns:
         print(f"[WARN] {w}")

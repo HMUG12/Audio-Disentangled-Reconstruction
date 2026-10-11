@@ -93,11 +93,17 @@ def _ordered_sources(urls: dict[str, str]) -> list[tuple[str, str]]:
     return [(s, urls[s]) for s in order if s in urls]
 
 
-def _download(url: str, dest: Path) -> None:
+# 无代理 opener: 代理环境变量指向未运行的本地代理 (死代理) 时, urllib 默认
+# 走代理 → 连接被拒 → 三源全挂。每源下载失败后用无代理 opener 回退重试一次。
+_NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def _download(url: str, dest: Path, no_proxy: bool = False) -> None:
     """单源下载 (带进度回调), 失败抛异常由调用方换源重试。"""
     part = dest.with_suffix(dest.suffix + ".part")
     req = urllib.request.Request(url, headers={"User-Agent": "adr-bootstrap/1.0"})
-    with urllib.request.urlopen(req, timeout=60) as resp:
+    opener = _NO_PROXY_OPENER if no_proxy else urllib.request.build_opener()
+    with opener.open(req, timeout=60) as resp:
         total = int(resp.headers.get("Content-Length", 0))
         done = 0
         _set_state(stage="downloading", file=dest.name, total=total, downloaded=0)
@@ -145,12 +151,21 @@ def _acquire(entry: dict) -> None:
     last_err: Exception | None = None
     for source, url in _ordered_sources(entry["urls"]):
         _set_state(key=entry["key"])
-        try:
-            _download(url, zip_path)
-        except Exception as e:  # 换源重试
-            last_err = e
-            zip_path.with_suffix(zip_path.suffix + ".part").unlink(missing_ok=True)
-            zip_path.unlink(missing_ok=True)
+        # 每源两段式: 默认 (继承系统/环境代理) → 失败且本机配了代理时绕代理重试
+        attempts = [(False, url)]
+        if urllib.request.getproxies():
+            attempts.append((True, url))
+        for no_proxy, u in attempts:
+            try:
+                _download(u, zip_path, no_proxy=no_proxy)
+                break
+            except Exception as e:  # 换源/绕代理重试
+                last_err = e
+                zip_path.with_suffix(zip_path.suffix + ".part").unlink(missing_ok=True)
+                zip_path.unlink(missing_ok=True)
+                if no_proxy:
+                    continue
+        else:
             continue
         try:
             _extract(entry)
