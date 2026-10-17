@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'">
 <title>ADR Studio · 调用控制台</title>
+<script src="/i18n.js"></script>
+<script src="/i18n-call.js"></script>
 <style>
   :root { color-scheme: dark; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -98,69 +100,69 @@
 </head>
 <body>
 <header>
-  <div class="brand">ADR <em>调用控制台</em></div>
-  <div class="engstat" id="engStat">引擎状态检查中…</div>
-  <a href="/" id="back">← 返回索引</a>
+  <div class="brand">ADR <em data-i18n="call.brand_em">调用控制台</em></div>
+  <div class="engstat" id="engStat" data-i18n="call.eng_checking">引擎状态检查中…</div>
+  <a href="/" id="back" data-i18n="call.back_index">← 返回索引</a>
 </header>
 
 <main class="cols">
   <!-- ══════════════ 左列: 请求参数 ══════════════ -->
   <section>
     <div class="panel">
-      <h2>请求参数</h2>
+      <h2 data-i18n="call.h_params">请求参数</h2>
       <div class="seg" id="epSeg">
-        <button data-ep="native" class="on">原生 /api/adr/v1/tts</button>
-        <button data-ep="v2">GSV 兼容 /api/v2/tts</button>
+        <button data-ep="native" class="on" data-i18n="call.ep_native">原生 /api/adr/v1/tts</button>
+        <button data-ep="v2" data-i18n="call.ep_v2">GSV 兼容 /api/v2/tts</button>
         <button data-ep="openai">OpenAI /v1/audio/speech</button>
       </div>
 
-      <label>音色档案 profile <span id="profReq" style="color:#f87171">*</span></label>
-      <select id="prof"><option value="">加载中…</option></select>
+      <label><span data-i18n="call.l_profile">音色档案 profile</span> <span id="profReq" style="color:#f87171">*</span></label>
+      <select id="prof"><option value="" data-i18n="call.loading">加载中…</option></select>
 
       <div id="refRow" style="display:none">
-        <label>参考音频绝对路径 ref_audio_path <b>*</b></label>
-        <input id="ref" placeholder="D:\audio\my_voice.wav (3-10 秒干净人声)">
+        <label data-i18n-html="call.l_ref">参考音频绝对路径 ref_audio_path <b>*</b></label>
+        <input id="ref" placeholder="D:\audio\my_voice.wav (3-10 秒干净人声)" data-i18n-ph="call.ph_ref">
       </div>
 
-      <label>合成文本 text <b>*</b></label>
-      <textarea id="text">你好，这是一次 ADR 声音克隆合成测试，引擎就绪后响应非常快。</textarea>
+      <label data-i18n-html="call.l_text">合成文本 text <b>*</b></label>
+      <textarea id="text" data-i18n-value="call.text_demo">你好，这是一次 ADR 声音克隆合成测试，引擎就绪后响应非常快。</textarea>
 
       <div class="two">
         <div>
-          <label>文本语言 text_lang</label>
+          <label data-i18n="call.l_tlang">文本语言 text_lang</label>
           <select id="tlang"></select>
         </div>
         <div>
-          <label>参考语言 prompt_lang</label>
+          <label data-i18n="call.l_plang">参考语言 prompt_lang</label>
           <select id="plang"></select>
         </div>
       </div>
 
-      <label>参考音频文本 prompt_text (参考音频里说的那句话, 可空)</label>
-      <input id="ptext" placeholder="与参考音频逐字一致可提升相似度">
+      <label data-i18n="call.l_ptext">参考音频文本 prompt_text (参考音频里说的那句话, 可空)</label>
+      <input id="ptext" placeholder="与参考音频逐字一致可提升相似度" data-i18n-ph="call.ph_ptext">
 
       <details>
-        <summary>高级参数 (采样 / 切句 / 流式 / 权重)</summary>
+        <summary data-i18n="call.sum_advanced">高级参数 (采样 / 切句 / 流式 / 权重)</summary>
         <div class="inner">
           <div class="two">
             <div>
-              <label>切句方式 text_split_method</label>
+              <label data-i18n="call.l_cut">切句方式 text_split_method</label>
               <select id="cut">
-                <option value="cut0">cut0 · 不切</option>
-                <option value="cut1">cut1 · 凑四句一切</option>
-                <option value="cut2">cut2 · 凑50字一切</option>
-                <option value="cut3">cut3 · 按句号切 (流式首包最优)</option>
-                <option value="cut4">cut4 · 按英文句号切</option>
-                <option value="cut5" selected>cut5 · 按标点切</option>
+                <option value="cut0" data-i18n="call.cut0">cut0 · 不切</option>
+                <option value="cut1" data-i18n="call.cut1">cut1 · 凑四句一切</option>
+                <option value="cut2" data-i18n="call.cut2">cut2 · 凑50字一切</option>
+                <option value="cut3" data-i18n="call.cut3">cut3 · 按句号切 (流式首包最优)</option>
+                <option value="cut4" data-i18n="call.cut4">cut4 · 按英文句号切</option>
+                <option value="cut5" selected data-i18n="call.cut5">cut5 · 按标点切</option>
               </select>
             </div>
             <div>
-              <label>流式模式 streaming_mode</label>
+              <label data-i18n="call.l_sm">流式模式 streaming_mode</label>
               <select id="sm">
-                <option value="0" selected>0 · 非流式 (整段返回)</option>
-                <option value="1">1 · 分段流</option>
-                <option value="2">2 · 真流式</option>
-                <option value="3">3 · 真流式 · 定长块</option>
+                <option value="0" selected data-i18n="call.sm0">0 · 非流式 (整段返回)</option>
+                <option value="1" data-i18n="call.sm1">1 · 分段流</option>
+                <option value="2" data-i18n="call.sm2">2 · 真流式</option>
+                <option value="3" data-i18n="call.sm3">3 · 真流式 · 定长块</option>
               </select>
             </div>
           </div>
@@ -168,31 +170,31 @@
             <div><label>top_k</label><input id="topk" type="number" value="15" min="1" max="100" step="1"></div>
             <div><label>top_p</label><input id="topp" type="number" value="1.0" min="0" max="1" step="0.05"></div>
             <div><label>temperature</label><input id="temp" type="number" value="1.0" min="0.01" max="2" step="0.05"></div>
-            <div><label>语速 speed_factor</label><input id="spd" type="number" value="1.0" min="0.5" max="2" step="0.05"></div>
+            <div><label data-i18n="call.l_spd">语速 speed_factor</label><input id="spd" type="number" value="1.0" min="0.5" max="2" step="0.05"></div>
           </div>
           <div class="two">
-            <div><label>随机种子 seed (-1 随机)</label><input id="seed" type="number" value="-1" step="1"></div>
+            <div><label data-i18n="call.l_seed">随机种子 seed (-1 随机)</label><input id="seed" type="number" value="-1" step="1"></div>
             <div>
-              <label>封装格式 media_type</label>
+              <label data-i18n="call.l_mt">封装格式 media_type</label>
               <select id="mt">
                 <option value="wav" selected>wav</option>
-                <option value="mp3">mp3 (OpenAI 默认)</option>
-                <option value="raw">raw / pcm (裸 PCM)</option>
+                <option value="mp3" data-i18n="call.mt_mp3">mp3 (OpenAI 默认)</option>
+                <option value="raw" data-i18n="call.mt_raw">raw / pcm (裸 PCM)</option>
                 <option value="ogg">ogg</option>
                 <option value="aac">aac</option>
               </select>
             </div>
           </div>
           <div class="two">
-            <div><label>GPT 权重 t2s_weights (空 = 档案/默认)</label><input id="t2s" placeholder="output\logs\…\你的s1.ckpt"></div>
-            <div><label>SoVITS 权重 vits_weights</label><input id="vits" placeholder="output\logs\…\你的s2.pth"></div>
+            <div><label data-i18n="call.l_t2s">GPT 权重 t2s_weights (空 = 档案/默认)</label><input id="t2s" placeholder="output\logs\…\你的s1.ckpt" data-i18n-ph="call.ph_t2s"></div>
+            <div><label data-i18n="call.l_vits">SoVITS 权重 vits_weights</label><input id="vits" placeholder="output\logs\…\你的s2.pth" data-i18n-ph="call.ph_vits"></div>
           </div>
         </div>
       </details>
 
-      <button class="go" id="go">✦ 合成试听</button>
-      <div class="hint" id="goHint">引擎未就绪时点合成会自动等待加载完成，耗时属正常。</div>
-      <div class="hint">兼容性说明：aux_ref_audio_paths / batch_size / batch_threshold / split_bucket /
+      <button class="go" id="go" data-i18n="call.go">✦ 合成试听</button>
+      <div class="hint" id="goHint" data-i18n="call.hint_wait">引擎未就绪时点合成会自动等待加载完成，耗时属正常。</div>
+      <div class="hint" data-i18n="call.hint_compat">兼容性说明：aux_ref_audio_paths / batch_size / batch_threshold / split_bucket /
         fragment_interval / parallel_infer / repetition_penalty / sample_steps 等参数按 GSV 协议接受但被 ADR 引擎忽略（差异清单见 docs/tts-api-spec.md）。</div>
     </div>
   </section>
@@ -200,7 +202,7 @@
   <!-- ══════════════ 右列: 代码片段 + 试听 ══════════════ -->
   <section>
     <div class="panel">
-      <h2>外部调用代码
+      <h2><span data-i18n="call.h_code">外部调用代码</span>
         <span class="tabs" id="langTabs">
           <button data-lang="curl" class="on">cURL</button>
           <button data-lang="python">Python</button>
@@ -208,34 +210,34 @@
         </span>
       </h2>
       <pre id="code"></pre>
-      <button class="copy" id="copy">复制代码</button>
+      <button class="copy" id="copy" data-i18n="call.copy">复制代码</button>
     </div>
 
     <div class="panel">
-      <h2>N.E.KO 外部调用 · 配置对照</h2>
+      <h2 data-i18n="call.h_neko">N.E.KO 外部调用 · 配置对照</h2>
       <table>
-        <thead><tr><th style="width:32%">N.E.KO 设置项</th><th>填写内容</th><th style="width:56px"></th></tr></thead>
+        <thead><tr><th style="width:32%" data-i18n="call.th_neko_item">N.E.KO 设置项</th><th data-i18n="call.th_fill">填写内容</th><th style="width:56px"></th></tr></thead>
         <tbody>
-          <tr><td>服务商类型</td><td colspan="2">OpenAI 兼容</td></tr>
+          <tr><td data-i18n="call.td_provider">服务商类型</td><td colspan="2" data-i18n="call.td_openai_compat">OpenAI 兼容</td></tr>
           <tr><td>API URL</td><td id="nekoUrl" style="word-break:break-all;color:#2dd4bf">—</td>
-              <td><button class="copy" data-copy="nekoUrl" style="margin:0">复制</button></td></tr>
-          <tr><td>模型 ID</td><td id="nekoModel" style="word-break:break-all;color:#2dd4bf">—</td>
-              <td><button class="copy" data-copy="nekoModel" style="margin:0">复制</button></td></tr>
-          <tr><td>API Key</td><td colspan="2">留空 (未设置 ADR_TTS_API_KEY 时本地免鉴权)</td></tr>
-          <tr><td>Voice ID</td><td colspan="2">留空 (模型 ID 已指定音色档案)</td></tr>
+              <td><button class="copy" data-copy="nekoUrl" style="margin:0" data-i18n="call.copy_short">复制</button></td></tr>
+          <tr><td data-i18n="call.td_modelid">模型 ID</td><td id="nekoModel" style="word-break:break-all;color:#2dd4bf">—</td>
+              <td><button class="copy" data-copy="nekoModel" style="margin:0" data-i18n="call.copy_short">复制</button></td></tr>
+          <tr><td>API Key</td><td colspan="2" data-i18n="call.td_apikey_val">留空 (未设置 ADR_TTS_API_KEY 时本地免鉴权)</td></tr>
+          <tr><td>Voice ID</td><td colspan="2" data-i18n="call.td_voiceid_val">留空 (模型 ID 已指定音色档案)</td></tr>
         </tbody>
       </table>
-      <div class="hint">模型 ID = ADR 音色档案名 (data/voices\ 下的目录名，左侧下拉选中的即会同步到这里)。
-        API URL 推荐填完整端点地址 (左表所示)；若 N.E.KO 保存/连通时报 404，改填服务器根地址
-        <b id="nekoBase" style="color:#2dd4bf">—</b> 再试——两种填法以能连通为准。</div>
+      <div class="hint"><span data-i18n="call.neko_hint_a">模型 ID = ADR 音色档案名 (data/voices\ 下的目录名，左侧下拉选中的即会同步到这里)。
+        API URL 推荐填完整端点地址 (左表所示)；若 N.E.KO 保存/连通时报 404，改填服务器根地址</span>
+        <b id="nekoBase" style="color:#2dd4bf">—</b><span data-i18n="call.neko_hint_b"> 再试——两种填法以能连通为准。</span></div>
     </div>
 
     <div class="panel">
-      <h2>试听结果</h2>
+      <h2 data-i18n="call.h_result">试听结果</h2>
       <audio id="au" controls></audio>
-      <div id="meta">尚未合成。点左侧「合成试听」，右键音频可另存为文件。</div>
+      <div id="meta" data-i18n="call.meta_init">尚未合成。点左侧「合成试听」，右键音频可另存为文件。</div>
       <table>
-        <thead><tr><th>时间</th><th>端点</th><th>流式</th><th>首包</th><th>总耗时</th><th>大小</th><th>状态</th></tr></thead>
+        <thead><tr><th data-i18n="call.th_time">时间</th><th data-i18n="call.th_ep">端点</th><th data-i18n="call.th_stream">流式</th><th data-i18n="call.th_ttfb">首包</th><th data-i18n="call.th_total">总耗时</th><th data-i18n="call.th_size">大小</th><th data-i18n="call.th_status">状态</th></tr></thead>
         <tbody id="logBody"></tbody>
       </table>
     </div>
@@ -246,20 +248,22 @@
 "use strict";
 const $ = id => document.getElementById(id);
 const LANGS = ["all_zh", "auto", "all_ja", "all_ko", "zh", "en", "ja", "ko", "yue"];
-const STAGE_TXT = {
-  ready: "引擎已就绪", queued: "引擎排队启动…", importing: "引擎加载框架 (torch)…",
-  loading: "引擎加载权重…", kernel: "引擎预热内核…", failed: "引擎预热失败 (合成时重试)",
-};
+const STAGE_TXT = () => ({
+  ready: I.t("call.stg_ready"), queued: I.t("call.stg_queued"), importing: I.t("call.stg_importing"),
+  loading: I.t("call.stg_loading"), kernel: I.t("call.stg_kernel"), failed: I.t("call.stg_failed"),
+});
 
 let endpoint = "native";   // native | v2 | openai
 let codeLang = "curl";     // curl | python | js
 let profiles = [];
 
-/* ---- 桌面壳内 (?desktop=1): 返回链接指向壳内启动器 ---- */
-if (new URLSearchParams(location.search).get("desktop") === "1") {
-  const back = $("back");
-  back.textContent = "← 返回启动器";
-  back.href = "http://tauri.localhost/launcher.html";
+/* ---- 桌面壳内 (?desktop=1): 返回链接指向壳内启动器 (init 后调用) ---- */
+function applyBackLink() {
+  if (new URLSearchParams(location.search).get("desktop") === "1") {
+    const back = $("back");
+    back.textContent = I.t("call.back_launcher");
+    back.href = "http://tauri.localhost/launcher.html";
+  }
 }
 
 /* ---- 端点切换: native 档案必选 / v2 可手动 ref_audio_path ---- */
@@ -268,7 +272,7 @@ $("epSeg").onclick = e => {
   endpoint = b.dataset.ep;
   [...$("epSeg").children].forEach(x => x.classList.toggle("on", x === b));
   $("refRow").style.display = endpoint === "v2" ? "" : "none";
-  $("profReq").textContent = endpoint === "native" ? "*" : "(推荐)";
+  $("profReq").textContent = endpoint === "native" ? "*" : I.t("call.req_recommended");
   renderNekoCard();
   renderCode();
 };
@@ -293,7 +297,7 @@ async function loadProfiles() {
   const sel = $("prof");
   sel.innerHTML = "";
   const none = document.createElement("option");
-  none.value = ""; none.textContent = "— 不使用档案 (手动指定参考音频) —";
+  none.value = ""; none.textContent = I.t("call.prof_none");
   sel.appendChild(none);
   for (const p of profiles) {
     const o = document.createElement("option");
@@ -375,7 +379,7 @@ function renderCode() {
   if (codeLang === "curl") {
     code = `curl -X POST "${url}" \\\n  -H "Content-Type: application/json" \\\n  -d '${j(body)}' \\\n  --output out.${ext}`;
   } else if (codeLang === "python") {
-    code = `import requests\n\nr = requests.post(\n    "${url}",\n    json=${j(body).split("\n").join("\n    ")},\n)\nr.raise_for_status()\nopen("out.${ext}", "wb").write(r.content)\nprint("已保存 out.${ext},", len(r.content), "bytes")`;
+    code = `import requests\n\nr = requests.post(\n    "${url}",\n    json=${j(body).split("\n").join("\n    ")},\n)\nr.raise_for_status()\nopen("out.${ext}", "wb").write(r.content)\nprint("${I.t("call.code_saved")} out.${ext},", len(r.content), "bytes")`;
   } else {
     code = `const resp = await fetch("${url}", {\n  method: "POST",\n  headers: { "Content-Type": "application/json" },\n  body: JSON.stringify(${j(body)}),\n});\nif (!resp.ok) throw new Error(await resp.text());\nconst blob = await resp.blob();\ndocument.querySelector("audio").src = URL.createObjectURL(blob);`;
   }
@@ -393,9 +397,9 @@ $("langTabs").onclick = e => {
   renderCode();
 };
 $("copy").onclick = async () => {
-  try { await navigator.clipboard.writeText($("code").textContent); $("copy").textContent = "已复制 ✓"; }
-  catch { $("copy").textContent = "复制失败 (手动选择)"; }
-  setTimeout(() => $("copy").textContent = "复制代码", 1500);
+  try { await navigator.clipboard.writeText($("code").textContent); $("copy").textContent = I.t("call.copied"); }
+  catch { $("copy").textContent = I.t("call.copy_fail_manual"); }
+  setTimeout(() => $("copy").textContent = I.t("call.copy"), 1500);
 };
 
 /* ---- N.E.KO 配置对照卡: URL 跟随当前源, 模型 ID 跟随档案下拉 ---- */
@@ -405,15 +409,15 @@ function renderNekoCard() {
   $("nekoUrl").textContent = base + "/v1/audio/speech";
   $("nekoBase").textContent = base;
   const p = $("prof").value;
-  $("nekoModel").textContent = p || "音色档案名 (左侧下拉选择后自动同步)";
+  $("nekoModel").textContent = p || I.t("call.neko_model_none");
 }
 document.querySelectorAll(".copy[data-copy]").forEach(b => {
   b.onclick = async () => {
     try {
       await navigator.clipboard.writeText($(b.dataset.copy).textContent);
-      b.textContent = "已复制 ✓";
-    } catch { b.textContent = "复制失败"; }
-    setTimeout(() => b.textContent = "复制", 1500);
+      b.textContent = I.t("call.copied");
+    } catch { b.textContent = I.t("call.copy_fail"); }
+    setTimeout(() => b.textContent = I.t("call.copy_short"), 1500);
   };
 });
 
@@ -429,19 +433,19 @@ function addLog(row) {
 
 $("go").onclick = async () => {
   const body = buildBody();
-  if (!body.text?.trim()) { $("meta").textContent = "⚠ 请先输入合成文本"; return; }
-  if (endpoint === "native" && !body.profile) { $("meta").textContent = "⚠ 原生端点必须选择音色档案"; return; }
+  if (!body.text?.trim()) { $("meta").textContent = I.t("call.err_notext"); return; }
+  if (endpoint === "native" && !body.profile) { $("meta").textContent = I.t("call.err_noprofile"); return; }
   if (endpoint === "v2" && !body.profile && !body.ref_audio_path) {
-    $("meta").textContent = "⚠ GSV 兼容端点需要档案或 ref_audio_path"; return;
+    $("meta").textContent = I.t("call.err_gsv"); return;
   }
   if (endpoint === "openai" && !body.model) {
-    $("meta").textContent = "⚠ OpenAI 端点需要选择音色档案 (model)"; return;
+    $("meta").textContent = I.t("call.err_openai"); return;
   }
   const url = endpoint === "native" ? "/api/adr/v1/tts"
             : endpoint === "openai" ? "/v1/audio/speech" : "/api/v2/tts";
   const btn = $("go");
-  btn.disabled = true; btn.textContent = "⟳ 合成中…";
-  $("meta").textContent = "合成中… (流式模式下音频完整下载后播放)";
+  btn.disabled = true; btn.textContent = I.t("call.btn_synth_ing");
+  $("meta").textContent = I.t("call.meta_synth");
   const t0 = performance.now();
   try {
     const r = await fetch(url, {
@@ -458,19 +462,19 @@ $("go").onclick = async () => {
     $("au").src = URL.createObjectURL(blob);
     const kb = blob.size >= 1 << 20 ? (blob.size / (1 << 20)).toFixed(2) + " MB"
                                     : Math.round(blob.size / 1024) + " KB";
-    $("meta").innerHTML = `✔ 合成完成 · 首包 <b>${ttfb} ms</b> · 总耗时 <b>${total} ms</b> · 音频 <b>${kb}</b>` +
-      (blob.size < 2000 ? '<br>⚠ 音频异常小, 可能合成失败' : "");
+    $("meta").innerHTML = I.t("call.meta_done", { ttfb, total, kb }) +
+      (blob.size < 2000 ? I.t("call.meta_tiny") : "");
     addLog({ t: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
-             ep: endpoint, sm: endpoint === "openai" ? (body.stream ? "流式" : "整段") : body.streaming_mode,
-             ttfb: ttfb + "ms", total: total + "ms", size: kb, cls: "ok", status: "成功" });
+             ep: endpoint, sm: endpoint === "openai" ? (body.stream ? I.t("call.stream_y") : I.t("call.stream_n")) : body.streaming_mode,
+             ttfb: ttfb + "ms", total: total + "ms", size: kb, cls: "ok", status: I.t("call.status_ok") });
   } catch (e) {
     const total = Math.round(performance.now() - t0);
-    $("meta").innerHTML = `✘ 合成失败: ${e.message}`;
+    $("meta").innerHTML = I.t("call.meta_fail", { msg: e.message });
     addLog({ t: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
-             ep: endpoint, sm: endpoint === "openai" ? (body.stream ? "流式" : "整段") : body.streaming_mode,
+             ep: endpoint, sm: endpoint === "openai" ? (body.stream ? I.t("call.stream_y") : I.t("call.stream_n")) : body.streaming_mode,
              ttfb: "—", total: total + "ms", size: "—", cls: "err", status: e.message.slice(0, 40) });
   } finally {
-    btn.disabled = false; btn.textContent = "✦ 合成试听";
+    btn.disabled = false; btn.textContent = I.t("call.go");
   }
 };
 
@@ -482,15 +486,28 @@ async function pollEngine() {
     const stage = d.engine_stage || "";
     if (d.engine_ready) {
       const q = d.queue_depth || 0, b = d.synth_busy || 0;
-      el.textContent = b > 0 ? `● 合成中${q > 0 ? ` (排队 ${q})` : ""}`
-        : q > 0 ? `● 排队 ${q}` : "● " + STAGE_TXT.ready;
+      el.textContent = b > 0 ? I.t("call.eng_synth") + (q > 0 ? I.t("call.eng_queue_tail", { n: q }) : "")
+        : q > 0 ? I.t("call.eng_queue_n", { n: q }) : "● " + STAGE_TXT().ready;
       el.className = "engstat ok"; }
-    else if (stage === "failed") { el.textContent = "● " + STAGE_TXT.failed; el.className = "engstat bad"; }
-    else if (STAGE_TXT[stage]) { el.textContent = "● " + STAGE_TXT[stage]; el.className = "engstat busy"; }
-    else { el.textContent = "● 引擎未加载"; el.className = "engstat"; }
-  } catch { el.textContent = "● 服务不可达"; el.className = "engstat bad"; }
+    else if (stage === "failed") { el.textContent = "● " + STAGE_TXT().failed; el.className = "engstat bad"; }
+    else if (STAGE_TXT()[stage]) { el.textContent = "● " + STAGE_TXT()[stage]; el.className = "engstat busy"; }
+    else { el.textContent = I.t("call.eng_notloaded"); el.className = "engstat"; }
+  } catch { el.textContent = I.t("call.eng_unreach"); el.className = "engstat bad"; }
 }
 
+</script>
+
+<script>
+I.init("call", {
+  onSwitch: () => {
+    applyBackLink();
+    const noneOpt = $("prof").querySelector('option[value=""]');
+    if (noneOpt) noneOpt.textContent = I.t("call.prof_none"); // 不重建下拉, 保住用户选中的档案
+    pollEngine();
+    renderCode();
+  },
+});
+applyBackLink();
 loadProfiles().then(renderCode);
 renderCode();
 pollEngine();

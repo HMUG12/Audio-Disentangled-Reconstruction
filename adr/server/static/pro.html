@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'">
 <title>ADR Studio · 专业控制台</title>
+<script src="/i18n.js"></script>
+<script src="/i18n-pro.js"></script>
 <style>
   :root {
     color-scheme: dark;
@@ -166,14 +168,14 @@
 <body>
 
 <header>
-  <div class="brand"><b>ADR STUDIO</b><span>专业控制台</span></div>
+  <div class="brand"><b>ADR STUDIO</b><span data-i18n="pro.brand_sub">专业控制台</span></div>
   <nav>
-    <button data-tab="ov" class="on">总览</button>
-    <button data-tab="train">声音克隆</button>
-    <button data-tab="tts">语音合成</button>
-    <button data-tab="models">模型库</button>
+    <button data-tab="ov" class="on" data-i18n="pro.nav_overview">总览</button>
+    <button data-tab="train" data-i18n="pro.nav_train">声音克隆</button>
+    <button data-tab="tts" data-i18n="pro.nav_tts">语音合成</button>
+    <button data-tab="models" data-i18n="pro.nav_models">模型库</button>
   </nav>
-  <button id="back">← 返回启动器</button>
+  <button id="back" data-i18n="pro.back_launcher">← 返回启动器</button>
 </header>
 
 <main>
@@ -181,52 +183,52 @@
 <!-- ================= 总览 ================= -->
 <section class="tab on" id="tab-ov">
   <div class="panel">
-    <h2>硬件资源</h2>
+    <h2 data-i18n="pro.ov_hardware">硬件资源</h2>
     <div class="grid g4">
       <div class="card gauge-wrap">
         <canvas id="gGpu" width="300" height="192"></canvas>
-        <div class="gl" id="gGpuTxt">GPU 显存</div>
+        <div class="gl" id="gGpuTxt" data-i18n="pro.gpu_vram">GPU 显存</div>
       </div>
       <div class="card gauge-wrap">
         <canvas id="gRam" width="300" height="192"></canvas>
-        <div class="gl" id="gRamTxt">内存占用</div>
+        <div class="gl" id="gRamTxt" data-i18n="pro.ov_ram">内存占用</div>
       </div>
       <div class="card">
-        <div class="k">磁盘剩余</div>
+        <div class="k" data-i18n="pro.ov_disk_free">磁盘剩余</div>
         <div class="v" id="cDisk">—</div>
         <div class="prog" style="margin-top:10px"><i id="pDisk"></i></div>
       </div>
       <div class="card">
-        <div class="k">GPU 型号</div>
+        <div class="k" data-i18n="pro.ov_gpu_model">GPU 型号</div>
         <div class="v" id="cGpuName" style="font-size:14.5px">—</div>
-        <div class="k" style="margin-top:8px">运行时长 <span id="cUp" style="color:var(--sub)">—</span>
+        <div class="k" style="margin-top:8px"><span data-i18n="pro.ov_uptime">运行时长</span> <span id="cUp" style="color:var(--sub)">—</span>
           &nbsp;·&nbsp; Python <span id="cPy" style="color:var(--sub)">—</span></div>
       </div>
     </div>
   </div>
 
   <div class="panel">
-    <h2>显存趋势（最近 60 次采样）</h2>
+    <h2 data-i18n="pro.ov_vram_trend">显存趋势（最近 60 次采样）</h2>
     <div class="curvewrap"><canvas id="spark" width="1100" height="200"></canvas></div>
   </div>
 
   <div class="panel">
-    <h2>引擎与业务状态</h2>
+    <h2 data-i18n="pro.ov_engine_status">引擎与业务状态</h2>
     <div class="grid g4">
-      <div class="card"><div class="k">GSV 引擎</div><div class="v" id="cEng">—</div>
-        <div class="k" style="margin-top:6px" id="cEngSub">服务启动即后台预热</div></div>
-      <div class="card"><div class="k">音色档案</div><div class="v acc" id="cProf">—</div></div>
-      <div class="card"><div class="k">预训练模型</div><div class="v" id="cModel">—</div></div>
-      <div class="card"><div class="k">训练任务</div><div class="v" id="cTrain">—</div></div>
+      <div class="card"><div class="k" data-i18n="pro.ov_gsv_engine">GSV 引擎</div><div class="v" id="cEng">—</div>
+        <div class="k" style="margin-top:6px" id="cEngSub" data-i18n="pro.eng_warmup_hint">服务启动即后台预热</div></div>
+      <div class="card"><div class="k" data-i18n="pro.ov_profiles">音色档案</div><div class="v acc" id="cProf">—</div></div>
+      <div class="card"><div class="k" data-i18n="pro.pretrained_model">预训练模型</div><div class="v" id="cModel">—</div></div>
+      <div class="card"><div class="k" data-i18n="pro.ov_train_jobs">训练任务</div><div class="v" id="cTrain">—</div></div>
     </div>
     <div id="errline"></div>
   </div>
 
   <div class="panel">
-    <h2>环境诊断</h2>
+    <h2 data-i18n="pro.ov_doctor">环境诊断</h2>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <button class="btn" id="btnDoctor">一键诊断</button>
-      <button class="btn" id="btnDoctorFix" style="display:none">自动修复问题项</button>
+      <button class="btn" id="btnDoctor" data-i18n="pro.btn_doctor">一键诊断</button>
+      <button class="btn" id="btnDoctorFix" style="display:none" data-i18n="pro.btn_doctor_fix">自动修复问题项</button>
       <span id="doctorSum" style="color:var(--sub)"></span>
     </div>
     <div id="doctorOut" style="display:none;margin-top:12px;font-size:12.5px;line-height:1.8;color:var(--sub)"></div>
@@ -237,68 +239,68 @@
 <section class="tab" id="tab-train">
   <div class="split">
     <div class="panel">
-      <h2>1 · 上传录音与参数</h2>
+      <h2 data-i18n="pro.train_step1">1 · 上传录音与参数</h2>
       <div class="file-drop" id="drop">
         <input type="file" id="file" accept=".wav,.mp3,.flac,.m4a,.ogg,.zip">
-        <div class="big" id="dropTxt">点击选择或拖入录音文件</div>
-        <div>wav / mp3 / flac / m4a / ogg / zip（≥1 分钟清晰人声效果最佳）</div>
+        <div class="big" id="dropTxt" data-i18n="pro.drop_pick">点击选择或拖入录音文件</div>
+        <div data-i18n="pro.drop_formats">wav / mp3 / flac / m4a / ogg / zip（≥1 分钟清晰人声效果最佳）</div>
       </div>
 
-      <label class="f">实验名称</label>
-      <input type="text" id="tExp" value="my_voice" placeholder="英文/数字/下划线">
+      <label class="f" data-i18n="pro.f_exp_name">实验名称</label>
+      <input type="text" id="tExp" value="my_voice" placeholder="英文/数字/下划线" data-i18n-ph="pro.ph_exp_name">
 
       <div class="grid g2" style="gap:14px; margin-top:4px">
         <div>
-          <label class="f">训练轮数 <span id="tEpV" style="color:var(--accent)">8</span></label>
+          <label class="f"><span data-i18n="pro.f_epochs">训练轮数</span> <span id="tEpV" style="color:var(--accent)">8</span></label>
           <input type="range" id="tEp" min="4" max="24" step="1" value="8">
         </div>
         <div>
-          <label class="f">显存配方</label>
+          <label class="f" data-i18n="pro.f_recipe">显存配方</label>
           <select id="tRecipe">
-            <option value="8gb">8GB+ 显存（batch 4，速度优先）</option>
-            <option value="4gb">4GB 显存（batch 1，片段 ≤10s）</option>
+            <option value="8gb" data-i18n="pro.recipe_8gb">8GB+ 显存（batch 4，速度优先）</option>
+            <option value="4gb" data-i18n="pro.recipe_4gb">4GB 显存（batch 1，片段 ≤10s）</option>
           </select>
         </div>
       </div>
 
-      <label class="f">训练后绑定到音色档案（可选）</label>
-      <select id="tBind"><option value="__auto__">自动建档绑定（用实验名, 推荐）</option><option value="">不绑定（仅产出权重）</option></select>
+      <label class="f" data-i18n="pro.f_bind_after">训练后绑定到音色档案（可选）</label>
+      <select id="tBind"><option value="__auto__" data-i18n="pro.bind_auto">自动建档绑定（用实验名, 推荐）</option><option value="" data-i18n="pro.bind_none">不绑定（仅产出权重）</option></select>
 
       <div class="row" style="margin-top:16px">
         <label style="display:flex;align-items:center;gap:7px;font-size:13px;color:var(--sub);cursor:pointer">
           <input type="checkbox" id="tGate" checked style="accent-color:var(--accent);width:15px;height:15px">
-          启用质量门禁（相似度 ≥0.80 自动早停）
+          <span data-i18n="pro.f_gate">启用质量门禁（相似度 ≥0.80 自动早停）</span>
         </label>
       </div>
       <div class="row end" style="margin-top:16px">
-        <button class="btn danger" id="tStop" disabled>■ 停止</button>
-        <button class="btn pri" id="tStart">▶ 开始训练</button>
+        <button class="btn danger" id="tStop" disabled data-i18n="pro.btn_stop">■ 停止</button>
+        <button class="btn pri" id="tStart" data-i18n="pro.btn_start_train">▶ 开始训练</button>
       </div>
     </div>
 
     <div class="panel">
-      <h2>2 · 训练进度与相似度曲线</h2>
+      <h2 data-i18n="pro.train_step2">2 · 训练进度与相似度曲线</h2>
       <div class="grid g3" style="margin-bottom:14px">
-        <div class="card"><div class="k">状态</div><div class="v" id="tState" style="font-size:16px">空闲</div></div>
-        <div class="card"><div class="k">最佳相似度</div><div class="v acc" id="tBest">—</div></div>
-        <div class="card"><div class="k">零样本基线</div><div class="v" id="tBase" style="font-size:16px">—</div></div>
+        <div class="card"><div class="k" data-i18n="pro.k_state">状态</div><div class="v" id="tState" style="font-size:16px" data-i18n="pro.st_idle">空闲</div></div>
+        <div class="card"><div class="k" data-i18n="pro.k_best_sim">最佳相似度</div><div class="v acc" id="tBest">—</div></div>
+        <div class="card"><div class="k" data-i18n="pro.k_zero_shot">零样本基线</div><div class="v" id="tBase" style="font-size:16px">—</div></div>
       </div>
       <div class="prog"><i id="tProg"></i></div>
-      <div class="hint" style="margin:8px 0 14px" id="tMeta">尚未开始训练</div>
+      <div class="hint" style="margin:8px 0 14px" id="tMeta" data-i18n="pro.not_started">尚未开始训练</div>
       <div class="curvewrap">
         <canvas id="curve" width="1100" height="300"></canvas>
         <div class="legend">
-          <span><i style="background:#2dd4bf"></i>每轮门禁打分</span>
-          <span><i style="background:#60a5fa"></i>零样本基线</span>
-          <span><i style="background:#34d399"></i>早停目标 0.80</span>
+          <span><i style="background:#2dd4bf"></i><span data-i18n="pro.legend_gate">每轮门禁打分</span></span>
+          <span><i style="background:#60a5fa"></i><span data-i18n="pro.legend_zero_shot">零样本基线</span></span>
+          <span><i style="background:#34d399"></i><span data-i18n="pro.legend_target">早停目标 0.80</span></span>
         </div>
       </div>
     </div>
   </div>
 
   <div class="panel">
-    <h2>训练日志</h2>
-    <pre class="log" id="tLog">等待训练输出…</pre>
+    <h2 data-i18n="pro.train_log">训练日志</h2>
+    <pre class="log" id="tLog" data-i18n="pro.log_waiting">等待训练输出…</pre>
   </div>
 </section>
 
@@ -306,32 +308,32 @@
 <section class="tab" id="tab-tts">
   <div class="split">
     <div class="panel">
-      <h2>合成请求</h2>
-      <label class="f">音色档案 <button class="btn" id="pRefresh"
-        style="padding:2px 10px;font-size:11.5px;margin-left:8px">刷新</button>
+      <h2 data-i18n="pro.tts_request">合成请求</h2>
+      <label class="f"><span data-i18n="pro.f_profile">音色档案</span> <button class="btn" id="pRefresh"
+        style="padding:2px 10px;font-size:11.5px;margin-left:8px" data-i18n="pro.btn_refresh">刷新</button>
         <button class="btn" id="pExport"
-        style="padding:2px 10px;font-size:11.5px;margin-left:8px" title="导出 .adrvoice 包 (参考音频 + 绑定权重, 可跨机导入)">导出档案包</button>
+        style="padding:2px 10px;font-size:11.5px;margin-left:8px" title="导出 .adrvoice 包 (参考音频 + 绑定权重, 可跨机导入)" data-i18n="pro.btn_export_pkg" data-i18n-title="pro.tt_export">导出档案包</button>
         <button class="btn" id="pImportBtn"
-        style="padding:2px 10px;font-size:11.5px;margin-left:8px" title="导入 .adrvoice 音色档案包">导入档案包</button>
+        style="padding:2px 10px;font-size:11.5px;margin-left:8px" title="导入 .adrvoice 音色档案包" data-i18n="pro.btn_import_pkg" data-i18n-title="pro.tt_import">导入档案包</button>
         <button class="btn" id="pRollback"
-        style="padding:2px 10px;font-size:11.5px;margin-left:8px" title="恢复到上一版微调权重 (现行版本自动入史, 可再次回滚逐版回退)">↩ 回滚上一版</button>
+        style="padding:2px 10px;font-size:11.5px;margin-left:8px" title="恢复到上一版微调权重 (现行版本自动入史, 可再次回滚逐版回退)" data-i18n="pro.btn_rollback" data-i18n-title="pro.tt_rollback">↩ 回滚上一版</button>
         <input type="file" id="pImportFile" accept=".adrvoice,.zip" style="display:none"></label>
-      <select id="pSel"><option value="">加载中…</option></select>
+      <select id="pSel"><option value="" data-i18n="pro.loading">加载中…</option></select>
 
-      <label class="f">合成文本</label>
-      <textarea id="sText" placeholder="输入要合成的文字…"></textarea>
+      <label class="f" data-i18n="pro.f_text">合成文本</label>
+      <textarea id="sText" placeholder="输入要合成的文字…" data-i18n-ph="pro.ph_text"></textarea>
 
       <div class="grid g3" style="gap:14px">
         <div>
-          <label class="f">语速 <span id="sSpV" style="color:var(--accent)">1.00</span></label>
+          <label class="f"><span data-i18n="pro.f_speed">语速</span> <span id="sSpV" style="color:var(--accent)">1.00</span></label>
           <input type="range" id="sSp" min="0.5" max="2" step="0.05" value="1">
         </div>
         <div>
-          <label class="f">随机种子</label>
+          <label class="f" data-i18n="pro.f_seed">随机种子</label>
           <input type="number" id="sSeed" value="-1" step="1">
         </div>
         <div>
-          <label class="f">音频格式</label>
+          <label class="f" data-i18n="pro.f_format">音频格式</label>
           <select id="sFmt">
             <option value="wav">wav</option>
             <option value="ogg">ogg</option>
@@ -341,41 +343,41 @@
       </div>
 
       <details style="margin-top:14px" id="sAdv">
-        <summary style="cursor:pointer;color:#667795;font-size:12.5px;user-select:none">高级参数（采样 / 切句 / 语言）</summary>
+        <summary style="cursor:pointer;color:#667795;font-size:12.5px;user-select:none" data-i18n="pro.adv_summary">高级参数（采样 / 切句 / 语言）</summary>
         <div class="grid g3" style="gap:14px;margin-top:12px">
           <div>
-            <label class="f">文本语言</label>
+            <label class="f" data-i18n="pro.f_text_lang">文本语言</label>
             <select id="sLang">
-              <option value="zh" selected>中文 zh</option>
-              <option value="en">英文 en</option>
-              <option value="ja">日文 ja</option>
-              <option value="ko">韩文 ko</option>
-              <option value="yue">粤语 yue</option>
+              <option value="zh" selected data-i18n="pro.lang_zh">中文 zh</option>
+              <option value="en" data-i18n="pro.lang_en">英文 en</option>
+              <option value="ja" data-i18n="pro.lang_ja">日文 ja</option>
+              <option value="ko" data-i18n="pro.lang_ko">韩文 ko</option>
+              <option value="yue" data-i18n="pro.lang_yue">粤语 yue</option>
             </select>
           </div>
           <div>
-            <label class="f">参考音频语言</label>
+            <label class="f" data-i18n="pro.f_prompt_lang">参考音频语言</label>
             <select id="sPromptLang">
-              <option value="zh" selected>中文 zh</option>
-              <option value="en">英文 en</option>
-              <option value="ja">日文 ja</option>
-              <option value="ko">韩文 ko</option>
-              <option value="yue">粤语 yue</option>
+              <option value="zh" selected data-i18n="pro.lang_zh">中文 zh</option>
+              <option value="en" data-i18n="pro.lang_en">英文 en</option>
+              <option value="ja" data-i18n="pro.lang_ja">日文 ja</option>
+              <option value="ko" data-i18n="pro.lang_ko">韩文 ko</option>
+              <option value="yue" data-i18n="pro.lang_yue">粤语 yue</option>
             </select>
           </div>
           <div>
-            <label class="f">切句方式</label>
+            <label class="f" data-i18n="pro.f_cut">切句方式</label>
             <select id="sCut">
-              <option value="cut1" selected>凑四句一切 (稳)</option>
-              <option value="cut0">不切 (整段)</option>
-              <option value="cut3">按句号切 (快出声)</option>
-              <option value="cut5">按标点切</option>
+              <option value="cut1" selected data-i18n="pro.cut1">凑四句一切 (稳)</option>
+              <option value="cut0" data-i18n="pro.cut0">不切 (整段)</option>
+              <option value="cut3" data-i18n="pro.cut3">按句号切 (快出声)</option>
+              <option value="cut5" data-i18n="pro.cut5">按标点切</option>
             </select>
           </div>
         </div>
         <div class="grid g3" style="gap:14px;margin-top:12px">
           <div>
-            <label class="f">top_k <span style="color:#667795">(候选收窄, 短句防跑偏)</span></label>
+            <label class="f">top_k <span style="color:#667795" data-i18n="pro.hint_topk">(候选收窄, 短句防跑偏)</span></label>
             <input type="number" id="sTopK" value="15" min="1" max="100" step="1">
           </div>
           <div>
@@ -387,27 +389,27 @@
             <input type="range" id="sTemp" min="0.1" max="2" step="0.05" value="1">
           </div>
         </div>
-        <div class="hint" style="margin-top:10px">
+        <div class="hint" style="margin-top:10px" data-i18n="pro.hint_tuning">
           调参手感: top_k↓ / temperature↓ 更稳定但平淡; 反之更随机有情感, 也更容易读错字。
         </div>
       </details>
 
       <div class="row end" style="margin-top:16px">
-        <button class="btn pri" id="sGo">✦ 开始合成</button>
+        <button class="btn pri" id="sGo" data-i18n="pro.btn_synth">✦ 开始合成</button>
       </div>
-      <div class="hint" style="margin-top:10px">
+      <div class="hint" style="margin-top:10px" data-i18n="pro.hint_autoload">
         服务启动后引擎会在后台自动加载（总览页可见进度），就绪后合成秒级返回；就绪前点合成会自动等待加载完成。
       </div>
     </div>
 
     <div class="panel">
-      <h2>合成结果</h2>
+      <h2 data-i18n="pro.tts_result">合成结果</h2>
       <div class="grid g3">
-        <div class="card"><div class="k">耗时</div><div class="v" id="rTime" style="font-size:16px">—</div></div>
-        <div class="card"><div class="k">大小</div><div class="v" id="rSize" style="font-size:16px">—</div></div>
-        <div class="card"><div class="k">字符数</div><div class="v" id="rChars" style="font-size:16px">—</div></div>
+        <div class="card"><div class="k" data-i18n="pro.k_time">耗时</div><div class="v" id="rTime" style="font-size:16px">—</div></div>
+        <div class="card"><div class="k" data-i18n="pro.k_size">大小</div><div class="v" id="rSize" style="font-size:16px">—</div></div>
+        <div class="card"><div class="k" data-i18n="pro.k_chars">字符数</div><div class="v" id="rChars" style="font-size:16px">—</div></div>
       </div>
-      <div id="rBox"><div class="empty">尚无合成结果</div></div>
+      <div id="rBox"><div class="empty" data-i18n="pro.no_result">尚无合成结果</div></div>
     </div>
   </div>
 </section>
@@ -415,10 +417,10 @@
 <!-- ================= 模型库 ================= -->
 <section class="tab" id="tab-models">
   <div class="panel">
-    <h2>预训练模型 <span id="mDir" class="hint" style="margin-left:auto;font-weight:400"></span></h2>
+    <h2><span data-i18n="pro.pretrained_model">预训练模型</span> <span id="mDir" class="hint" style="margin-left:auto;font-weight:400"></span></h2>
     <table>
-      <thead><tr><th>模型</th><th>类别</th><th>说明</th><th>体积</th><th>状态</th><th style="width:110px">操作</th></tr></thead>
-      <tbody id="mBody"><tr><td colspan="6" class="empty">加载中…</td></tr></tbody>
+      <thead><tr><th data-i18n="pro.th_model">模型</th><th data-i18n="pro.th_category">类别</th><th data-i18n="pro.th_desc">说明</th><th data-i18n="pro.th_size">体积</th><th data-i18n="pro.th_status">状态</th><th style="width:110px" data-i18n="pro.th_actions">操作</th></tr></thead>
+      <tbody id="mBody"><tr><td colspan="6" class="empty" data-i18n="pro.loading">加载中…</td></tr></tbody>
     </table>
     <div class="prog" style="margin-top:14px; display:none" id="mProgBox">
       <i id="mProg"></i>
@@ -465,19 +467,18 @@ function renderDoctor(rep) {
     `<div style="margin:3px 0"><b style="color:${color[c.status] || "inherit"}">` +
     `[${icon[c.status] || "?"}] ${esc(c.name)}</b> — ${esc(c.detail)}</div>`).join("");
   const s = rep.summary;
-  $("doctorSum").textContent =
-    `${s.ok || 0} 正常 · ${s.fixed || 0} 已修复 · ${s.warn || 0} 警告 · ${s.fail || 0} 失败`;
+  $("doctorSum").textContent = I.t("pro.doctor_sum", { ok: s.ok || 0, fixed: s.fixed || 0, warn: s.warn || 0, fail: s.fail || 0 });
   $("btnDoctorFix").style.display = (s.warn || s.fail) ? "" : "none";
 }
 async function runDoctor(fix) {
   const btn = $(fix ? "btnDoctorFix" : "btnDoctor");
   btn.disabled = true;
-  $("doctorSum").textContent = "诊断中…";
+  $("doctorSum").textContent = I.t("pro.doctor_running");
   try {
     renderDoctor(await jfetch("/api/adr/v1/system/doctor" + (fix ? "?fix=true" : "")));
-    if (fix) toast("修复完成");
+    if (fix) toast(I.t("pro.toast_fix_done"));
   } catch (e) {
-    toast("诊断失败: " + e.message, true);
+    toast(I.t("pro.toast_doctor_fail", { msg: e.message }), true);
     $("doctorSum").textContent = "";
   }
   btn.disabled = false;
@@ -557,7 +558,7 @@ function drawSpark() {
   ctx.clearRect(0, 0, w, h);
   if (gpuHist.length < 2) {
     ctx.fillStyle = "#667795"; ctx.font = "12px sans-serif"; ctx.textAlign = "center";
-    ctx.fillText("采样中…", w / 2, h / 2);
+    ctx.fillText(I.t("pro.spark_sampling"), w / 2, h / 2);
     return;
   }
   const maxT = Math.max(...gpuHist.map(p => p.total), 1);
@@ -576,10 +577,10 @@ function drawSpark() {
   grad.addColorStop(0, "#2dd4bf33"); grad.addColorStop(1, "#2dd4bf00");
   ctx.fillStyle = grad; ctx.fill();
   ctx.fillStyle = "#667795"; ctx.font = "10.5px sans-serif"; ctx.textAlign = "left";
-  ctx.fillText(`峰值上限 ${maxT.toFixed(1)} GB`, pad, 14);
+  ctx.fillText(I.t("pro.spark_peak", { v: maxT.toFixed(1) }), pad, 14);
 }
 
-const TRAIN_STATE_TXT = { idle: "空闲", running: "训练中", done: "已完成", failed: "失败", stopped: "已停止" };
+const TRAIN_STATE_TXT = () => ({ idle: I.t("pro.st_idle"), running: I.t("pro.st_running"), done: I.t("pro.st_done"), failed: I.t("pro.st_failed"), stopped: I.t("pro.st_stopped") });
 
 async function loadStats() {
   try {
@@ -594,8 +595,8 @@ async function loadStats() {
       }
       $("cGpuName").textContent = d.gpu.name;
     } else {
-      if (curTab === "ov") drawGauge("gGpu", "gGpuTxt", 0, 1, "#667795", "#667795", "无 CUDA 设备");
-      $("cGpuName").textContent = "未检测到 NVIDIA GPU";
+      if (curTab === "ov") drawGauge("gGpu", "gGpuTxt", 0, 1, "#667795", "#667795", I.t("pro.no_cuda"));
+      $("cGpuName").textContent = I.t("pro.no_gpu_detected");
     }
     if (d.ram && curTab === "ov")
       drawGauge("gRam", "gRamTxt", d.ram.used_gb, d.ram.total_gb, "#60a5fa", "#a78bfa",
@@ -605,34 +606,34 @@ async function loadStats() {
       $("pDisk").style.width = (d.disk.used_gb / d.disk.total_gb * 100).toFixed(1) + "%";
     }
     const eng = $("cEng");
-    const STAGE_TXT = {
-      ready: "已就绪",
-      queued: "排队启动中…",
-      importing: "① 加载框架 (torch/模块)…",
-      loading: "② 加载模型权重…",
-      kernel: "③ 预热计算内核…",
-      failed: "预热失败 (首次合成时重试)",
-    };
+    const STAGE_TXT = () => ({
+      ready: I.t("pro.stage_ready"),
+      queued: I.t("pro.stage_queued"),
+      importing: I.t("pro.stage_importing"),
+      loading: I.t("pro.stage_loading"),
+      kernel: I.t("pro.stage_kernel"),
+      failed: I.t("pro.stage_failed"),
+    });
     const stage = d.engine_stage || "";
-    if (d.engine_ready) { eng.textContent = "已就绪"; eng.className = "v ok";
+    if (d.engine_ready) { eng.textContent = I.t("pro.stage_ready"); eng.className = "v ok";
       const q = d.queue_depth || 0, b = d.synth_busy || 0;
       $("cEngSub").textContent = b > 0
-        ? `合成中${q > 0 ? ` · 排队 ${q}` : ""}`
-        : q > 0 ? `排队 ${q}` : "合成秒级返回"; }
-    else if (stage === "failed") { eng.textContent = STAGE_TXT.failed; eng.className = "v err"; }
-    else if (STAGE_TXT[stage]) { eng.textContent = STAGE_TXT[stage]; eng.className = "v acc"; }
-    else { eng.textContent = "未加载"; eng.className = "v"; }
-    $("cProf").textContent = d.profiles + " 个";
+        ? (q > 0 ? I.t("pro.eng_synth_queue", { q }) : I.t("pro.eng_synth"))
+        : q > 0 ? I.t("pro.eng_queue", { q }) : I.t("pro.eng_fast"); }
+    else if (stage === "failed") { eng.textContent = STAGE_TXT().failed; eng.className = "v err"; }
+    else if (STAGE_TXT()[stage]) { eng.textContent = STAGE_TXT()[stage]; eng.className = "v acc"; }
+    else { eng.textContent = I.t("pro.eng_not_loaded"); eng.className = "v"; }
+    $("cProf").textContent = I.t("pro.profiles_n", { n: d.profiles });
     $("cModel").innerHTML = `${d.models.cached} <small>/ ${d.models.total}</small>`;
     const tr = $("cTrain");
-    tr.textContent = TRAIN_STATE_TXT[d.train.state] || d.train.state;
+    tr.textContent = TRAIN_STATE_TXT()[d.train.state] || d.train.state;
     tr.className = "v " + (d.train.state === "running" ? "acc" : d.train.state === "failed" ? "err" : "");
     const up = d.uptime_sec;
     $("cUp").textContent = up >= 3600 ? `${(up / 3600).toFixed(1)} h` : `${Math.round(up / 60)} min`;
     $("cPy").textContent = d.python;
     $("errline").textContent = "";
   } catch (e) {
-    $("errline").textContent = "API 连接失败: " + e.message;
+    $("errline").textContent = I.t("pro.err_api", { msg: e.message });
   }
 }
 loadStats();
@@ -653,10 +654,10 @@ drop.ondrop = e => {
 $("file").onchange = e => e.target.files[0] && pickFile(e.target.files[0]);
 function pickFile(f) {
   audioPath = ""; audioName = f.name;
-  $("dropTxt").textContent = `已选择: ${f.name} (${(f.size / 1048576).toFixed(1)} MB)`;
+  $("dropTxt").textContent = I.t("pro.picked", { name: f.name, size: (f.size / 1048576).toFixed(1) });
   const fd = new FormData();
   fd.append("file", f);
-  $("dropTxt").textContent = `上传中… ${f.name}`;
+  $("dropTxt").textContent = I.t("pro.uploading", { name: f.name });
   fetch(api("/api/adr/v1/train/upload"), { method: "POST", body: fd })
     .then(r => {
       if (!r.ok) return r.json().then(j => {
@@ -667,12 +668,12 @@ function pickFile(f) {
     .then(d => {
       audioPath = d.path;
       const dur = d.duration_s == null ? "" :
-        ` · 时长 ${d.duration_s >= 60 ? (d.duration_s / 60).toFixed(1) + " 分钟" : d.duration_s.toFixed(1) + " 秒"}`;
-      $("dropTxt").textContent = `✓ 已上传: ${d.filename}${dur}`;
+        (d.duration_s >= 60 ? I.t("pro.dur_min", { t: (d.duration_s / 60).toFixed(1) }) : I.t("pro.dur_sec", { t: d.duration_s.toFixed(1) }));
+      $("dropTxt").textContent = I.t("pro.uploaded", { name: d.filename }) + dur;
       if (dur && d.duration_s > 1800)
-        toast("素材超过 30 分钟, 建议裁剪后训练更快达标", true);
+        toast(I.t("pro.toast_long_audio"), true);
     })
-    .catch(e => { $("dropTxt").textContent = "上传失败: " + e.message; toast("上传失败: " + e.message, true); });
+    .catch(e => { const m = I.t("pro.upload_fail", { msg: e.message }); $("dropTxt").textContent = m; toast(m, true); });
 }
 
 $("tEp").oninput = e => $("tEpV").textContent = e.target.value;
@@ -681,15 +682,15 @@ async function loadBindOptions() {
   try {
     const d = await jfetch("/api/adr/v1/profiles");
     const sel = $("tBind");
-    sel.innerHTML = '<option value="__auto__">自动建档绑定（用实验名, 推荐）</option>' +
-      '<option value="">不绑定（仅产出权重）</option>' +
+    sel.innerHTML = '<option value="__auto__">' + I.t("pro.bind_auto") + '</option>' +
+      '<option value="">' + I.t("pro.bind_none") + '</option>' +
       d.profiles.map(p => {
         // 批次50: 有微调权重的档案可续训 — 用新录音在旧权重基础上练, 效果迭代
         const tag = p.last_sim != null ? ` · sim ${Number(p.last_sim).toFixed(2)}` : "";
         const ver = p.versions > 1 ? ` · v${p.versions}` : "";
-        const opts = [`<option value="${esc(p.name)}">绑定到: ${esc(p.name)}${ver}${tag}</option>`];
+        const opts = [`<option value="${esc(p.name)}">${I.t("pro.bind_to")}${esc(p.name)}${ver}${tag}</option>`];
         if (p.vits_weights)
-          opts.push(`<option value="resume:${esc(p.name)}">↻ 续训并绑回: ${esc(p.name)}${ver}${tag}</option>`);
+          opts.push(`<option value="resume:${esc(p.name)}">${I.t("pro.bind_resume")}${esc(p.name)}${ver}${tag}</option>`);
         return opts.join("");
       }).join("");
   } catch {}
@@ -697,7 +698,7 @@ async function loadBindOptions() {
 loadBindOptions();
 
 $("tStart").onclick = async () => {
-  if (!audioPath) { toast("请先上传录音文件", true); return; }
+  if (!audioPath) { toast(I.t("pro.toast_need_audio"), true); return; }
   const v = $("tBind").value;
   const body = {
     audio_path: audioPath,
@@ -714,7 +715,7 @@ $("tStart").onclick = async () => {
   if (v.startsWith("resume:")) {
     body.resume_from = v.slice(7);
     body.bind_voice = "";  // 后端自动绑回同一档案 (闭环)
-    if (!confirm(`将以「${body.resume_from}」现有权重为起点续训 (需 NVIDIA GPU)。\n训完自动绑定新版, 若相似度明显退化可一键回滚。继续？`))
+    if (!confirm(I.t("pro.confirm_resume", { name: body.resume_from })))
       return;
   }
   try {
@@ -723,14 +724,14 @@ $("tStart").onclick = async () => {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body)
     });
-    toast("训练已启动");
+    toast(I.t("pro.toast_train_started"));
     pollTrain();
-  } catch (e) { toast("启动失败: " + e.message, true); }
+  } catch (e) { toast(I.t("pro.toast_start_fail", { msg: e.message }), true); }
   finally { $("tStart").disabled = false; }
 };
 
 $("tStop").onclick = async () => {
-  try { await jfetch("/api/adr/v1/train/stop", { method: "POST" }); toast("已发送停止信号"); }
+  try { await jfetch("/api/adr/v1/train/stop", { method: "POST" }); toast(I.t("pro.toast_stop_sent")); }
   catch (e) { toast(e.message, true); }
 };
 
@@ -747,7 +748,7 @@ function updateTrain(d) {
   const running = d.state === "running";
   $("tStop").disabled = !running;
   const st = $("tState");
-  st.textContent = (TRAIN_STATE_TXT[d.state] || d.state) + (d.early_stop ? " · 早停" : "");
+  st.textContent = (TRAIN_STATE_TXT()[d.state] || d.state) + (d.early_stop ? " · " + I.t("pro.early_stop") : "");
   st.className = "v " + (running ? "acc" : d.state === "failed" ? "err" : d.state === "done" ? "ok" : "");
   st.style.fontSize = "16px";
   $("tBest").textContent = d.best_sim != null ? d.best_sim.toFixed(3) : "—";
@@ -755,11 +756,11 @@ function updateTrain(d) {
   const progPct = running ? Math.min((d.gate_curve.length / Math.max(d.epochs, 1)) * 100, 100) :
     d.state === "done" ? 100 : 0;
   $("tProg").style.width = progPct + "%";
-  const mins = d.elapsed_sec != null ? Math.floor(d.elapsed_sec / 60) + " 分 " + Math.round(d.elapsed_sec % 60) + " 秒" : "";
+  const mins = d.elapsed_sec != null ? I.t("pro.mins_secs", { m: Math.floor(d.elapsed_sec / 60), s: Math.round(d.elapsed_sec % 60) }) : "";
   $("tMeta").textContent = d.exp
-    ? `实验: ${d.exp} · 配方: ${d.recipe} · 目标轮数: ${d.epochs}` + (mins ? ` · 已用时: ${mins}` : "") +
-      (d.exit_code != null ? ` · 退出码: ${d.exit_code}` : "")
-    : "尚未开始训练";
+    ? I.t("pro.t_meta", { exp: d.exp, recipe: d.recipe, epochs: d.epochs }) + (mins ? I.t("pro.t_elapsed", { t: mins }) : "") +
+      (d.exit_code != null ? I.t("pro.t_exit", { code: d.exit_code }) : "")
+    : I.t("pro.not_started");
   if (d.log_tail.length) {
     const log = $("tLog");
     const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
@@ -771,7 +772,7 @@ function updateTrain(d) {
   if (curTab === "train") drawCurve();
   // 批次50: 训练完成退化警告 (running→done 边沿触发, 防轮询重复弹)
   if (d.state === "done" && lastTrainState === "running" && d.degraded && d.bind_voice)
-    toast(`⚠ 训练完成但相似度退化 (${d.degraded.new_sim.toFixed(2)} < 旧版 ${d.degraded.old_sim.toFixed(2)}) — 建议到「语音合成」页对「${d.bind_voice}」点「↩ 回滚上一版」`, true);
+    toast(I.t("pro.toast_degraded", { new_sim: d.degraded.new_sim.toFixed(2), old_sim: d.degraded.old_sim.toFixed(2), name: d.bind_voice }), true);
   lastTrainState = d.state;
 }
 
@@ -815,7 +816,7 @@ function drawCurve() {
 
   if (!lastCurve.length) {
     ctx.fillStyle = "#667795"; ctx.textAlign = "center"; ctx.font = "12px sans-serif";
-    ctx.fillText("门禁打分将随训练轮次实时出现在这里", w / 2, h / 2);
+    ctx.fillText(I.t("pro.curve_empty"), w / 2, h / 2);
     return;
   }
 
@@ -860,7 +861,7 @@ async function loadProfiles() {
     const d = await jfetch("/api/adr/v1/profiles");
     const sel = $("pSel");
     if (!d.profiles.length) {
-      sel.innerHTML = '<option value="">暂无音色档案 — 请先在「声音克隆」训练</option>';
+      sel.innerHTML = '<option value="">' + I.t("pro.no_profiles") + '</option>';
       return;
     }
     const prev = sel.value;
@@ -868,41 +869,41 @@ async function loadProfiles() {
       // 批次50: 版次/相似度/退化标注
       const tag = p.versions > 1 ? ` (v${p.versions})` : "";
       const sim = p.last_sim != null ? ` · sim ${Number(p.last_sim).toFixed(2)}` : "";
-      const warn = p.degraded ? " ⚠退化" : "";
+      const warn = p.degraded ? I.t("pro.warn_degraded") : "";
       return `<option value="${esc(p.name)}">${esc(p.name)}${tag}${sim}${warn}${p.style ? " · " + esc(p.style) : ""}</option>`;
     }).join("");
     if (prev) sel.value = prev;
     const cur = d.profiles.find(p => p.name === sel.value);
     $("pRollback").disabled = !cur || cur.versions <= 1;
     if (cur && cur.degraded)
-      toast(`⚠ 档案「${cur.name}」当前版本相似度明显退化 (${Number(cur.degraded.new_sim).toFixed(2)} < ${Number(cur.degraded.old_sim).toFixed(2)}), 建议回滚上一版`, true);
-  } catch (e) { toast("档案加载失败: " + e.message, true); }
+      toast(I.t("pro.toast_profile_degraded", { name: cur.name, new_sim: Number(cur.degraded.new_sim).toFixed(2), old_sim: Number(cur.degraded.old_sim).toFixed(2) }), true);
+  } catch (e) { toast(I.t("pro.toast_profiles_fail", { msg: e.message }), true); }
 }
 $("pRefresh").onclick = loadProfiles;
 
 /* 批次50: 权重版本回滚 — 现行入史, 上一版恢复现行 (可连续调用逐版回退) */
 $("pRollback").onclick = async () => {
   const name = $("pSel").value;
-  if (!name) { toast("请先选择音色档案", true); return; }
-  if (!confirm(`将「${name}」回滚到上一版权重？\n当前版本会保留在历史中 (可再次回滚/重训恢复)。`)) return;
+  if (!name) { toast(I.t("pro.toast_pick_profile"), true); return; }
+  if (!confirm(I.t("pro.confirm_rollback", { name }))) return;
   try {
     await jfetch("/api/adr/v1/profiles/" + encodeURIComponent(name) + "/rollback",
                  { method: "POST" });
-    toast("已回滚到上一版权重");
+    toast(I.t("pro.toast_rolled_back"));
     loadBindOptions();
     loadProfiles();
-  } catch (e) { toast("回滚失败: " + e.message, true); }
+  } catch (e) { toast(I.t("pro.toast_rollback_fail", { msg: e.message }), true); }
 };
 
 /* 批次47: 音色档案导出/导入 (.adrvoice 包, 含绑定权重) */
 $("pExport").onclick = () => {
   const name = $("pSel").value;
-  if (!name) { toast("请先选择音色档案", true); return; }
+  if (!name) { toast(I.t("pro.toast_pick_profile"), true); return; }
   const a = document.createElement("a");
   a.href = api("/api/adr/v1/profiles/" + encodeURIComponent(name) + "/export");
   a.download = name + ".adrvoice";
   document.body.appendChild(a); a.click(); a.remove();
-  toast("档案包下载中 — 含微调权重, 大小可能达数百 MB");
+  toast(I.t("pro.toast_exporting"));
 };
 
 $("pImportBtn").onclick = () => $("pImportFile").click();
@@ -920,17 +921,17 @@ $("pImportFile").onchange = async () => {
     try { j = await r.json(); } catch (_) { /* 500 非 JSON */ }
     return { ok: r.ok, j };
   };
-  toast("导入中… (视权重大小可能需要数十秒)");
+  toast(I.t("pro.toast_importing"));
   try {
     let { ok, j } = await doImport(false);
     if (!ok && (j.message || "").includes("档案已存在")
-        && confirm(j.message + "\n覆盖导入？")) {
+        && confirm(j.message + "\n" + I.t("pro.confirm_overwrite"))) {
       ({ ok, j } = await doImport(true));
     }
-    if (!ok) { toast(j.message || "导入失败", true); return; }
-    toast("导入成功: " + (j.imported && j.imported.name || ""));
+    if (!ok) { toast(j.message || I.t("pro.import_fail"), true); return; }
+    toast(I.t("pro.import_ok") + (j.imported && j.imported.name || ""));
     await loadProfiles();
-  } catch (e) { toast("导入失败: " + e.message, true); }
+  } catch (e) { toast(I.t("pro.import_fail_msg", { msg: e.message }), true); }
 };
 
 $("sSp").oninput = e => $("sSpV").textContent = (+e.target.value).toFixed(2);
@@ -941,12 +942,12 @@ let lastUrl = null;
 $("sGo").onclick = async () => {
   const profile = $("pSel").value;
   const text = $("sText").value.trim();
-  if (!profile) { toast("请先选择音色档案", true); return; }
-  if (!text) { toast("请输入合成文本", true); return; }
+  if (!profile) { toast(I.t("pro.toast_pick_profile"), true); return; }
+  if (!text) { toast(I.t("pro.toast_need_text"), true); return; }
   const btn = $("sGo");
   btn.disabled = true;
   const label = btn.textContent;
-  btn.textContent = "⟳ 合成中…（首次需加载引擎）";
+  btn.textContent = I.t("pro.btn_synth_busy");
   const t0 = performance.now();
   try {
     const ctrl = new AbortController();
@@ -984,11 +985,11 @@ $("sGo").onclick = async () => {
     $("rBox").innerHTML = `
       <audio controls autoplay src="${lastUrl}"></audio>
       <div class="row end" style="margin-top:10px">
-        <a class="btn" href="${lastUrl}" download="adr_tts_${Date.now()}.${ext}">⤓ 下载音频</a>
+        <a class="btn" href="${lastUrl}" download="adr_tts_${Date.now()}.${ext}">${I.t("pro.dl_audio")}</a>
       </div>`;
-    toast("合成完成");
+    toast(I.t("pro.toast_synth_done"));
   } catch (e) {
-    toast("合成失败: " + (e.name === "AbortError" ? "超时 (10 分钟)" : e.message), true);
+    toast(I.t("pro.toast_synth_fail", { msg: e.name === "AbortError" ? I.t("pro.timeout_10min") : e.message }), true);
   } finally {
     btn.disabled = false;
     btn.textContent = label;
@@ -1003,25 +1004,25 @@ async function loadModels() {
   try {
     const d = await jfetch("/api/adr/v1/models");
     modelRows = d.models;
-    $("mDir").textContent = "缓存目录: " + d.cache_dir;
+    $("mDir").textContent = I.t("pro.cache_dir") + d.cache_dir;
     renderModels();
     pollDl();
-  } catch (e) { $("errline").textContent = "模型清单加载失败: " + e.message; }
+  } catch (e) { $("errline").textContent = I.t("pro.models_fail", { msg: e.message }); }
 }
 function renderModels(dlName, dlPct) {
   $("mBody").innerHTML = modelRows.map(m => {
     const busy = dlName === m.name && dlPct != null && dlPct < 100;
     const act = m.downloaded
-      ? '<span class="tag ok">已缓存</span>'
+      ? '<span class="tag ok">' + I.t("pro.tag_cached") + '</span>'
       : busy
-        ? `<span class="tag run">${dlPct == null ? "下载中…" : dlPct + "%"}</span>`
-        : `<button class="btn" style="padding:4px 14px;font-size:12px" data-dl="${esc(m.name)}">下载</button>`;
+        ? `<span class="tag run">${dlPct == null ? I.t("pro.tag_downloading") : dlPct + "%"}</span>`
+        : `<button class="btn" style="padding:4px 14px;font-size:12px" data-dl="${esc(m.name)}">${I.t("pro.tag_download")}</button>`;
     return `<tr>
       <td><b>${esc(m.name)}</b></td>
       <td><span class="tag no">${esc(m.category)}</span></td>
       <td class="hint">${esc(m.description || "")}</td>
       <td>${m.size_mb} MB</td>
-      <td>${m.downloaded ? '<span class="tag ok">v' + esc(m.version || "?") + "</span>" : '<span class="tag no">未下载</span>'}</td>
+      <td>${m.downloaded ? '<span class="tag ok">v' + esc(m.version || "?") + "</span>" : '<span class="tag no">' + I.t("pro.tag_not_downloaded") + '</span>'}</td>
       <td>${act}</td>
     </tr>`;
   }).join("");
@@ -1033,8 +1034,8 @@ async function downloadModel(name) {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name })
     });
-    if (d.state === "already") { toast("该模型已在本地缓存"); return; }
-    toast("开始下载 " + name);
+    if (d.state === "already") { toast(I.t("pro.toast_already_cached")); return; }
+    toast(I.t("pro.toast_dl_start", { name }));
     $("mProgBox").style.display = "block";
     pollDl();
   } catch (e) { toast(e.message, true); }
@@ -1046,17 +1047,27 @@ function pollDl() {
     if (d.state === "downloading") {
       $("mProgBox").style.display = "block";
       $("mProg").style.width = (d.percent ?? 0) + "%";
-      $("mStat").textContent = `下载 ${d.name} … ${d.percent ?? "?"}%  (已进行 ${Math.round((d.elapsed_sec || 0))}s)`;
+      $("mStat").textContent = I.t("pro.dl_progress", { name: d.name, pct: d.percent ?? "?", sec: Math.round((d.elapsed_sec || 0)) });
       renderModels(d.name, d.percent);
       dlTimer = setTimeout(pollDl, 1500);
     } else {
       $("mProgBox").style.display = "none";
-      if (d.state === "done") { $("mStat").textContent = `✓ ${d.name} 下载完成`; loadModels(); }
-      else if (d.state === "failed") { $("mStat").textContent = `✗ ${d.name} 下载失败 (exit ${d.exit_code})`; }
+      if (d.state === "done") { $("mStat").textContent = I.t("pro.dl_done", { name: d.name }); loadModels(); }
+      else if (d.state === "failed") { $("mStat").textContent = I.t("pro.dl_failed", { name: d.name, code: d.exit_code }); }
       else $("mStat").textContent = "";
     }
   }).catch(() => { dlTimer = setTimeout(pollDl, 4000); });
 }
+</script>
+<script>
+I.init("pro", { onSwitch: () => {
+  loadStats();
+  loadBindOptions();
+  loadProfiles();
+  loadModels();
+  drawCurve();
+  drawSpark();
+}});
 </script>
 </body>
 </html>

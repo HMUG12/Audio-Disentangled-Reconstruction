@@ -53,7 +53,7 @@
 ### F. 多语言（已定：两者都要；批次位置待定）
 
 - [x] **合成多语言**（批次 53 已交付 2026-10-17）：GSV v2 底模支持中英日粤混说——语言参数暴露（合成 API + 控制台）+ 音色语言标记 + 多语言测试矩阵。落地：① 档案 language 标记全链路（save_voice/save_voice_auto/meta.json/profiles/create API + easy 建档语种选择）；② 语言默认联动档案语种（native /tts 省略 text_lang/prompt_lang → 档案 language，_resolve_profile 收口；v3 双工 init 补 prompt_lang 透传 + _push_task 联动；v3 /voices 暴露 language）；③ easy 合成面板语言下拉（auto 默认/中/英/日/韩/粤）；④ runtime 补 G2P 包（pyopenjtalk/jamo/ToJyutping/ko_pron 入 requirements + check_runtime 第 7 项体检）。**实测矩阵（yui 档案）**：zh/auto(中英混)/en/ja/yue 全通过，产物 output/multilang_test/；**ko 已知限制**：GSV ko 链依赖 g2pk2+eunjeon(mecab-ko)，Windows cp313 不可用——v1.1 宣传口径"中/英/日/粤 + 中英混说"，韩语待 v1.2 容器版（Linux 可装 eunjeon）。微调权重纯中文数据的日粤口音/相似度待用户听感定宣传口径。**用户听感反馈（2026-10-17）**：日/粤可接受；中英混说模式清晰度/流畅度略欠（底模特性，单语种不受影响）——已记入 release notes 已知限制，后续 v1.3 推理加速/引擎更新再看是否缓解
-- [ ] **UI 界面多语言**（批次 54）：控制台页面 i18n（中/英），面向海外发布。后做的理由：批次 53 会新增语言选择 UI，先 i18n 会返工
+- [x] **UI 界面多语言**（批次 54 已交付 2026-10-17）：控制台四页（index/easy/pro/call）中英文切换。落地：① 运行时 `i18n.js`（I.init/t/apply/setLang，data-i18n 五种属性 + {var} 占位 + localStorage("adr_lang") 持久化 + navigator.language 自动判定 + document.title/html lang 自动跟随）；② 各页独立字典 `i18n-{page}.js`（easy 79 keys / pro 169 keys / call 95 keys / index 9 keys，合计 352 keys，`[中文, English]` 双串格式）；③ 动态串函数化（STAGE_TXT/TRAIN_STATE_TXT 惰性求值）+ 尾部初始渲染挪到 I.init 之后（I.t 在 init 前返回 key 本身）；④ console.py `/i18n.js` + `/i18n-{page}.js` 白名单路由；⑤ 切换按钮自动注入 header 尾部，setLang 触发 onSwitch 回调重拉动态数据。**浏览器实测**：四页双向切换全过（EN↔中文、localStorage 持久化、动态文案 pollEngine/代码片段联动），console 零报错
 
 ## H. 下阶段路线图（2026-10-11 规划）
 
