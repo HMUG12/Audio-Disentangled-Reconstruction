@@ -64,6 +64,7 @@ async def profiles():
             "ref_audio": str(Path(voice_library.VOICES_DIR) / name / "ref.wav"),
             "prompt_text": meta.get("prompt_text", ""),
             "style": meta.get("style", ""),
+            "language": meta.get("language", "zh"),   # 批次53: 语种标记
             "t2s_weights": meta.get("t2s_weights"),
             "vits_weights": meta.get("vits_weights"),
             "created_at": meta.get("created_at", ""),
@@ -185,8 +186,9 @@ class NativeTTS_Request(BaseModel):
     text: str
     profile: str
     prompt_text: Optional[str] = None
-    text_lang: str = "zh"
-    prompt_lang: str = "zh"
+    # 批次53: 语言可省 → 默认联动档案语种 (无档案时兜底 zh, 见 _resolve_profile)
+    text_lang: Optional[str] = None
+    prompt_lang: Optional[str] = None
     speed_factor: float = 1.0
     seed: int = -1
     media_type: str = "wav"        # wav/raw/ogg/aac
@@ -201,13 +203,16 @@ class NativeTTS_Request(BaseModel):
 
 
 def _native_to_v2(body: NativeTTS_Request) -> dict:
-    """原生请求 → v2 核心 req (streaming_mode 映射: True → 分支 1 分段流)。"""
+    """原生请求 → v2 核心 req (streaming_mode 映射: True → 分支 1 分段流)。
+
+    批次53: 语言 None 保留为 None — _resolve_profile 按档案语种回填 (默认 zh)。
+    """
     return {
         "text": body.text,
-        "text_lang": body.text_lang.lower(),
+        "text_lang": body.text_lang.lower() if body.text_lang else None,
         "ref_audio_path": None,        # 由 profile 解析
         "prompt_text": body.prompt_text,
-        "prompt_lang": body.prompt_lang.lower(),
+        "prompt_lang": body.prompt_lang.lower() if body.prompt_lang else None,
         "speed_factor": body.speed_factor,
         "seed": body.seed,
         "media_type": body.media_type,

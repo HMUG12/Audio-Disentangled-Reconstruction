@@ -52,7 +52,7 @@
 
 ### F. 多语言（已定：两者都要；批次位置待定）
 
-- [ ] **合成多语言**（批次 53）：GSV v2 底模支持中英日韩混说——语言参数暴露（合成 API + 控制台）+ 音色语言标记 + 多语言测试矩阵。**底子盘点（2026-10-11）**：gsv_engine synthesize 已有 text_lang/prompt_lang 面，native/openai_compat 已透传——本批主要是 v2 兼容层透传 + 控制台语言选择 + 档案语言标记 + 实测（微调权重纯中文数据，日韩口音/相似度需探底定宣传口径）
+- [x] **合成多语言**（批次 53 已交付 2026-10-17）：GSV v2 底模支持中英日粤混说——语言参数暴露（合成 API + 控制台）+ 音色语言标记 + 多语言测试矩阵。落地：① 档案 language 标记全链路（save_voice/save_voice_auto/meta.json/profiles/create API + easy 建档语种选择）；② 语言默认联动档案语种（native /tts 省略 text_lang/prompt_lang → 档案 language，_resolve_profile 收口；v3 双工 init 补 prompt_lang 透传 + _push_task 联动；v3 /voices 暴露 language）；③ easy 合成面板语言下拉（auto 默认/中/英/日/韩/粤）；④ runtime 补 G2P 包（pyopenjtalk/jamo/ToJyutping/ko_pron 入 requirements + check_runtime 第 7 项体检）。**实测矩阵（yui 档案）**：zh/auto(中英混)/en/ja/yue 全通过，产物 output/multilang_test/；**ko 已知限制**：GSV ko 链依赖 g2pk2+eunjeon(mecab-ko)，Windows cp313 不可用——v1.1 宣传口径"中/英/日/粤 + 中英混说"，韩语待 v1.2 容器版（Linux 可装 eunjeon）。微调权重纯中文数据的日粤口音/相似度待用户听感定宣传口径
 - [ ] **UI 界面多语言**（批次 54）：控制台页面 i18n（中/英），面向海外发布。后做的理由：批次 53 会新增语言选择 UI，先 i18n 会返工
 
 ## H. 下阶段路线图（2026-10-11 规划）

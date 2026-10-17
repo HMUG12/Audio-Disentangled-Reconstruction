@@ -101,6 +101,12 @@ def _resolve_profile(request: Request, req: dict):
             t2s_weights=req.get("t2s_weights"),
             vits_weights=req.get("vits_weights"),
         ))
+        # 批次53: 语言未显式传入 (None) 时按档案语种兜底 — 参考音频是档案语种,
+        # 合成文本默认同语种最稳; 显式传入 (含 easy 面板 auto/en/...) 不覆盖。
+        if req.get("text_lang") is None:
+            req["text_lang"] = meta.get("language") or "zh"
+        if req.get("prompt_lang") is None:
+            req["prompt_lang"] = meta.get("language") or "zh"
     return None
 
 
