@@ -427,6 +427,8 @@ const RELEASES_URL = "https://github.com/HMUG12/Audio-Disentangled-Reconstructio
 const setOv = document.getElementById("set-ov");
 const $st = id => document.getElementById(id);
 let stAutostart = false;   // 注册表当前真值 (保存时比对, 避免无谓写注册表)
+let _compatTouched = false; // 批次57 review: 用户是否主动碰过兼容勾选框 (未碰则保存保持 null 自动语义)
+let stCompatLoaded = null;  // 上次加载的 compat_cpu 真值 (null=自动语义; 保存时判断"此前是否显式值")
 let stPaths = {};          // app_paths 缓存 (打开日志/数据目录)
 
 // 引擎就绪 → 拉档案列表填默认档案下拉 (datalist)
@@ -466,13 +468,19 @@ async function openSettings() {
     $st("st-cuda").checked = !!cfg.cudagraph;
     $st("st-device").value = (cfg.device === "cuda" || cfg.device === "cpu") ? cfg.device : "auto";
     $st("st-threads").value = cfg.torch_threads || "";
+    _compatTouched = false;   // 每次打开面板重置触碰标记
+    stCompatLoaded = cfg.compat_cpu;  // 记住加载真值 (saveSettings 需判断"此前是否显式")
     $st("st-compat").checked = !!cfg.compat_cpu;
-    // 批次57: 未手动设置时, 壳检测到 13/14 代会自动启用 — 提示出来避免"勾了没生效"困惑
+    // 批次57: 未手动设置时, 壳检测到 13/14 代会自动启用 — 勾选框回填实际生效
+    // 状态 (否则"提示已启用但框是空的"自相矛盾), 提示避免"勾了没生效"困惑
     const _compatHint = document.getElementById("st-compat-hint");
     if (_compatHint) {
       if (cfg.compat_cpu == null) {
         inv("cpu_compat_auto").then(auto => {
-          _compatHint.textContent = auto ? "（检测到 13/14 代 Intel，已自动启用）" : "";
+          if (auto) {
+            if (!_compatTouched) $st("st-compat").checked = true;
+            _compatHint.textContent = "（检测到 13/14 代 Intel，已自动启用）";
+          }
         }).catch(() => {});
       } else {
         _compatHint.textContent = "";
@@ -506,7 +514,11 @@ async function saveSettings() {
       cudagraph: $st("st-cuda").checked,
       device: $st("st-device").value,
       torch_threads: Math.min(Math.max(parseInt($st("st-threads").value, 10) || 0, 0), 128),
-      compat_cpu: $st("st-compat").checked,
+      // 批次57 review: 仅用户主动设置过 (或此前就是显式值) 才发 true/false —
+      // 未触碰保持 null 自动语义, 避免"只改 API key 保存一次"就把 13 代
+      // 自动兼容固化成 Some(false) 而静默失效
+      compat_cpu: (_compatTouched || stCompatLoaded != null)
+        ? $st("st-compat").checked : null,
     };
     await inv("save_shell_settings", { settings: cfg });
     if (cfg.autostart !== stAutostart) {
@@ -526,6 +538,7 @@ async function saveSettings() {
 }
 
 $st("set-link").addEventListener("click", openSettings);
+$st("st-compat").addEventListener("change", () => { _compatTouched = true; });
 $st("set-x").addEventListener("click", () => setOv.classList.remove("on"));
 setOv.addEventListener("click", e => { if (e.target === setOv) setOv.classList.remove("on"); });
 $st("st-save").addEventListener("click", saveSettings);
