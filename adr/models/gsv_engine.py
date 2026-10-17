@@ -378,12 +378,16 @@ class GSVEngine:
             if _th > 0:
                 torch.set_num_threads(_th)
             device = self.config.device
+            _forced = device != "auto"   # config 显式指定 = 用户主动选择 (批次57 review)
             if device == "auto":
                 # 批次49: ADR_TTS_DEVICE 决定 auto 的走向 (壳设置中心/低配机器
                 # 强制 CPU); config 显式传参不受影响
                 env_dev = settings.tts_device()
-                device = env_dev if env_dev != "auto" \
-                    else ("cuda" if torch.cuda.is_available() else "cpu")
+                if env_dev != "auto":
+                    device = env_dev
+                    _forced = True       # env 强制 CPU 同理
+                else:
+                    device = "cuda" if torch.cuda.is_available() else "cpu"
             # 批次57: GPU 档案落日志 (排障关键: N 卡型号/算力/显存/驱动代际一目了然)
             if device == "cuda":
                 try:
@@ -403,7 +407,12 @@ class GSVEngine:
                     logging.getLogger("adr").debug("[gpu] 诊断信息获取失败", exc_info=True)
             elif torch.version.cuda:
                 _drv = _nvidia_driver_version()
-                if _drv:
+                if _drv and _forced:
+                    # 批次57 review: 强制 CPU 是主动选择, 驱动正常时落 info 而非
+                    # 误导性"请升级驱动"警告 (该警告只针对 auto 判定回退场景)
+                    logging.getLogger("adr").info(
+                        "[gpu] 按配置强制 CPU 运行 (N 卡驱动 %s 正常)", _drv)
+                elif _drv:
                     # 经典故障: 装了 CUDA 轮子但驱动过旧 → is_available()=False 静默回退 CPU
                     logging.getLogger("adr").warning(
                         "[gpu] N 卡驱动 %s 已装但 CUDA 不可用 — 本轮子 (CUDA %s) 通常"

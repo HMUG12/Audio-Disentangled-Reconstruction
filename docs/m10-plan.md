@@ -141,8 +141,10 @@
 - [x] **兼容性第二批（同日续）— OOM 分流**：gsv_engine 新增 `is_cuda_oom`（不引 torch，按类型名 + 模块前缀判定）与 `handle_cuda_oom`（单点善后：立即 `empty_cache()` 防显存碎片化 + 警告日志 + 用户可读提示）；v2_compat `tts_handle` 非 OOM 之外的异常分流为 503 `{"code":"cuda_oom", "message": 提示}`（此前裸 400 堆栈原文）；流式路径响应头已发只断流 + 落友好日志（native.py tts_get/tts_post 复用 tts_handle 全覆盖）
 - [x] **兼容性第二批 — 驱动版本诊断**：gsv_engine `_nvidia_driver_version()`（nvidia-smi `--query-gpu=driver_version` 零依赖）；`[gpu]` 日志行带驱动版本；**"驱动已装但 CUDA 不可用"显式警告**（驱动低于 torch 轮子所需 → 静默回退 CPU 的经典故障）+ 算力 <7.0 老卡警告
 - [x] **兼容性第二批 — UI 自动启用提示**：launcher.html `cpu_compat_auto` 命令查询 + 勾选框旁 "（检测到 13/14 代 Intel，已自动启用）"；用户手动设置过则不显示
-- [x] **兼容性第二批 — 下载失败引导**：gsv_bootstrap 三源全失败错误文案追加网络/代理检查指引（需可达 hf-mirror.com / huggingface.co / modelscope.cn）+ 修复后重启引擎重试
+- [x] 兼容性第二批 — 下载失败引导：gsv_bootstrap 三源全失败错误文案追加网络/代理检查指引（需可达 hf-mirror.com / huggingface.co / modelscope.cn）+ 修复后重启引擎重试
 - [x] 验证：cargo test 5/5（env_overrides 单测扩至 12 项断言 + 新增自动语义用例）+ python 导入 faulthandler 断言通过 + 兼容性第二批 python 验证（3 文件 ast + import + is_cuda_oom True/False 判定 + 驱动查询兜底）通过
+- [x] **review 修复（双子代理交叉验证 2/2 确认）**：① **launcher 保存固化 compat_cpu（major）**——loadSettings `!!null` 渲染成未勾选 + saveSettings 无条件发 checked，13 代用户保存任意设置即把自动兼容固化成 `Some(false)` 永久压制自动检测（单测语义铁证）；修复 = `_compatTouched` 触碰跟踪（change 监听 + loadSettings 重置 + auto 回调时序防御）+ 保存 `(touched || 此前显式值) ? checked : null` 保住 null 自动语义 + 勾选框回填实际生效状态（自动启用显示已勾选，消除提示与勾选框自相矛盾）；实现时捕获 saveSettings 对象字面量内引用正在构造的 `cfg` 自身（TDZ → 每次保存必 ReferenceError），改模块级 `stCompatLoaded` 记载上次加载真值。② **强制 CPU 驱动警告误报（minor）**——gsv_engine elif 分支只看"驱动已装"就落"请升级驱动"warning，config 显式 cpu（eval_secs/train_gate）与 env 强制 cpu（ADR_TTS_DEVICE）两条主动路径必误报；修复 = `_forced` 标记，主动选择 + 驱动正常落 info"按配置强制 CPU 运行"，警告仅保留 auto 判定回退场景
+- [x] review 修复验证：3 文件 ast + gsv_engine import + OOM 判定回归 + 两处修复源码级断言（含 TDZ 残留检查、括号平衡）全绿；cargo 侧无改动
 
 ## 原则
 
