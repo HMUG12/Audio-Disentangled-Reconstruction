@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'">
 <title>ADR · 我的语音小助手</title>
+<script src="/i18n.js"></script>
+<script src="/i18n-easy.js"></script>
 <style>
   :root {
     color-scheme: light;
@@ -184,59 +186,59 @@
 <body>
 
 <header>
-  <div class="logo">🎙 ADR 语音小助手<small>三步就能让文字开口说话</small></div>
-  <button id="back">← 返回</button>
+  <div class="logo" data-i18n-html="easy.logo">🎙 ADR 语音小助手<small>三步就能让文字开口说话</small></div>
+  <button id="back" data-i18n="easy.back">← 返回</button>
 </header>
 
 <div class="wrap">
 
   <div class="steps">
-    <div class="stp on" id="s1"><div class="dot">1</div><div class="lb">选声音</div></div>
+    <div class="stp on" id="s1"><div class="dot">1</div><div class="lb" data-i18n="easy.lb_voice">选声音</div></div>
     <div class="ln" id="l1"></div>
-    <div class="stp" id="s2"><div class="dot">2</div><div class="lb">打字</div></div>
+    <div class="stp" id="s2"><div class="dot">2</div><div class="lb" data-i18n="easy.lb_type">打字</div></div>
     <div class="ln" id="l2"></div>
-    <div class="stp" id="s3"><div class="dot">3</div><div class="lb">听效果</div></div>
+    <div class="stp" id="s3"><div class="dot">3</div><div class="lb" data-i18n="easy.lb_listen">听效果</div></div>
   </div>
 
   <!-- ============ 第 1 步: 选声音 ============ -->
   <div class="card" id="step1">
     <!-- 声音列表视图 -->
     <div id="vList">
-      <h1>先选一个声音 🎙</h1>
-      <div class="desc">点一下想用的声音。第一次用？点下面的 <b>创建新声音</b>，一分钟就好。</div>
+      <h1 data-i18n="easy.pick_title">先选一个声音 🎙</h1>
+      <div class="desc" data-i18n-html="easy.pick_desc">点一下想用的声音。第一次用？点下面的 <b>创建新声音</b>，一分钟就好。</div>
       <div class="voices" id="vGrid"></div>
       <div style="margin-top:24px">
-        <button class="btn g big" id="goStep2" disabled>下一步：打字 →</button>
+        <button class="btn g big" id="goStep2" disabled data-i18n="easy.next_typing">下一步：打字 →</button>
       </div>
     </div>
 
     <!-- 创建新声音视图 -->
     <div id="vCreate" class="hidden">
-      <h1>创建你的新声音 ✨</h1>
-      <div class="desc">准备一段 <b>说话录音</b>（一分钟以上、环境安静、只录一个人说话，效果最好）。</div>
+      <h1 data-i18n="easy.create_title">创建你的新声音 ✨</h1>
+      <div class="desc" data-i18n-html="easy.create_desc">准备一段 <b>说话录音</b>（一分钟以上、环境安静、只录一个人说话，效果最好）。</div>
       <div class="up" id="upZone">
         <input type="file" id="upFile" accept=".wav,.mp3,.flac,.m4a,.ogg">
-        <div class="big" id="upTxt">📱 点这里选择录音文件</div>
-        <div>也可以把文件拖进来 · 支持 wav / mp3 / flac / m4a / ogg</div>
+        <div class="big" id="upTxt" data-i18n="easy.up_pick">📱 点这里选择录音文件</div>
+        <div data-i18n="easy.up_drag">也可以把文件拖进来 · 支持 wav / mp3 / flac / m4a / ogg</div>
       </div>
       <label class="lbl" id="wImproveRow" style="display:none;cursor:pointer">
         <input type="checkbox" id="wImprove" checked style="accent-color:#10b981">
-        🔁 改进已有声音「<span id="wImproveName"></span>」— 用新录音继续训练，让它更像（旧版本自动保留，变差可回滚）
+        <span data-i18n="easy.improve_a">🔁 改进已有声音「</span><span id="wImproveName"></span><span data-i18n="easy.improve_b">」— 用新录音继续训练，让它更像（旧版本自动保留，变差可回滚）</span>
       </label>
-      <div class="lbl" id="vNameRow">给这个声音起个名字</div>
-      <input type="text" id="vName" value="我的声音" maxlength="20">
+      <div class="lbl" id="vNameRow" data-i18n="easy.name_label">给这个声音起个名字</div>
+      <input type="text" id="vName" value="我的声音" maxlength="20" data-i18n-value="easy.name_default">
       <!-- 批次53: 录音语种 — 决定档案标记, 影响后续合成默认语言 -->
-      <div class="lbl">这段录音说的是什么语言</div>
+      <div class="lbl" data-i18n="easy.rec_lang_label">这段录音说的是什么语言</div>
       <select id="vLang" style="width:100%;padding:11px 12px;border:1px solid #d8dce8;border-radius:10px;background:#fff;font-size:14px;color:#2a2f3e">
-        <option value="zh" selected>中文</option>
-        <option value="en">English</option>
-        <option value="ja">日本語</option>
-        <option value="ko">한국어</option>
-        <option value="yue">粤语</option>
+        <option value="zh" selected data-i18n="easy.lang_zh">中文</option>
+        <option value="en" data-i18n="easy.lang_en">English</option>
+        <option value="ja" data-i18n="easy.lang_ja">日本語</option>
+        <option value="ko" data-i18n="easy.lang_ko">한국어</option>
+        <option value="yue" data-i18n="easy.lang_yue">粤语</option>
       </select>
       <div style="margin-top:26px;display:flex;gap:12px">
-        <button class="btn w" id="cBack">← 上一步</button>
-        <button class="btn g" id="cGo" style="flex:1" disabled>开始学习这个声音</button>
+        <button class="btn w" id="cBack" data-i18n="easy.prev">← 上一步</button>
+        <button class="btn g" id="cGo" style="flex:1" disabled data-i18n="easy.c_go">开始学习这个声音</button>
       </div>
     </div>
 
@@ -244,62 +246,62 @@
     <div id="vWork" class="hidden">
       <div class="loading">
         <div class="spin"></div>
-        <div class="t1" id="wTitle">正在学习你的声音…</div>
+        <div class="t1" id="wTitle" data-i18n="easy.w_title_create">正在学习你的声音…</div>
         <div class="pbar"><i id="wBar"></i></div>
         <div class="ptxt" id="wPct">0%</div>
-        <div class="t2" id="wMsg">正在准备，请稍等…<br>第一次需要一点点时间，之后就会很快。</div>
-        <button class="btn w sm hidden" id="wTrain" style="margin-top:16px">
+        <div class="t2" id="wMsg" data-i18n-html="easy.w_msg_initial">正在准备，请稍等…<br>第一次需要一点点时间，之后就会很快。</div>
+        <button class="btn w sm hidden" id="wTrain" style="margin-top:16px" data-i18n="easy.w_train">
           💪 进阶：继续练习，让声音更像（可选）
         </button>
-        <button class="btn g big hidden" id="wNext" style="margin-top:18px">好了，去打字 →</button>
+        <button class="btn g big hidden" id="wNext" style="margin-top:18px" data-i18n="easy.w_next">好了，去打字 →</button>
       </div>
     </div>
   </div>
 
   <!-- ============ 第 2 步: 打字 ============ -->
   <div class="card hidden" id="step2">
-    <h1>想让它说什么？⌨️</h1>
-    <div class="desc">把文字打在下面，点绿色大按钮就行。</div>
+    <h1 data-i18n="easy.s2_title">想让它说什么？⌨️</h1>
+    <div class="desc" data-i18n="easy.s2_desc">把文字打在下面，点绿色大按钮就行。</div>
     <div class="voicebar">🎙 <span id="curVoice">—</span>
-      <button id="changeVoice">换个声音</button></div>
-    <textarea id="txt" placeholder="在这里打字，比如：大家好，很高兴认识你！"></textarea>
+      <button id="changeVoice" data-i18n="easy.change_voice">换个声音</button></div>
+    <textarea id="txt" placeholder="在这里打字，比如：大家好，很高兴认识你！" data-i18n-ph="easy.txt_ph"></textarea>
     <div class="chips">
-      <button class="chip">大家好，很高兴认识你！</button>
-      <button class="chip">今天天气真好，我们一起去公园散步吧。</button>
-      <button class="chip">感谢大家的收听，我们下期再见。</button>
+      <button class="chip" data-i18n="easy.chip1">大家好，很高兴认识你！</button>
+      <button class="chip" data-i18n="easy.chip2">今天天气真好，我们一起去公园散步吧。</button>
+      <button class="chip" data-i18n="easy.chip3">感谢大家的收听，我们下期再见。</button>
     </div>
     <!-- 批次53: 合成语言选择 — auto 为引擎自动识别 (中英混说友好) -->
     <div style="margin-top:16px;display:flex;align-items:center;gap:10px">
-      <span class="mini" style="flex:none">说什么语言</span>
+      <span class="mini" style="flex:none" data-i18n="easy.t_lang_label">说什么语言</span>
       <select id="tLang" style="flex:1;padding:9px 12px;border:1px solid #d8dce8;border-radius:10px;background:#fff;font-size:14px;color:#2a2f3e">
-        <option value="auto" selected>自动识别（中英混合也没问题）</option>
-        <option value="zh">中文</option>
-        <option value="en">English</option>
-        <option value="ja">日本語</option>
-        <option value="ko">한국어</option>
-        <option value="yue">粤语</option>
+        <option value="auto" selected data-i18n="easy.tlang_auto">自动识别（中英混合也没问题）</option>
+        <option value="zh" data-i18n="easy.lang_zh">中文</option>
+        <option value="en" data-i18n="easy.lang_en">English</option>
+        <option value="ja" data-i18n="easy.lang_ja">日本語</option>
+        <option value="ko" data-i18n="easy.lang_ko">한국어</option>
+        <option value="yue" data-i18n="easy.lang_yue">粤语</option>
       </select>
     </div>
     <div style="margin-top:24px;display:flex;gap:12px">
-      <button class="btn w" id="tBack">← 上一步</button>
-      <button class="btn g" id="tGo" style="flex:1">✨ 生成语音</button>
+      <button class="btn w" id="tBack" data-i18n="easy.prev">← 上一步</button>
+      <button class="btn g" id="tGo" style="flex:1" data-i18n="easy.t_go">✨ 生成语音</button>
     </div>
-    <div class="mini" id="tHint">第一次生成要等一会儿（约 1-2 分钟），之后就快了。</div>
+    <div class="mini" id="tHint" data-i18n="easy.t_hint">第一次生成要等一会儿（约 1-2 分钟），之后就快了。</div>
   </div>
 
   <!-- ============ 第 3 步: 听效果 ============ -->
   <div class="card hidden" id="step3">
     <div class="result">
-      <h1>好啦，听听看 🎧</h1>
-      <div class="desc">不满意？改改文字再生成一次。</div>
-      <button class="rball" id="playBtn" title="播放">
+      <h1 data-i18n="easy.s3_title">好啦，听听看 🎧</h1>
+      <div class="desc" data-i18n="easy.s3_desc">不满意？改改文字再生成一次。</div>
+      <button class="rball" id="playBtn" title="播放" data-i18n-title="easy.play">
         <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
       </button>
       <audio id="player" controls class="hidden"></audio>
       <div class="brow">
-        <button class="btn w" id="rSave">⤓ 保存</button>
-        <button class="btn w" id="rEdit">✏️ 改文字</button>
-        <button class="btn g" id="rVoice">🎙 换声音</button>
+        <button class="btn w" id="rSave" data-i18n="easy.save">⤓ 保存</button>
+        <button class="btn w" id="rEdit" data-i18n="easy.edit">✏️ 改文字</button>
+        <button class="btn g" id="rVoice" data-i18n="easy.r_voice">🎙 换声音</button>
       </div>
     </div>
   </div>
@@ -309,6 +311,7 @@
 
 <script>
 "use strict";
+I.init("easy", { onSwitch: () => renderVoices() });
 /* ---- 基础设施: api_key 透传 / 请求 / toast ---- */
 const KEY = new URLSearchParams(location.search).get("api_key");
 const api = p => p + (KEY ? (p.includes("?") ? "&" : "?") + "api_key=" + encodeURIComponent(KEY) : "");
@@ -324,7 +327,7 @@ function toast(msg) {
 async function jf(url, opts) {
   const r = await fetch(api(url), opts);
   if (!r.ok) {
-    let m = "服务开小差了 (" + r.status + ")";
+    let m = I.t("easy.err_server", {s: r.status});
     try { const j = await r.json(); if (j.detail || j.message) m = j.detail || j.message; } catch {}
     throw new Error(m);
   }
@@ -333,9 +336,9 @@ async function jf(url, opts) {
 /* 把后端报错翻译成人话 */
 function human(e) {
   const s = String(e.message || e);
-  if (s.includes("Failed to fetch")) return "连不上语音服务，请稍后再试";
-  if (s.includes("同名声音")) return "这个名字已经用过啦，换一个名字试试";
-  if (s.includes("已有")) return "上一件事还没做完，稍等一下哦";
+  if (s.includes("Failed to fetch")) return I.t("easy.err_fetch");
+  if (s.includes("同名声音")) return I.t("easy.err_dup_name");
+  if (s.includes("已有")) return I.t("easy.err_busy");
   return s;
 }
 
@@ -381,11 +384,11 @@ function renderVoices() {
         </svg>
       </div>
       <div class="nm">${p.name.replace(/</g, "&lt;")}</div>
-      <div class="tag">${p.style ? p.style.replace(/</g, "&lt;") : "点我选它"}</div>
+      <div class="tag">${p.style ? p.style.replace(/</g, "&lt;") : I.t("easy.tag_pick")}</div>
     </div>`).join("") + `
     <div class="vc add" id="addCard">
-      <div class="plus">＋</div><b>创建新声音</b>
-      <div style="font-size:12.5px">用一段录音，一分钟就好</div>
+      <div class="plus">＋</div><b>${I.t("easy.add_title")}</b>
+      <div style="font-size:12.5px">${I.t("easy.add_sub")}</div>
     </div>`;
   g.querySelectorAll(".vc[data-n]").forEach(el => el.onclick = () => {
     selected = decodeURIComponent(el.dataset.n);
@@ -417,7 +420,7 @@ upZone.ondrop = e => {
 $("upFile").onchange = e => e.target.files[0] && pick(e.target.files[0]);
 function pick(f) {
   audioPath = "";
-  $("upTxt").textContent = "正在上传… " + f.name;
+  $("upTxt").textContent = I.t("easy.uploading", {name: f.name});
   const fd = new FormData();
   fd.append("file", f);
   fetch(api("/api/adr/v1/train/upload"), { method: "POST", body: fd })
@@ -425,12 +428,12 @@ function pick(f) {
     .then(d => {
       audioPath = d.path;
       upZone.classList.add("done");
-      $("upTxt").textContent = "✓ 收到！这段录音可以用了";
+      $("upTxt").textContent = I.t("easy.up_ok");
       $("cGo").disabled = false;
     })
     .catch(() => {
-      $("upTxt").textContent = "上传失败，再试一次吧";
-      toast("上传失败了，检查一下网络再试试");
+      $("upTxt").textContent = I.t("easy.up_fail");
+      toast(I.t("easy.up_fail_toast"));
     });
 }
 $("vName").oninput = e => { $("cGo").disabled = !audioPath || !e.target.value.trim(); };
@@ -440,7 +443,7 @@ function syncImproveMode() {
   $("vNameRow").style.visibility = improve ? "hidden" : "visible";
   $("vName").style.visibility = improve ? "hidden" : "visible";
   $("vName").disabled = improve;
-  $("cGo").textContent = improve ? `开始改进「${selected}」` : "开始学习这个声音";
+  $("cGo").textContent = improve ? I.t("easy.c_go_improve", {name: selected}) : I.t("easy.c_go");
   $("cGo").disabled = !audioPath || (!improve && !$("vName").value.trim());
 }
 $("wImprove").onchange = syncImproveMode;
@@ -482,11 +485,11 @@ function startWork(mode) {
   $("wBar").style.width = "0%";
   $("wPct").textContent = "0%";
   if (mode === "profile") {
-    $("wTitle").textContent = "正在学习你的声音…";
-    $("wMsg").innerHTML = "正在仔细听你的录音，挑出最好听的一段。<br>第一次要 1-3 分钟，去倒杯水吧 ☕";
+    $("wTitle").textContent = I.t("easy.w_title_create");
+    $("wMsg").innerHTML = I.t("easy.w_msg_profile");
   } else {
-    $("wTitle").textContent = "正在加练，让声音更像…";
-    $("wMsg").innerHTML = "声音正在反复练习你录音里的每个字。<br>这一步比较久（可能 20-60 分钟），可以先去干别的，回来再看。";
+    $("wTitle").textContent = I.t("easy.w_title_train");
+    $("wMsg").innerHTML = I.t("easy.w_msg_train");
   }
   pollWork();
 }
@@ -501,13 +504,13 @@ function pollWork() {
       if (d.message) $("wMsg").textContent = d.message;
       if (d.state === "done") {
         selected = d.name;
-        $("wTitle").textContent = "🎉 学会了！你的声音准备好啦";
-        $("wMsg").textContent = "现在就能用它说话。想让它更像你？可以再加练一会儿（可选）。";
+        $("wTitle").textContent = I.t("easy.w_done_title");
+        $("wMsg").textContent = I.t("easy.w_done_msg");
         $("wNext").classList.remove("hidden");
         $("wTrain").classList.remove("hidden");
       } else if (d.state === "failed") {
-        $("wTitle").textContent = "😔 这次没学会";
-        $("wMsg").textContent = "出了点小问题: " + (d.message || "未知原因") + "。换个录音试试？";
+        $("wTitle").textContent = I.t("easy.w_fail_title");
+        $("wMsg").textContent = I.t("easy.w_fail_msg", {msg: d.message || I.t("easy.unknown_reason")});
         addRetryBtn();
       } else {
         workTimer = setTimeout(pollWork, 2000);
@@ -519,15 +522,15 @@ function pollWork() {
       $("wBar").style.width = pct + "%";
       $("wPct").textContent = Math.round(pct) + "%";
       $("wMsg").textContent = d.state === "running"
-        ? `正在练习第 ${done + 1} 轮 / 共 ${total} 轮… 练完这轮就会更像啦`
-        : d.state === "done" ? "练习完成！" : d.message || "…";
+        ? I.t("easy.train_round", {n: done + 1, total: total})
+        : d.state === "done" ? I.t("easy.practice_done") : d.message || "…";
       if (d.state === "done" || d.state === "stopped") {
-        $("wTitle").textContent = d.early_stop ? "🎉 提前出师！声音已经很棒了" : "🎉 练习完成！";
-        $("wMsg").textContent = d.best_sim ? `这次练习的相似度得分: ${d.best_sim.toFixed(2)}（满分 1 分）` : "声音已经准备好啦";
+        $("wTitle").textContent = d.early_stop ? I.t("easy.w_early_title") : I.t("easy.practice_done");
+        $("wMsg").textContent = d.best_sim ? I.t("easy.sim_score", {score: d.best_sim.toFixed(2)}) : I.t("easy.voice_ready");
         $("wNext").classList.remove("hidden");
       } else if (d.state === "failed") {
-        $("wTitle").textContent = "😔 练习中断了";
-        $("wMsg").textContent = "别担心，刚才学到的还能用。可以重新试一次。";
+        $("wTitle").textContent = I.t("easy.w_interrupt_title");
+        $("wMsg").textContent = I.t("easy.w_interrupt_msg");
         addRetryBtn();
       } else {
         workTimer = setTimeout(pollWork, 3000);
@@ -537,13 +540,13 @@ function pollWork() {
 }
 function addRetryBtn() {
   const b = $("wNext");
-  b.textContent = "↻ 重试";
+  b.textContent = I.t("easy.retry");
   b.classList.remove("hidden");
   b.onclick = retryWork;
 }
 function retryWork() {
   const b = $("wNext");
-  b.textContent = "好了，去打字 →";
+  b.textContent = I.t("easy.w_next");
   b.onclick = workNext;
   $("vWork").classList.add("hidden");
   $("vCreate").classList.remove("hidden");
@@ -590,13 +593,13 @@ $("tBack").onclick = () => showStep(1);
 
 $("tGo").onclick = async () => {
   const text = $("txt").value.trim();
-  if (!selected) { toast("先回上一步选个声音哦"); return showStep(1); }
-  if (!text) { toast("先打几个字吧～"); return; }
+  if (!selected) { toast(I.t("easy.toast_pick_first")); return showStep(1); }
+  if (!text) { toast(I.t("easy.toast_type_first")); return; }
   const btn = $("tGo");
   btn.disabled = true;
   const old = btn.textContent;
-  btn.textContent = "⏳ 正在生成，请稍等…";
-  $("tHint").textContent = "正在让声音练习说这句话…";
+  btn.textContent = I.t("easy.generating");
+  $("tHint").textContent = I.t("easy.hint_generating");
   const t0 = performance.now();
   try {
     const ctrl = new AbortController();
@@ -627,8 +630,8 @@ $("tGo").onclick = async () => {
     showStep(3);
     $("player").play().catch(() => {});
   } catch (e) {
-    toast("生成失败: " + human(e));
-    $("tHint").textContent = "第一次生成要等一会儿（约 1-2 分钟），之后就快了。";
+    toast(I.t("easy.gen_failed", {msg: human(e)}));
+    $("tHint").textContent = I.t("easy.t_hint");
   } finally {
     btn.disabled = false;
     btn.textContent = old;

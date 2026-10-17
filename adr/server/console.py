@@ -664,3 +664,18 @@ def register_pages(app) -> None:
     @app.get("/call", include_in_schema=False)
     async def _call():
         return FileResponse(STATIC_DIR / "call.html", media_type="text/html")
+
+    # 批次54: 控制台中英文切换运行时 (页面统一引用 /i18n.js, 同源不撞 CSP)
+    @app.get("/i18n.js", include_in_schema=False)
+    async def _i18n_js():
+        return FileResponse(STATIC_DIR / "i18n.js", media_type="application/javascript")
+
+    # 批次54: 各页字典 /i18n-easy.js /i18n-pro.js /i18n-call.js (白名单, 缺文件 404)
+    @app.get("/i18n-{page}.js", include_in_schema=False)
+    async def _i18n_dict_js(page: str):
+        if page not in ("easy", "pro", "call", "index"):
+            raise HTTPException(status_code=404)
+        f = STATIC_DIR / f"i18n-{page}.js"
+        if not f.is_file():
+            raise HTTPException(status_code=404)
+        return FileResponse(f, media_type="application/javascript")

@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'">
 <title>ADR Studio · 控制台索引</title>
+<script src="/i18n.js"></script>
+<script src="/i18n-index.js"></script>
 <style>
   :root { color-scheme: dark; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -35,36 +37,40 @@
 <body>
   <div class="wrap">
     <div class="logo">ADR <em>Studio</em></div>
-    <div class="sub">本地低资源语音克隆 · 控制台索引（浏览器直达）</div>
+    <div class="sub" data-i18n="index.sub">本地低资源语音克隆 · 控制台索引（浏览器直达）</div>
     <div class="grid">
       <a class="card" href="/easy">
         <div class="ic">🎙️</div>
         <div>
-          <div class="ttl">新手控制台</div>
-          <div class="dsc">3 步出声 · 零参数 · 纯小白友好</div>
+          <div class="ttl" data-i18n="index.easy_title">新手控制台</div>
+          <div class="dsc" data-i18n="index.easy_desc">3 步出声 · 零参数 · 纯小白友好</div>
         </div>
         <div class="arrow">→</div>
       </a>
       <a class="card" href="/pro">
         <div class="ic">📊</div>
         <div>
-          <div class="ttl">专业控制台</div>
-          <div class="dsc">数据可视化 · 训练曲线 · 模型库全参数</div>
+          <div class="ttl" data-i18n="index.pro_title">专业控制台</div>
+          <div class="dsc" data-i18n="index.pro_desc">数据可视化 · 训练曲线 · 模型库全参数</div>
         </div>
         <div class="arrow">→</div>
       </a>
       <a class="card" href="/call">
         <div class="ic">🔗</div>
         <div>
-          <div class="ttl">调用控制台</div>
-          <div class="dsc">API 参数调优 · 生成 cURL/Python/JS 对接代码 · 合成试听</div>
+          <div class="ttl" data-i18n="index.call_title">调用控制台</div>
+          <div class="dsc" data-i18n="index.call_desc">API 参数调优 · 生成 cURL/Python/JS 对接代码 · 合成试听</div>
         </div>
         <div class="arrow">→</div>
       </a>
     </div>
-    <div class="sub" style="margin-top:32px">
+    <div class="sub" style="margin-top:32px" data-i18n-html="index.gradio_note">
       经典 Gradio 控制台请通过桌面壳启动器进入，或运行 <code>python -m adr.cli webui</code>
     </div>
   </div>
+<script>
+"use strict";
+I.init("index", {});
+</script>
 </body>
 </html>
