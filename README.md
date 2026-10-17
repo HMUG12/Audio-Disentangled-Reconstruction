@@ -19,10 +19,10 @@
 ### 方式一：Windows 安装包（推荐）
 
 1. 下载安装包（二选一；也可从 [123 云盘分享](https://1860775428.share.123pan.com/123pan/5KDqvd-oPPsv)（提取码 `ADRS`）下载）：
-   - **CPU 版**：[ADR-Studio-1.0.1-x64-setup.exe](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/download/v1.0.1/ADR-Studio-1.0.1-x64-setup.exe)（约 455MB，无独立显卡设备）
-   - **GPU 版**：[ADR-Studio-1.0.1-x64-gpu-setup.exe](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/download/v1.0.1/ADR-Studio-1.0.1-x64-gpu-setup.exe)（约 1.9GB，NVIDIA CUDA 加速）
+   - **CPU 版**：[ADR-Studio-1.1.0-x64-setup.exe](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/download/v1.1.0/ADR-Studio-1.1.0-x64-setup.exe)（约 473MB，无独立显卡设备）
+   - **GPU 版**：[ADR-Studio-1.1.0-x64-gpu-setup.exe](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/download/v1.1.0/ADR-Studio-1.1.0-x64-gpu-setup.exe)（约 1.9GB，NVIDIA CUDA 加速）
 
-   SHA256 校验值见 [Release 页面](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/tag/v1.0.1)；安装包未经充分测试，如遇问题请提 [Issues](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/issues)
+   SHA256 校验值见 [Release 页面](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/tag/v1.1.0)；安装包未经充分测试，如遇问题请提 [Issues](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/issues)
 2. 双击安装，按向导阅读并接受许可协议（per-user 安装，无需管理员权限）；两版共用同一 AppId，可原地升级覆盖旧版，已下载的底模与声音档案均保留
 3. 首次启动会自动进行环境预热：下载预训练底模（约 2GB，预热页实时显示进度，**下载 + 引擎加载完成后才进入启动器**）；完成后此后**完全离线**运行
 
