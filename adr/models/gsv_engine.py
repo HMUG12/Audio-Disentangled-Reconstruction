@@ -50,6 +50,45 @@ GSV_DIR = REPO_ROOT / "third_party" / "gpt_sovits"
 _CHDIR_LOCK = threading.RLock()
 
 
+def is_cuda_oom(e: BaseException) -> bool:
+    """异常是否 torch CUDA OOM (批次57 兼容性第二批)。不引 torch —
+    按类型名 + 模块前缀判定, 供 API 层零成本分流 (引擎进程 torch 必已加载)。"""
+    return (type(e).__name__ == "OutOfMemoryError"
+            and getattr(type(e), "__module__", "").startswith("torch"))
+
+
+def handle_cuda_oom(e: BaseException) -> str:
+    """CUDA OOM 统一善后 (单点): 立即 empty_cache 释放碎片显存 — 否则显存
+    碎片化后后续请求持续 OOM; 落警告日志; 返回用户可读提示 (API 层包 503/cuda_oom)。"""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+    logging.getLogger("adr").warning(
+        "[oom] CUDA 显存不足: %s — 已自动释放缓存",
+        (str(e).splitlines() or [""])[0])
+    return ("GPU 显存不足 (CUDA out of memory): 已自动释放缓存。"
+            "建议缩短合成文本、避免并发请求, 或在 设置 → 高级 → 设备 改为 cpu 后重试。")
+
+
+def _nvidia_driver_version() -> Optional[str]:
+    """nvidia-smi 查驱动版本 (批次57, 零依赖): 驱动未装/不在 PATH → None。
+    排障关键: "驱动已装但 CUDA 不可用" = 驱动版本低于 torch 轮子所需。"""
+    import subprocess
+    try:
+        kw = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=5, **kw)
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip().splitlines()[0].strip() or None
+    except Exception:
+        pass
+    return None
+
+
 def validate_weights_file(weights_path: str) -> None:
     """权重文件安全预检 (Track B 收口; 批次38 收编为引擎单点): 防恶意 pickle RCE。
 
@@ -345,6 +384,36 @@ class GSVEngine:
                 env_dev = settings.tts_device()
                 device = env_dev if env_dev != "auto" \
                     else ("cuda" if torch.cuda.is_available() else "cpu")
+            # 批次57: GPU 档案落日志 (排障关键: N 卡型号/算力/显存/驱动代际一目了然)
+            if device == "cuda":
+                try:
+                    _cap = torch.cuda.get_device_capability(0)
+                    _props = torch.cuda.get_device_properties(0)
+                    _cc = f"{_cap[0]}.{_cap[1]}"
+                    _drv = _nvidia_driver_version()
+                    logging.getLogger("adr").info(
+                        "[gpu] %s, 算力 %s, 显存 %.1fGB, CUDA runtime %s, 驱动 %s",
+                        _props.name, _cc, _props.total_memory / 1024 ** 3,
+                        torch.version.cuda, _drv or "未知")
+                    if _cap < (7, 0):
+                        logging.getLogger("adr").warning(
+                            "[gpu] 算力 %s 低于 7.0, 本 CUDA 轮子可能不含该架构内核"
+                            " (报 no kernel image available 即此因), 建议用 CPU 版", _cc)
+                except Exception:
+                    logging.getLogger("adr").debug("[gpu] 诊断信息获取失败", exc_info=True)
+            elif torch.version.cuda:
+                _drv = _nvidia_driver_version()
+                if _drv:
+                    # 经典故障: 装了 CUDA 轮子但驱动过旧 → is_available()=False 静默回退 CPU
+                    logging.getLogger("adr").warning(
+                        "[gpu] N 卡驱动 %s 已装但 CUDA 不可用 — 本轮子 (CUDA %s) 通常"
+                        "要求更高驱动, 请升级 NVIDIA 驱动或改用 CPU 版",
+                        _drv, torch.version.cuda)
+                else:
+                    logging.getLogger("adr").info(
+                        "[gpu] 未走 CUDA (不可用或强制 CPU); 未检出 N 卡驱动")
+            else:
+                logging.getLogger("adr").info("[gpu] CPU 版 torch (无 CUDA 轮子), 以 CPU 运行")
             # 批次4 yaml 漂移修复: GSV 的 init_vits_weights 会把热换权重写回
             # tts_infer.yaml 的 custom 段 (实测两次进程启动基线 0.812→0.759 漂移,
             # 任何引擎重启都会静默换权重)。对策: 只取 yaml 的 v2 原始段 (预训练

@@ -140,6 +140,10 @@ struct ShellSettings {
     /// ADR_TORCH_THREADS — torch CPU 线程上限 (批次49 低配预设);
     /// 0/None = 不注入 (PyTorch 自按物理核)
     torch_threads: Option<u16>,
+    /// 兼容模式 (批次57): 13/14 代 Intel (Raptor Lake) 计算密集段闪退缓解 —
+    /// 全链指令集限到 AVX2 (oneDNN/MKL/numba), 绕开 AVX-512 电压缺陷路径。
+    /// None = 壳自动检测 (Raptor Lake 自动开); Some = 用户手动覆盖
+    compat_cpu: Option<bool>,
 }
 
 static SHELL_CFG: std::sync::OnceLock<Mutex<ShellSettings>> = std::sync::OnceLock::new();
@@ -176,7 +180,8 @@ fn shell_config() -> ShellSettings {
 
 /// shell.json → sidecar 环境变量映射 (纯函数, 单测覆盖)。
 /// 只影响子进程, 不写壳进程自身环境; 空串字段一律跳过 (= 未配置)。
-fn env_overrides(c: &ShellSettings) -> Vec<(String, String)> {
+/// auto_compat: CPU 自动检测结果 (批次57) — compat_cpu=None 时按它定夺, Some 优先。
+fn env_overrides(c: &ShellSettings, auto_compat: bool) -> Vec<(String, String)> {
     let mut v: Vec<(String, String)> = Vec::new();
     if let Some(k) = c.api_key.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         v.push(("ADR_TTS_API_KEY".into(), k.into()));
@@ -206,7 +211,87 @@ fn env_overrides(c: &ShellSettings) -> Vec<(String, String)> {
     if let Some(n) = c.torch_threads.filter(|n| *n > 0) {
         v.push(("ADR_TORCH_THREADS".into(), n.to_string()));
     }
+    // 批次57 兼容模式: Intel 13/14 代 (Raptor Lake) AVX-512 高电压硬件缺陷可致
+    // 计算密集段 native 崩溃 (0xC0000005, 闪退无 Python 栈)。全链指令集限到 AVX2
+    // (oneDNN/MKL/numba), 性能略降换稳定。
+    if c.compat_cpu.unwrap_or(auto_compat) {
+        v.push(("ONEDNN_MAX_CPU_ISA".into(), "AVX2".into()));
+        v.push(("MKL_ENABLE_INSTRUCTIONS".into(), "AVX2".into()));
+        v.push(("NUMBA_CPU_NAME".into(), "generic".into()));
+    }
     v
+}
+
+/// CPU 品牌串 (批次57): reg 读注册表 (零依赖, 与 autostart 同套路),
+/// 用于 13/14 代自动检测与日志留档。
+#[cfg(windows)]
+fn query_cpu_brand() -> Option<String> {
+    let mut cmd = Command::new("reg");
+    cmd.args([
+        "query",
+        r"HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0",
+        "/v", "ProcessorNameString",
+    ]);
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let out = cmd.output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout);
+    // 行形如 "    ProcessorNameString    REG_SZ    13th Gen Intel(R) Core(TM) i7-13700K"
+    s.lines().find_map(|l| {
+        l.split("REG_SZ")
+            .nth(1)
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    })
+}
+#[cfg(not(windows))]
+fn query_cpu_brand() -> Option<String> {
+    None
+}
+
+/// Raptor Lake 判定 (纯函数, 单测覆盖): Intel 13/14 代品牌串。
+fn brand_is_raptor_lake(brand: &str) -> bool {
+    let b = brand.to_ascii_lowercase();
+    b.contains("intel") && (b.contains("13th gen") || b.contains("14th gen"))
+}
+
+/// CPU 档案诊断 + 13/14 代自动兼容判定 (每次起 sidecar 调用, 结果落 server.log)。
+/// 顺带留档 AVX2/AVX512 支持 — 缺失时 torch 官方轮子会直接闪退, 至少有据可查。
+#[cfg(windows)]
+fn cpu_auto_compat() -> bool {
+    let Some(brand) = query_cpu_brand() else {
+        return false;
+    };
+    #[cfg(target_arch = "x86_64")]
+    {
+        let (avx2, avx512) =
+            (is_x86_feature_detected!("avx2"), is_x86_feature_detected!("avx512f"));
+        proc_log("server", &format!("CPU: {brand}; AVX2={avx2}, AVX512={avx512}"));
+        if !avx2 {
+            proc_log(
+                "server",
+                "警告: CPU 不支持 AVX2, torch 官方轮子可能无法运行 \
+                 (需 Intel Haswell 2013+ / AMD Zen 2017+)",
+            );
+        }
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    proc_log("server", &format!("CPU: {brand}"));
+    let raptor = brand_is_raptor_lake(&brand);
+    if raptor {
+        proc_log(
+            "server",
+            "检测到 Intel 13/14 代 (Raptor Lake): 未手动设置时自动启用 \
+             CPU 兼容模式 (全链限 AVX2)",
+        );
+    }
+    raptor
+}
+#[cfg(not(windows))]
+fn cpu_auto_compat() -> bool {
+    false
 }
 
 /// 自启注册表值: exe 全路径加引号 (含空格路径必需)。
@@ -343,7 +428,8 @@ pub fn run() {
             app_paths,
             autostart_get,
             autostart_set,
-            open_path
+            open_path,
+            cpu_compat_auto
         ])
         .on_window_event(|window, event| {
             // 关窗 = 隐藏到托盘; 真正退出走托盘菜单 (保证 sidecar 被清理)
@@ -602,6 +688,13 @@ fn open_path(path: String) -> Result<(), String> {
     open::that(&p).map_err(|e| format!("打开失败: {e}"))
 }
 
+/// CPU 自动兼容检测结果 (批次57): launcher 在勾选框旁提示"已自动启用"。
+/// 纯查询不落日志 (cpu_auto_compat 起引擎时已留档)。
+#[tauri::command]
+fn cpu_compat_auto() -> bool {
+    query_cpu_brand().map(|b| brand_is_raptor_lake(&b)).unwrap_or(false)
+}
+
 // ---------------------------------------------------------------------------
 // 启动与守护
 // ---------------------------------------------------------------------------
@@ -669,6 +762,19 @@ fn pump_server_log<R: std::io::Read>(mut reader: R, path: PathBuf) {
     let _ = writeln!(file, "\n===== [server {ts}] stream open =====");
     let _ = std::io::copy(&mut reader, &mut file);
     let _ = writeln!(file, "\n===== [server {ts}] stream closed =====");
+}
+
+/// server.log 简易轮转: 超 10MB → rename server.log.old (单代覆盖, 不累加)。
+/// 启动 sidecar 前调用一次; 运行中不再切 — append 增速低 (纯文本行), 可接受。
+fn rotate_server_log() {
+    let path = server_log_path();
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() > 10 * 1024 * 1024 {
+            let old = path.with_extension("log.old");
+            let _ = std::fs::remove_file(&old); // Windows rename 不覆盖已存在目标
+            let _ = std::fs::rename(&path, old);
+        }
+    }
 }
 
 /// launch_console 的阻塞实现: 杀旧 → 置模式 → 启动+探活+导航 → 交给守护线程。
@@ -784,6 +890,12 @@ fn start_server(
         }
     }
     cmd.current_dir(&cwd);
+    // server.log 编码统一 (批次56 review): Windows pipe 下 Python 默认 ANSI(GBK)
+    // 编码中文, 与壳的 UTF-8 proc_log 行混排乱码 — 与 console.py 起训练子进程对齐
+    cmd.env("PYTHONIOENCODING", "utf-8");
+    cmd.env("PYTHONUTF8", "1");
+    // 简易轮转: server.log 超 10MB → rename .old (启动时一次, 单代覆盖)
+    rotate_server_log();
     if let Some(pp) = &pythonpath {
         cmd.env("PYTHONPATH", pp);
     }
@@ -795,7 +907,7 @@ fn start_server(
     // 批次48: 设置中心 shell.json → 进程环境变量注入 (API Key / HF 镜像 /
     // 默认档案 / CUDAGraph / numba 缓存目录 / data_dir 覆盖)。
     // 只写子进程环境, 不污染系统; 同 key 后写覆盖前写 (data_dir 双写值一致)
-    for (k, v) in env_overrides(&cfg) {
+    for (k, v) in env_overrides(&cfg, cpu_auto_compat()) {
         cmd.env(k, v);
     }
     // 服务日志落盘 (排错必需: 此前服务崩溃/卡死均无日志可查)
@@ -969,7 +1081,15 @@ fn supervise(app: AppHandle, mode: String, mut child: Child, mut started: Instan
         while !SHUTTING_DOWN.load(Ordering::Relaxed) {
             match child.try_wait() {
                 Ok(None) => std::thread::sleep(Duration::from_millis(500)),
-                Ok(Some(_)) => break, // 服务进程意外退出
+                Ok(Some(st)) => {
+                    // 批次57: 退出码留痕 — 13/14 代闪退 (0xC0000005 等 native 崩溃) 无
+                    // Python 栈, stderr 往往全空, 这一行是 server.log 里唯一的直接证据。
+                    proc_log(
+                        "server",
+                        &format!("pid={my_pid} 退出, code={}", st.code().unwrap_or(-1)),
+                    );
+                    break; // 服务进程意外退出
+                }
                 Err(_) => break,
             }
         }
@@ -994,10 +1114,16 @@ fn supervise(app: AppHandle, mode: String, mut child: Child, mut started: Instan
         }
         failures += 1;
         if failures > MAX_FAILURES {
+            // 批次57: 放弃重启时把完整日志路径落盘, 避免用户报障时无从下手
+            let log_hint = format!(
+                "连续 {failures} 次启动失败, 放弃自动重启; 完整日志: {}",
+                server_log_path().display()
+            );
+            proc_log("server", &log_hint);
             if let Some(t) = app.tray_by_id("adr-tray") {
                 let _ = t.set_tooltip(Some("ADR Studio 引擎启动失败"));
             }
-            update_status(&window, "多次启动失败, 请返回启动器重试。");
+            update_status(&window, "多次启动失败, 已停止自动重启。请到 设置 → 维护 → 打开日志目录 查看原因后重试。");
             return;
         }
 
@@ -1277,8 +1403,9 @@ mod tests {
             cudagraph: Some(true),
             device: Some(" cpu ".into()),    // 批次49 低配预设
             torch_threads: Some(4),
+            compat_cpu: Some(true),          // 批次57 13/14 代兼容模式
         };
-        let m: std::collections::HashMap<String, String> = env_overrides(&c).into_iter().collect();
+        let m: std::collections::HashMap<String, String> = env_overrides(&c, false).into_iter().collect();
         assert_eq!(m.get("ADR_TTS_API_KEY").unwrap(), "k1,k2");
         assert_eq!(m.get("ADR_DATA_DIR").unwrap(), "D:/voices");
         assert_eq!(m.get("HF_ENDPOINT").unwrap(), "https://hf-mirror.com");
@@ -1287,13 +1414,17 @@ mod tests {
         assert_eq!(m.get("ADR_T2S_CUDAGRAPH").unwrap(), "1");
         assert_eq!(m.get("ADR_TTS_DEVICE").unwrap(), "cpu");
         assert_eq!(m.get("ADR_TORCH_THREADS").unwrap(), "4");
-        assert_eq!(m.len(), 8);
+        // 兼容模式: 全链限 ISA 到 AVX2 (oneDNN/MKL/numba)
+        assert_eq!(m.get("ONEDNN_MAX_CPU_ISA").unwrap(), "AVX2");
+        assert_eq!(m.get("MKL_ENABLE_INSTRUCTIONS").unwrap(), "AVX2");
+        assert_eq!(m.get("NUMBA_CPU_NAME").unwrap(), "generic");
+        assert_eq!(m.len(), 11);
     }
 
     #[test]
     fn env_overrides_default_and_empty_skip() {
         // 全默认 → 零注入 (鉴权关闭/HF 官方源等后端原语义)
-        assert!(env_overrides(&ShellSettings::default()).is_empty());
+        assert!(env_overrides(&ShellSettings::default(), false).is_empty());
         // 空串 = 未配置, 一律跳过
         let c = ShellSettings {
             api_key: Some("   ".into()),
@@ -1302,10 +1433,29 @@ mod tests {
             numba_cache_dir: Some("".into()),
             ..Default::default()
         };
-        assert!(env_overrides(&c).is_empty());
+        assert!(env_overrides(&c, false).is_empty());
         // hf_mirror=false / cudagraph=false → 不注入
         let c = ShellSettings { hf_mirror: Some(false), cudagraph: Some(false), ..Default::default() };
-        assert!(env_overrides(&c).is_empty());
+        assert!(env_overrides(&c, false).is_empty());
+    }
+
+    #[test]
+    fn env_overrides_compat_auto_semantics() {
+        // 批次57: compat_cpu=None → 按 auto_compat 自动; Some 手动优先
+        let m: std::collections::HashMap<String, String> =
+            env_overrides(&ShellSettings::default(), true).into_iter().collect();
+        assert_eq!(m.get("ONEDNN_MAX_CPU_ISA").unwrap(), "AVX2");
+        assert_eq!(m.get("MKL_ENABLE_INSTRUCTIONS").unwrap(), "AVX2");
+        assert_eq!(m.get("NUMBA_CPU_NAME").unwrap(), "generic");
+        assert_eq!(m.len(), 3);
+        // 手动关 → 即便自动检出 13 代也不注入
+        let c = ShellSettings { compat_cpu: Some(false), ..Default::default() };
+        assert!(env_overrides(&c, true).is_empty());
+        // 品牌串判定: Intel 品牌串固定带 "13th/14th Gen" 前缀
+        assert!(brand_is_raptor_lake("13th Gen Intel(R) Core(TM) i7-13700K"));
+        assert!(brand_is_raptor_lake("14th Gen Intel(R) Core(TM) i9-14900KS"));
+        assert!(!brand_is_raptor_lake("AMD Ryzen 9 7950X"));
+        assert!(!brand_is_raptor_lake("12th Gen Intel(R) Core(TM) i7-12700K"));
     }
 
     #[test]

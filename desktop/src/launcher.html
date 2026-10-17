@@ -332,6 +332,10 @@
           <span>t2s CUDA Graph 加速 (3.77x 但音质有损，默认关)</span>
           <input type="checkbox" id="st-cuda">
         </div>
+        <div class="st-row">
+          <span>CPU 兼容模式 (13/14 代 Intel 计算闪退缓解，性能略降)<small id="st-compat-hint"></small></span>
+          <input type="checkbox" id="st-compat">
+        </div>
       </details>
 
       <div class="st-foot">
@@ -462,6 +466,18 @@ async function openSettings() {
     $st("st-cuda").checked = !!cfg.cudagraph;
     $st("st-device").value = (cfg.device === "cuda" || cfg.device === "cpu") ? cfg.device : "auto";
     $st("st-threads").value = cfg.torch_threads || "";
+    $st("st-compat").checked = !!cfg.compat_cpu;
+    // 批次57: 未手动设置时, 壳检测到 13/14 代会自动启用 — 提示出来避免"勾了没生效"困惑
+    const _compatHint = document.getElementById("st-compat-hint");
+    if (_compatHint) {
+      if (cfg.compat_cpu == null) {
+        inv("cpu_compat_auto").then(auto => {
+          _compatHint.textContent = auto ? "（检测到 13/14 代 Intel，已自动启用）" : "";
+        }).catch(() => {});
+      } else {
+        _compatHint.textContent = "";
+      }
+    }
     stAutostart = await inv("autostart_get");
     $st("st-autostart").checked = stAutostart;
     $st("st-lan-ip").textContent = lan?.ip || "未获取到 (离线?)";
@@ -490,6 +506,7 @@ async function saveSettings() {
       cudagraph: $st("st-cuda").checked,
       device: $st("st-device").value,
       torch_threads: Math.min(Math.max(parseInt($st("st-threads").value, 10) || 0, 0), 128),
+      compat_cpu: $st("st-compat").checked,
     };
     await inv("save_shell_settings", { settings: cfg });
     if (cfg.autostart !== stAutostart) {

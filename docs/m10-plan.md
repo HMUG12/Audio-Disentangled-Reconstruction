@@ -126,6 +126,24 @@
 - [x] **docker/README.md 重写 + scripts/build_docker.ps1**：双变体用法/数据卷/端口与 ADR_TTS_API_KEY 鉴权（0.0.0.0 无鉴权警告为容器预期行为）/代理与 GSV 加速/FAQ；构建脚本 `-Cuda`/`-Tag`/`-ProxyPrefix` 封装 docker build
 - [ ] 容器构建验证 + 冒烟（/health 200 + engine_ready + ko 链 `from g2pk2 import G2p`）——待 Docker Desktop 实测（构建需网络：拉镜像 / pip / clone）
 
+## 批次 57（2026-10-17）：日志体系 review 修复 + 13/14 代 Intel 闪退加固
+
+> 全量 review 定位四类日志形态（桌面版 server.log / 容器 docker logs / 纯 CLI stderr / 训练内存日志）后修复 + 用户报 13 代 CPU 闪退加固：
+
+- [x] **日志 review 修复**：① 桌面壳 sidecar 补 `PYTHONIOENCODING=utf-8` + `PYTHONUTF8=1`（Windows pipe 下 Python 默认 GBK，与壳 UTF-8 proc_log 行混排乱码——console.py 起训练子进程时已设、壳漏设）；② `__main__.py` 接 `setup_logging`（此前 root 默认 WARNING，`adr.*` INFO 全被吞，server.log/docker logs 只剩 uvicorn 行；`ADR_LOG_LEVEL` 可覆盖）；③ server.log 超 10MB 启动时轮转 `.old`（单代覆盖）；④ call.html placeholder 反斜杠改正斜杠（中英双语）
+- [x] **13/14 代闪退根因**：Raptor Lake AVX-512 高电压硬件缺陷 → torch oneDNN/MKL、numba JIT 计算密集段 native 崩溃（0xC0000005），无 Python 栈、stderr 全空，supervise 有自动重启但退出无痕。缓解 = 全链指令集限到 AVX2（性能略降换稳定）
+- [x] **ShellSettings 加 `compat_cpu: Option<bool>`** + env_overrides 注入 `ONEDNN_MAX_CPU_ISA=AVX2` / `MKL_ENABLE_INSTRUCTIONS=AVX2` / `NUMBA_CPU_NAME=generic`（旧 shell.json 缺字段宽松回退，serde 全 Option 模式不变）
+- [x] **崩溃留痕**：supervise `try_wait` 检出退出即 proc_log 退出码（native 崩溃场景 server.log 唯一直接证据）；MAX_FAILURES 放弃重启时落盘完整日志路径 + 状态文案指引"设置 → 维护 → 打开日志目录"
+- [x] **faulthandler 兜底**：`__main__.py` main() 开头 `faulthandler.enable(file=sys.stderr, all_threads=True)`——native 崩溃瞬间把 Python 侧调用栈写 stderr，随壳泵入 server.log
+- [x] **UI**：launcher.html 高级设置加"CPU 兼容模式"勾选框 + load/save 显式带 `compat_cpu`（漏带即保存丢值，ShellSettings serde 教训）
+- [x] **CPU 自动兼容（同日追加）**：壳 reg 读 `HKLM\...\CentralProcessor\0` 品牌串（零依赖）——13/14 代 Intel 自动开兼容（`compat_cpu=None` = 自动，Some 手动覆盖）；每次起 sidecar 落日志 `CPU: <品牌>; AVX2=true/false, AVX512=...`，缺 AVX2 醒目警告（官方轮子直接闪退）；`brand_is_raptor_lake` 纯函数单测
+- [x] **GPU 诊断日志（同日追加）**：gsv_engine 设备定型后落 `[gpu]` 行——N 卡型号/算力/显存/CUDA runtime；算力 <7.0 警告（本 CUDA 轮子可能不含该架构内核，no kernel image available 即此因）；未走 CUDA 时区分"CUDA 不可用/强制 CPU"与"CPU 版轮子"两种情况
+- [x] **兼容性第二批（同日续）— OOM 分流**：gsv_engine 新增 `is_cuda_oom`（不引 torch，按类型名 + 模块前缀判定）与 `handle_cuda_oom`（单点善后：立即 `empty_cache()` 防显存碎片化 + 警告日志 + 用户可读提示）；v2_compat `tts_handle` 非 OOM 之外的异常分流为 503 `{"code":"cuda_oom", "message": 提示}`（此前裸 400 堆栈原文）；流式路径响应头已发只断流 + 落友好日志（native.py tts_get/tts_post 复用 tts_handle 全覆盖）
+- [x] **兼容性第二批 — 驱动版本诊断**：gsv_engine `_nvidia_driver_version()`（nvidia-smi `--query-gpu=driver_version` 零依赖）；`[gpu]` 日志行带驱动版本；**"驱动已装但 CUDA 不可用"显式警告**（驱动低于 torch 轮子所需 → 静默回退 CPU 的经典故障）+ 算力 <7.0 老卡警告
+- [x] **兼容性第二批 — UI 自动启用提示**：launcher.html `cpu_compat_auto` 命令查询 + 勾选框旁 "（检测到 13/14 代 Intel，已自动启用）"；用户手动设置过则不显示
+- [x] **兼容性第二批 — 下载失败引导**：gsv_bootstrap 三源全失败错误文案追加网络/代理检查指引（需可达 hf-mirror.com / huggingface.co / modelscope.cn）+ 修复后重启引擎重试
+- [x] 验证：cargo test 5/5（env_overrides 单测扩至 12 项断言 + 新增自动语义用例）+ python 导入 faulthandler 断言通过 + 兼容性第二批 python 验证（3 文件 ast + import + is_cuda_oom True/False 判定 + 驱动查询兜底）通过
+
 ## 原则
 
 - 能统一的尽量统一，降低使用门槛（用户定调）
