@@ -60,7 +60,7 @@
 **版本梯子**：v1.0.1（双包发布）→ v1.1（批次 53/54 多语言+i18n）→ v1.2（多形态分发）→ v1.3（推理加速）→ v1.4（训练加速）；B 分发生态/HF Space demo 零散穿插。
 
 ### H1. v1.2 多形态分发（用户拍板优先）
-- **容器版（Docker，优先）**：标准服务器版——无 UI、CLI/HTTP API 操作；Linux CUDA/CPU torch + adr server + compose；GSV 上游有官方镜像先例（amd64/arm64）
+- **容器版（Docker，优先）**：标准服务器版——无 UI、CLI/HTTP API 操作；Linux CUDA/CPU torch + adr server + compose；GSV 上游有官方镜像先例（amd64/arm64）。**注（2026-10-17 review）**：现存 `docker/` 目录为项目早期遗留草稿（torch 2.1/py3.10/Gradio 7860 `adr webui` 入口均与现状脱节），v1.2 落地时**重写而非沿用**
 - **Windows 无 UI 服务版**：同一 runtime 跳过 Tauri 壳，`python -m adr.server` 服务化脚本（低工作量）
 - **Windows 桌面版**：现状即此形态
 - 与 v1.3 协同：服务器多用户场景正是连续批处理（continuous batching）的价值面
@@ -103,6 +103,16 @@
 - [ ] **缓行**：在线依赖档（安装包瘦到 ~200MB + 首启 pip 走国内镜像）——待双包腰斩结果评估是否值得引入首启等待与网络失败面
 - 冷备份（防第三方镜像失活的全量冷备 ≈8GB）：**用户自理**（123 云盘现状 + 自选对象存储）
 - [x] **公信力批次（批次 51 落地，2026-10-10）**：REPRODUCE.md（7 节复现链全抽实测命令）/ VERIFY.md（14 条声明→验证→预期映射表）/ examples/samples README（方案 A：不入库音频，生成命令 + 云盘占位）/ .github/workflows/smoke.yml（ubuntu 全量 pytest，CPU torch 轮子先行，tests 零依赖 third_party 已甄别）/ scripts/eval_secs.py SECS 口径（实测锚点 0.9324 / 零样本 0.7729 / 微调 0.8052，Δ+0.0323）；**PESQ/ESTOI → SECS/MOS/CER 口径修正完成**（详见 REPRODUCE.md 第 5 节）
+
+## 批次 55（2026-10-17）：全量 review — 基础修复
+
+> v1.1 发布后全仓 review（git/版本/依赖/CI/测试/文档），发现并修复：
+
+- [x] **CI smoke 六连红修复**（批次 51 上线以来 6 次 run 全 failure，7 failed/425 passed）：① 6 个测试依赖 `third_party/DiffSinger/opencpop-extension.txt`（607 音素词典不入检出树）→ conftest 加 `requires_default_dict` 守卫 fixture，干净检出自动 skip（test_phoneme_dict ×3 + test_encode_phonemes_chinese + test_g2p_chinese_nonempty + test_dataset_from_npz_dir）；② `test_data_dir_windows_legacy_f` 跨平台 bug——Linux 上 `PosixPath("F:/ADR_data")` 与 `PureWindowsPath` 永不相等，钉 os 模拟失效 → 改 str 归一比较（`replace("\\","/")`）
+- [x] **版本面补齐 1.1.0**：pyproject.toml（1.0.1→1.1.0）+ `adr.__version__`（1.0.0→1.1.0）——v1.1.0 发布时只 bump 了 installer.iss/tauri.conf/Cargo.toml/package.json 五面中的四面；顺带修正 `__license__`（"MIT"→AGPL-3.0，与 pyproject/LICENSE/README 对齐）
+- [x] **源码用户 G2P 缺口**：批次 53 四包只进 build_runtime.ps1，pyproject/requirements 均缺 → 源码用户无法日/粤/韩合成 → pyproject 新增 `[multilang]` extra（pyopenjtalk/jamo/ToJyutping/ko_pron 钉版同 runtime）+ README 源码安装注记（不并入 `[all]`，防 CI/全量安装被 pyopenjtalk 源码构建拖挂）
+- [x] README 静默安装示例文件名 1.0.1→1.1.0；REPRODUCE.md 补 v1.1.0 安装包实测体积
+- 备注：docker/ 遗留草稿注记已入 H1；本地全量 pytest 回归 + 推送后盯 CI 转绿
 
 ## 原则
 

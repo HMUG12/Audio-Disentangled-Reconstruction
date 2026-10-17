@@ -55,7 +55,7 @@ class TestEncodingHealth:
         rate = unk / max(total, 1)
         assert rate < 0.10, f"UNK 率过高: {rate:.1%} ({unk}/{total})"
 
-    def test_g2p_chinese_nonempty(self):
+    def test_g2p_chinese_nonempty(self, requires_default_dict):
         """中文文本 G2P 编码必须非空且多样 (不全 UNK)。"""
         ids = encode_phonemes("远方的客人请你留下来")
         assert len(ids) >= 5

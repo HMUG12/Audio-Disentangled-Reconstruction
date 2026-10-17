@@ -142,7 +142,7 @@ def test_dataset_speaker_ids_length_mismatch():
         VoiceCloneDataset(samples=samples, speaker_ids=["a", "b"])
 
 
-def test_dataset_from_npz_dir(tmp_path):
+def test_dataset_from_npz_dir(tmp_path, requires_default_dict):
     """从 npz 目录加载。"""
     from adr.data.pipeline import TrainSample
     from adr.training.dataset import VoiceCloneDataset

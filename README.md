@@ -29,7 +29,7 @@
 
 安装内容：Python 便携运行时 + 全部依赖 + GPT-SoVITS 代码 + ADR 引擎，磁盘占用约 2GB（CPU 版）/ 4GB（GPU 版），不含底模与声音档案数据。
 
-> 批量部署可使用静默安装：`ADR-Studio-1.0.1-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="安装目录"`
+> 批量部署可使用静默安装：`ADR-Studio-1.1.0-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="安装目录"`
 
 ### 方式二：源码安装
 
@@ -41,6 +41,9 @@ pip install -e .[m1]
 
 # 训练加速（LoRA/QLoRA, 按需）
 pip install -e .[m2]
+
+# 日/粤/韩合成 G2P（按需; Windows 安装包已内置）
+pip install -e .[multilang]
 
 # 2. 启动 TTS 服务（默认端口 9881, NEKO 直连）
 $env:NUMBA_CACHE_DIR = "E:\adr_numba_cache"   # 任意可写目录, 避免 numba 缓存落只读路径

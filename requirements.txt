@@ -1,6 +1,6 @@
 # ADR 框架核心依赖
 # 推荐用 pip install -e .[m1] 安装 (本文件与 pyproject.toml 核心依赖保持同步)
-# 可选组: [m1] WebUI/ASR/G2P 完整功能, [m2] LoRA/QLoRA 训练加速, [all] 全量, [dev] 开发工具
+# 可选组: [m1] WebUI/ASR/G2P 完整功能, [m2] LoRA/QLoRA 训练加速, [multilang] 日/粤/韩 G2P, [all] 全量, [dev] 开发工具
 
 # ===== 基础 (M1 Day 1 + TTS 服务运行时) =====
 torch>=2.1.0

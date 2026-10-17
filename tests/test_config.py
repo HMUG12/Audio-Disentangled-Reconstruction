@@ -119,11 +119,16 @@ def _pin_home(monkeypatch, home) -> None:
 
 
 def _pin_legacy_dir(monkeypatch, exists: bool) -> None:
-    """把 Path.is_dir 对 F:/ADR_data 的回答钉死, 其余路径走真实判定。"""
+    """把 Path.is_dir 对 F:/ADR_data 的回答钉死, 其余路径走真实判定。
+
+    比较用 str 归一 (反斜杠→正斜杠) 而非 PureWindowsPath 相等:
+    Linux 上 Path("F:/ADR_data") 是 PosixPath, 与 PureWindowsPath 永不相等,
+    字符串比较在两平台语义一致 (CI 实测钉 os 模拟在 ubuntu 失效)。
+    """
     real_is_dir = pathlib.Path.is_dir
 
     def fake_is_dir(self):
-        if self == pathlib.PureWindowsPath("F:/ADR_data"):
+        if str(self).replace("\\", "/") == "F:/ADR_data":
             return exists
         return real_is_dir(self)
 
@@ -150,7 +155,8 @@ def test_data_dir_windows_legacy_f(tmp_path, monkeypatch):
     monkeypatch.delenv("ADR_DATA_DIR", raising=False)
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "lapp"))
     _pin_legacy_dir(monkeypatch, exists=True)
-    assert adr_data_dir() == pathlib.PureWindowsPath("F:/ADR_data")
+    # str 归一比较: PosixPath('F:/ADR_data') 与 PureWindowsPath 不等, 直接 == 在 Linux 必假
+    assert str(adr_data_dir()).replace("\\", "/") == "F:/ADR_data"
 
 
 def test_data_dir_windows_fallback_localappdata(tmp_path, monkeypatch):
