@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 
-def test_phoneme_dict_load():
+def test_phoneme_dict_load(requires_default_dict):
     """测试加载默认字典。"""
     from adr.data.phoneme_dict import load_default_phoneme_dict
 
@@ -48,7 +48,7 @@ def test_phoneme_dict_special_tokens():
     assert pd.decode(3) == UNK_TOKEN
 
 
-def test_phoneme_dict_encode_decode_roundtrip():
+def test_phoneme_dict_encode_decode_roundtrip(requires_default_dict):
     """测试已知音素 encode/decode。"""
     from adr.data.phoneme_dict import load_default_phoneme_dict
 
@@ -71,7 +71,7 @@ def test_phoneme_dict_unknown():
     assert pd.decode(999999) == "<unk>"
 
 
-def test_phoneme_dict_split_tokens():
+def test_phoneme_dict_split_tokens(requires_default_dict):
     """测试音素切分。"""
     from adr.data.phoneme_dict import load_default_phoneme_dict
 
@@ -98,7 +98,7 @@ def test_strip_tone():
     assert _strip_tone("zhong12") == "zhong1"
 
 
-def test_encode_phonemes_chinese():
+def test_encode_phonemes_chinese(requires_default_dict):
     """测试中文文本 encode。"""
     from adr.data.phoneme_dict import encode_phonemes, load_default_phoneme_dict
 

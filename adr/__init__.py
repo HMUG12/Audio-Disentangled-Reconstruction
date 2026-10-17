@@ -17,9 +17,9 @@
 
 from __future__ import annotations
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __author__ = "ADR Team"
-__license__ = "MIT"
+__license__ = "AGPL-3.0"
 
 # 触发插件注册 (各子模块 @register 装饰器在此执行)
 # 只要用户 import adr,所有内置插件即可被 REGISTRY 检索到
