@@ -1,0 +1,4 @@
+# 行尾策略 (批次56)
+# patch 文件保持原始字节 (UTF-8 无 BOM + LF): BOM/CRLF 会破坏 git apply
+# (track_e_ar_sync.patch 曾因 PowerShell 重定向产物带 BOM+CRLF 而失败)
+*.patch -text
