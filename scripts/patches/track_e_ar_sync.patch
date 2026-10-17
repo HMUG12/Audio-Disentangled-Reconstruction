@@ -1,0 +1,115 @@
+diff --git a/GPT_SoVITS/AR/models/t2s_model.py b/GPT_SoVITS/AR/models/t2s_model.py
+index ac905f4..018a93d 100644
+--- a/GPT_SoVITS/AR/models/t2s_model.py
++++ b/GPT_SoVITS/AR/models/t2s_model.py
+@@ -1,6 +1,7 @@
+ # modified from https://github.com/yangdongchao/SoundStorm/blob/master/soundstorm/s1/AR/models/t2s_model.py
+ # reference: https://github.com/lifeiteng/vall-e
+ import math
++import os
+ from typing import List, Optional
+ 
+ import torch
+@@ -886,7 +887,20 @@ class Text2SemanticDecoder(nn.Module):
+ 
+         token_counter = 0
+         curr_ptr = prefix_len
+-        for idx in tqdm(range(1500)):
++        # Track E (批次33): 原实现每步 4 次 GPU→CPU 隐式同步 — EOS 判定 2 次
++        # (argmax==EOS / samples==EOS 与 python 标量比较即同步) + mute 分支 2 次
++        # (score[argmax]>=0 / argmax_idx+1>=chunk_length), 外加 tqdm 每步
++        # stderr 渲染 — 显卡利用率波动与句间停顿的主因。改为: EOS 旗标每步仅
++        # 设备侧累积 (0 同步), 每 ADR_AR_SYNC_EVERY 步 (默认 8) 一次 D2H
++        # 批量结算, chunk yield 一并挪到检查点; 采样序列不变 (sample() 参数
++        # 与 RNG 逐位一致), token 流与旧实现相同, 仅 EOS 观察至多延迟
++        # _every-1 步、chunk 边界从定长 16 变 16~(16+_every-1) — 下游按累计
++        # token 解码 + SOLA 拼接, 对变长块不敏感。ADR_AR_SYNC_LEGACY=1
++        # 回退旧逐步同步行为 (A/B 基准与排障)。
++        _every = 1 if os.environ.get("ADR_AR_SYNC_LEGACY") == "1" else max(
++            1, int(os.environ.get("ADR_AR_SYNC_EVERY", "8") or "8"))
++        _eos_flags: List[torch.Tensor] = []
++        for idx in range(1500):
+             token_counter+=1
+             if xy_attn_mask is not None:
+                 xy_dec, k_cache, v_cache = self.t2s_transformer.process_prompt(xy_pos, xy_attn_mask, None)
+@@ -910,15 +924,17 @@ class Text2SemanticDecoder(nn.Module):
+                 print("use early stop num:", early_stop_num)
+                 stop = True
+ 
+-            if torch.argmax(logits, dim=-1)[0] == self.EOS or samples[0, 0] == self.EOS:
+-                stop = True
+-                y=y[:, :-1]
+-                token_counter -= 1
+-
+-            if idx == 1499:
+-                stop = True
+-
+-            if stop:
++            # Track E: EOS 旗标设备侧累积 (0 同步); 终止步/检查点批量 D2H 结算
++            _eos_now = (torch.argmax(logits, dim=-1)[0] == self.EOS) | (samples[0, 0] == self.EOS)
++
++            if stop or idx == 1499:
++                # 终止步 (早停/1499): 挂起窗口 + 本步旗标一并结算 —
++                # early_stop_num 可能落在窗口内 EOS 之后, 必须合并截断 EOS 后的垃圾 token
++                _win = torch.stack(_eos_flags + [_eos_now]).cpu()
++                _eos_flags.clear()
++                if bool(_win.any()):
++                    _eos_idx = idx - (_win.shape[0] - 1) + int(torch.nonzero(_win)[0, 0])
++                    y = y[:, : prefix_len + _eos_idx]
+                 if y.shape[1] == 0:
+                     y = torch.concat([y, torch.zeros_like(samples)], dim=1)
+                     print("bad zero prediction")
+@@ -927,6 +943,31 @@ class Text2SemanticDecoder(nn.Module):
+                     yield y[:, curr_ptr:] if curr_ptr<y.shape[1] else None, True
+                 break
+ 
++            _eos_flags.append(_eos_now)
++
++            if (idx + 1) % _every:
++                ####################### update next step ###################################
++                y_emb = self.ar_audio_embedding(y[:, -1:])
++                xy_pos = y_emb * self.ar_audio_position.x_scale + self.ar_audio_position.alpha * self.ar_audio_position.pe[
++                    :, y_len + idx
++                ].to(dtype=y_emb.dtype, device=y_emb.device)
++                continue
++
++            # ── 检查点 (每 _every 步): 窗口 EOS 旗标批量结算 — 循环内唯一 D2H
++            # 同步点; 命中则按首现位置精确截断 (旧 y[:,:-1] 的推广), EOS 后的
++            # token 永不外发; chunk yield 一并挪到此处统一决策 ──
++            _win = torch.stack(_eos_flags).cpu()
++            _eos_flags.clear()
++            if bool(_win.any()):
++                _eos_idx = idx - (_win.shape[0] - 1) + int(torch.nonzero(_win)[0, 0])
++                y = y[:, : prefix_len + _eos_idx]
++                if y.shape[1] == 0:
++                    y = torch.concat([y, torch.zeros_like(samples)], dim=1)
++                    print("bad zero prediction")
++                # print(f"T2S Decoding EOS [{prefix_len} -> {y.shape[1]}]")
++                if streaming_mode:
++                    yield y[:, curr_ptr:] if curr_ptr<y.shape[1] else None, True
++                break
+ 
+             if streaming_mode and (mute_emb_sim_matrix is not None) and (token_counter >= chunk_length+check_token_num):
+                 score = mute_emb_sim_matrix[y[0, curr_ptr:]] - chunk_split_thershold
+@@ -935,7 +976,6 @@ class Text2SemanticDecoder(nn.Module):
+                 argmax_idx = score.argmax()
+ 
+                 if score[argmax_idx]>=0 and argmax_idx+1>=chunk_length: 
+-                    print(f"\n\ncurr_ptr:{curr_ptr}")
+                     yield y[:, curr_ptr:], False
+                     token_counter -= argmax_idx+1
+                     curr_ptr += argmax_idx+1
+@@ -957,6 +997,13 @@ class Text2SemanticDecoder(nn.Module):
+ 
+ 
+         if not streaming_mode:
++            if os.environ.get("ADR_AR_DEBUG_TOKENS") == "1":
++                import hashlib
++                _gen = y[:, prefix_len:]
++                _b = _gen.detach().cpu().numpy().tobytes()
++                print(f"[AR-DBG] every={_every} prefix={prefix_len} refree={ref_free} "
++                      f"gen={_gen.shape[1]} idx={idx} first16={_gen[:, :16][0].tolist()} "
++                      f"sha1={hashlib.sha1(_b).hexdigest()}")
+             if ref_free:
+                 yield y, 0
+             yield y, idx

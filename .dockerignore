@@ -1,0 +1,65 @@
+# ============================================================
+# ADR .dockerignore (批次56)
+# 构建上下文 = 仓库根 (compose: context: ..), 此文件必须位于仓库根
+# 原则: 只进构建必需物 (pyproject.toml README.md LICENSE adr/ configs/
+#       scripts/ docker/requirements-linux.txt); 权重/数据/文档/测试一律裁掉
+# ============================================================
+
+# ---- 版本库与工具配置 ----
+.git
+.gitignore
+.trae/
+.vscode/
+.idea/
+
+# ---- 第三方仓库 (GB 级, 容器内按钉版 commit 自行 clone) ----
+third_party/
+
+# ---- 数据与产物 (本地权重/录音/输出, 一律不进镜像) ----
+data/
+docker/data/
+output/
+build/
+dist/
+examples/
+*.pth
+*.ckpt
+*.onnx
+*.pt
+*.safetensors
+*.wav
+*.mp3
+*.m4a
+*.aac
+*.flac
+
+# ---- 文档与测试 (镜像只需要 README.md 供 pyproject readme 字段) ----
+docs/
+tests/
+*.md
+!README.md
+
+# ---- 脚本与杂项 (scripts/ 只需 .py 与 patches/, PowerShell 脚本不进镜像) ----
+*.ps1
+*.zip
+*.log
+*.tmp
+测试log.txt
+
+# ---- 本地实验目录 ----
+.output/
+需要适配的一个接口/
+
+# ---- Python 缓存 ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# ---- 系统杂项 ----
+Thumbs.db
+.DS_Store
+desktop.ini

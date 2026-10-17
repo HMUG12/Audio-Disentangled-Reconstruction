@@ -7,7 +7,13 @@
     4. 下载各引擎权重 (scripts 目录下的下载逻辑 / hf-mirror)
 
 所有补丁都是环境兼容 (Windows / torch 2.10 / gloo 不可用), 不改算法。
+
+批次56: 大块补丁 (整函数重写级) 走 PATCH_FILES 机制 — git diff 落成
+scripts/patches/*.patch, 在对应仓库根 `git apply` (钉版 commit 上行号
+精确; 上游改版时重新生成)。容器镜像构建 (docker/Dockerfile) 依赖本
+脚本全量可复现: 干净 clone + 本脚本 == 本地 third_party 树。
 """
+import subprocess
 import sys
 from pathlib import Path
 
@@ -15,6 +21,19 @@ REPO = Path(__file__).resolve().parent.parent
 TP = REPO / "third_party"
 
 PATCHES = []
+
+# patch 文件补丁: (仓库名, patch 文件名, 目标文件相对仓库根, 幂等特征串)
+# 特征串 = 补丁引入的代码, 已在目标文件中即视为已应用
+PATCH_FILES = [
+    (
+        "gpt_sovits",
+        "track_e_ar_sync.patch",
+        "GPT_SoVITS/AR/models/t2s_model.py",
+        # 批次33 Track E: AR 推理 EOS 旗标设备侧累积 (GPU->CPU 同步 4x/步 -> 1x/8步),
+        # 推理性能核心补丁 — 本地手工改动, 批次56 收编 (容器可复现性)
+        "ADR_AR_SYNC_EVERY",
+    ),
+]
 
 
 def patch(rel, marker, old, new):
@@ -296,6 +315,42 @@ patch(
 # 环境变量 (weight_root/rmvpe_root/index_root, 见 rvc_engine.py/_rvc_context)
 
 
+def _apply_patch_files():
+    """PATCH_FILES: 在对应仓库根 git apply (幂等: 目标文件已含特征串则跳过)。"""
+    applied = skipped = failed = 0
+    for repo, patch_name, target_rel, marker in PATCH_FILES:
+        repo_dir = TP / repo
+        fp = repo_dir / target_rel
+        pf = REPO / "scripts" / "patches" / patch_name
+        if not pf.exists():
+            print(f"[MISS] scripts/patches/{patch_name} (补丁文件缺失)")
+            failed += 1
+            continue
+        if not fp.exists():
+            print(f"[MISS] {repo}/{target_rel} (仓库未 clone)")
+            failed += 1
+            continue
+        if marker in fp.read_text(encoding="utf-8", errors="replace"):
+            print(f"[skip] {repo} <- {patch_name} (已打过)")
+            skipped += 1
+            continue
+        r = subprocess.run(
+            ["git", "apply", "--whitespace=nowarn", str(pf)],
+            cwd=repo_dir, capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            print(f"[FAIL] {repo} <- {patch_name}: {r.stderr.strip()}")
+            failed += 1
+            continue
+        if marker not in fp.read_text(encoding="utf-8", errors="replace"):
+            print(f"[FAIL] {repo} <- {patch_name}: apply 返回 0 但特征串未现 (锚点漂移?)")
+            failed += 1
+            continue
+        print(f"[ok]   {repo} <- {patch_name}")
+        applied += 1
+    return applied, skipped, failed
+
+
 def main():
     applied = skipped = failed = 0
     for rel, marker, old, new in PATCHES:
@@ -316,6 +371,10 @@ def main():
         fp.write_text(src.replace(old, new, 1), encoding="utf-8")
         print(f"[ok]   {rel}")
         applied += 1
+    _a, _s, _f = _apply_patch_files()
+    applied += _a
+    skipped += _s
+    failed += _f
     print(f"\n应用 {applied} / 跳过 {skipped} / 失败 {failed}")
     sys.exit(1 if failed else 0)
 

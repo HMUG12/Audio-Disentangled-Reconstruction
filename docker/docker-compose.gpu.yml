@@ -1,0 +1,31 @@
+# ADR 服务容器 (CUDA 变体, 叠加配置 — 必须与基础 compose 文件同用)
+#
+# 与 docker-compose.yml 叠加后: 镜像切到 adr-server:1.2.0-cuda (cu130 wheel),
+# 并向容器透传全部 GPU。无 GPU 机器误用时, 引擎 auto 自检会回退 CPU 运行。
+#
+# 用法:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+#
+# 验证 GPU 生效:
+#   docker compose exec adr python -c "import torch; print(torch.cuda.is_available())"
+
+services:
+  adr:
+    image: adr-server:1.2.0-cuda
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        TORCH_VARIANT: cuda
+        # 网络受限时取消注释 (deb.debian.org HTTP/80 部分代理不覆盖):
+        # APT_MIRROR: mirrors.tuna.tsinghua.edu.cn
+    environment:
+      # 引擎设备自检: 有 GPU 用 cuda, 无 GPU 回退 cpu (镜像内不写死设备)
+      ADR_TTS_DEVICE: auto
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

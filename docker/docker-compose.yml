@@ -1,56 +1,45 @@
-# ADR 一键启动 (Docker Compose)
+# ADR 服务容器 (CPU 默认变体, 批次56 / v1.2 多形态分发)
 #
-# 用法:
-#   docker-compose up -d        # 后台启动 WebUI
-#   docker-compose logs -f      # 查看日志
-#   docker-compose exec adr bash  # 进入容器
-#   docker-compose down         # 停止
+# 镜像为纯 HTTP 服务形态 (无 WebUI):
+#   入口: python -m adr.server --addr 0.0.0.0 --port 9881
+#   健康检查: http://127.0.0.1:9881/api/adr/v1/health
+#
+# 用法 (CPU):
+#   docker compose up -d --build        # 构建并后台启动
+#   docker compose logs -f              # 跟随日志
+#   docker compose down                 # 停止
+#
+# 用法 (GPU, 需 NVIDIA 驱动; Docker Desktop WSL2 后端内置 GPU 支持):
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+#
+# 数据持久化:
+#   ./data       -> /data    (ADR_DATA_DIR: 档案/输出/TTS缓存/HF缓存, bind mount)
+#   named volume -> 权重自引导目录 (首启自动下载约 2GB: pretrained_models + G2PWModel)
+#
+# 注意: 容器默认监听 0.0.0.0 且无鉴权; 若暴露到局域网/公网,
+# 请在 environment 设置 ADR_TTS_API_KEY (详见 docker/README.md)。
 
 services:
   adr:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    image: adr:latest
-    container_name: adr-clone
+      args:
+        TORCH_VARIANT: cpu
+        # 网络受限时取消注释 (deb.debian.org HTTP/80 部分代理不覆盖):
+        # APT_MIRROR: mirrors.tuna.tsinghua.edu.cn
+    image: adr-server:1.2.0-cpu
     restart: unless-stopped
-
-    # GPU 透传 (需要 nvidia-container-toolkit)
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-
-    # 端口映射
+    shm_size: "2g"
     ports:
-      - "7860:7860"  # Gradio WebUI (容器默认入口)
-      - "9881:9881"  # GSV 兼容 TTS 服务 (需另行启动: docker-compose exec adr python -m adr.server)
-
-    # 卷挂载 (持久化)
+      - "9881:9881"
     volumes:
-      - ../workspace:/workspace          # 工作目录
-      - adr_cache:/root/.cache/adr        # 预训练模型缓存
-      - adr_output:/app/output            # 输出文件
-      - adr_logs:/app/logs                # 日志
-
-    # 环境变量
-    environment:
-      - ADR_PRESET=vram_8gb
-      - PYTHONUNBUFFERED=1
-      - GRADIO_SERVER_NAME=0.0.0.0
-      - GRADIO_SERVER_PORT=7860
-
-    # 共享内存 (PyTorch DataLoader)
-    shm_size: "4g"
-
-    # stdin 保持打开 (交互)
-    stdin_open: true
-    tty: true
+      # 业务数据 (档案/输出/缓存): 宿主机 docker/data/ 目录
+      - ./data:/data
+      # 模型权重自引导目录 (named volume, 不遮蔽镜像内 GSV 代码)
+      - pretrained_models:/app/third_party/gpt_sovits/pretrained_models
+      - g2pw_model:/app/third_party/gpt_sovits/text/G2PWModel
 
 volumes:
-  adr_cache:
-  adr_output:
-  adr_logs:
+  pretrained_models:
+  g2pw_model:
