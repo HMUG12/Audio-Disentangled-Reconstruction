@@ -423,6 +423,48 @@ def test_native_tts_get_and_stream(client, engine, voice_dir):
     assert len(engine.stream_calls) == 1
 
 
+# ─── 批次53: 语言标记与档案语种默认联动 ───
+
+def test_native_tts_language_from_profile(client, engine, voice_dir):
+    """text_lang/prompt_lang 省略 → 按档案 language 回填 (英文档案说英文)。"""
+    from adr.models import voice_library
+    (voice_dir / "demo" / "meta.json").write_text(json.dumps({
+        "name": "demo", "prompt_text": "ref", "language": "en",
+        "t2s_weights": None, "vits_weights": None, "style": "",
+        "created_at": ""}), encoding="utf-8")
+    r = client.post("/api/adr/v1/tts", json={"text": "hello", "profile": "demo"})
+    assert r.status_code == 200
+    call = engine.synth_calls[0]
+    assert call["text_lang"] == "en"
+    assert call["prompt_lang"] == "en"
+
+
+def test_native_tts_language_explicit_overrides(client, engine, voice_dir):
+    """显式 text_lang 不被档案语种覆盖 (中文档案说英文); prompt_lang 兜底档案语种。"""
+    r = client.post("/api/adr/v1/tts",
+                    json={"text": "hi", "profile": "demo", "text_lang": "EN"})
+    assert r.status_code == 200
+    call = engine.synth_calls[0]
+    assert call["text_lang"] == "en"
+    assert call["prompt_lang"] == "zh"     # 旧档案无 language 键 → 兜底 zh
+
+
+def test_native_tts_language_default_zh(client, engine, voice_dir):
+    """旧档案 (无 language 键) + 语言全省 → wire 兼容, 默认 zh。"""
+    r = client.post("/api/adr/v1/tts", json={"text": "hi", "profile": "demo"})
+    assert r.status_code == 200
+    call = engine.synth_calls[0]
+    assert call["text_lang"] == "zh"
+    assert call["prompt_lang"] == "zh"
+
+
+def test_native_profiles_language_field(client, voice_dir):
+    """档案清单暴露 language 标记 (旧档案缺省 zh)。"""
+    r = client.get("/api/adr/v1/profiles")
+    assert r.status_code == 200
+    assert r.json()["profiles"][0]["language"] == "zh"
+
+
 # ─── 鉴权 (ADR_TTS_API_KEY) ───
 
 @pytest.fixture

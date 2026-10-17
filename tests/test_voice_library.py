@@ -28,6 +28,18 @@ def test_save_load_roundtrip(tmp_path, monkeypatch):
     assert "测试音" in vl.list_voices()
 
 
+def test_save_voice_language_field(tmp_path, monkeypatch):
+    """批次53: 档案 language 标记落 meta, 大写归一小写, 缺省 zh。"""
+    import adr.models.voice_library as vl
+    monkeypatch.setattr(vl, "VOICES_DIR", tmp_path / "voices")
+    ref = _mk_wav(tmp_path)
+    vl.save_voice("英文档", ref, language="EN")
+    prof = vl.load_voice("英文档")
+    assert prof["language"] == "en"
+    vl.save_voice("默认档", ref)
+    assert vl.load_voice("默认档")["language"] == "zh"
+
+
 def test_save_voice_empty_name_rejected(tmp_path, monkeypatch):
     """空音色名拒绝。"""
     import adr.models.voice_library as vl

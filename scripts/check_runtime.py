@@ -16,6 +16,8 @@ runtime 1.78GB。本脚本固化排除规则, 防止垃圾再混入。
 5. 体积分布 + 总量告警 (>2.2GB WARN: 高于清理后基线 1.78GB+余量)
 6. configs/*.yaml 必须随包 (v1.0.0 缺口: build_runtime.ps1 未拷 configs/,
    安装机 preset 全部静默回落内置默认值, 日志报 default.yaml 缺失)
+7. 多语言 G2P 包必须随包 (批次53: pyopenjtalk/jamo/ToJyutping/ko_pron —
+   日/韩/粤合成的 import 链, 缺失则 text_lang=ja/ko/yue 请求 400)
 
 用法:
   python scripts/check_runtime.py                 # 默认 build/runtime, CPU 包
@@ -123,6 +125,18 @@ def main() -> int:
         fails.append("configs/*.yaml 缺失 (训练 preset 全部回落内置默认值)")
     elif not (conf / "default.yaml").is_file():
         fails.append("configs/default.yaml 缺失 (基础 preset)")
+
+    # 7) 多语言 G2P 包随包检查 (批次53: 日/韩/粤合成的 import 链)
+    py = rt / "python" / "python.exe"
+    if py.is_file():
+        import subprocess
+        probe = subprocess.run(
+            [str(py), "-c",
+             "import pyopenjtalk, jamo, ToJyutping, ko_pron"],
+            capture_output=True, text=True, timeout=120)
+        if probe.returncode != 0:
+            fails.append(f"多语言 G2P 包缺失 (ja/ko/yue 合成将 400): "
+                         f"{probe.stderr.strip().splitlines()[-1] if probe.stderr.strip() else probe.returncode}")
 
     for w in warns:
         print(f"[WARN] {w}")

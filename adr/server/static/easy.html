@@ -225,6 +225,15 @@
       </label>
       <div class="lbl" id="vNameRow">给这个声音起个名字</div>
       <input type="text" id="vName" value="我的声音" maxlength="20">
+      <!-- 批次53: 录音语种 — 决定档案标记, 影响后续合成默认语言 -->
+      <div class="lbl">这段录音说的是什么语言</div>
+      <select id="vLang" style="width:100%;padding:11px 12px;border:1px solid #d8dce8;border-radius:10px;background:#fff;font-size:14px;color:#2a2f3e">
+        <option value="zh" selected>中文</option>
+        <option value="en">English</option>
+        <option value="ja">日本語</option>
+        <option value="ko">한국어</option>
+        <option value="yue">粤语</option>
+      </select>
       <div style="margin-top:26px;display:flex;gap:12px">
         <button class="btn w" id="cBack">← 上一步</button>
         <button class="btn g" id="cGo" style="flex:1" disabled>开始学习这个声音</button>
@@ -258,6 +267,18 @@
       <button class="chip">大家好，很高兴认识你！</button>
       <button class="chip">今天天气真好，我们一起去公园散步吧。</button>
       <button class="chip">感谢大家的收听，我们下期再见。</button>
+    </div>
+    <!-- 批次53: 合成语言选择 — auto 为引擎自动识别 (中英混说友好) -->
+    <div style="margin-top:16px;display:flex;align-items:center;gap:10px">
+      <span class="mini" style="flex:none">说什么语言</span>
+      <select id="tLang" style="flex:1;padding:9px 12px;border:1px solid #d8dce8;border-radius:10px;background:#fff;font-size:14px;color:#2a2f3e">
+        <option value="auto" selected>自动识别（中英混合也没问题）</option>
+        <option value="zh">中文</option>
+        <option value="en">English</option>
+        <option value="ja">日本語</option>
+        <option value="ko">한국어</option>
+        <option value="yue">粤语</option>
+      </select>
     </div>
     <div style="margin-top:24px;display:flex;gap:12px">
       <button class="btn w" id="tBack">← 上一步</button>
@@ -442,7 +463,8 @@ $("cGo").onclick = async () => {
     } else {
       await jf("/api/adr/v1/profiles/create", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: $("vName").value.trim(), audio_path: audioPath })
+        body: JSON.stringify({ name: $("vName").value.trim(), audio_path: audioPath,
+                               language: $("vLang").value })
       });
       startWork("profile");
     }
@@ -582,7 +604,8 @@ $("tGo").onclick = async () => {
     const r = await fetch(api("/api/adr/v1/tts"), {
       method: "POST", signal: ctrl.signal,
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, profile: selected, media_type: "wav" })
+      body: JSON.stringify({ text, profile: selected, media_type: "wav",
+                             text_lang: $("tLang").value })
     });
     clearTimeout(kill);
     if (!r.ok) {

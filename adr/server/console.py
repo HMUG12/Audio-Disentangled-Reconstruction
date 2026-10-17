@@ -490,9 +490,11 @@ class ProfileCreateReq(BaseModel):
     audio_path: str
     prompt_text: str = ""
     style: str = ""
+    language: str = "zh"           # 批次53: 参考音频语种 → 语言默认联动面
 
 
-def _profile_worker(name: str, audio_path: str, prompt_text: str, style: str) -> None:
+def _profile_worker(name: str, audio_path: str, prompt_text: str, style: str,
+                    language: str = "zh") -> None:
     from adr.models import voice_library
 
     def _prog(msg: str) -> None:
@@ -501,7 +503,8 @@ def _profile_worker(name: str, audio_path: str, prompt_text: str, style: str) ->
 
     try:
         vdir, info = voice_library.save_voice_auto(
-            name, audio_path, prompt_text, progress=_prog, style=style)
+            name, audio_path, prompt_text, progress=_prog, style=style,
+            language=language)
         with _profile_lock:
             _profile_job.update(state="done", info={**info, "path": str(vdir)},
                                 message=f"建档完成: {name}")
@@ -531,7 +534,9 @@ async def profile_create(body: ProfileCreateReq):
                             info=None, started_at=time.time())
     threading.Thread(target=_profile_worker,
                      args=(name, str(audio), body.prompt_text.strip(),
-                           body.style.strip()), daemon=True).start()
+                           body.style.strip(),
+                           (body.language or "zh").lower().strip()),
+                     daemon=True).start()
     return {"state": "working", "name": name}
 
 

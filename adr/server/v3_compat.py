@@ -119,6 +119,7 @@ async def voices_list(request: Request):
             "id": name,
             "name": name,
             "description": meta.get("prompt_text") or meta.get("style") or "",
+            "language": meta.get("language", "zh"),   # 批次53: 语种标记
             "version": "v2",
         })
     return out
@@ -193,8 +194,12 @@ async def tts_ws_stream_input(websocket: WebSocket):
                 gen = SynthesisService.stream_chunks(
                     _engine(), text, voice["ref_audio"],
                     prompt_text=voice.get("prompt_text") or "",
-                    text_lang=overrides.get("text_lang") or "zh",
-                    prompt_lang="zh",
+                    # 批次53: 语言未传时联动档案语种 (参考音频即档案语种),
+                    # prompt_lang 同理; 旧默认 zh 保持兜底
+                    text_lang=overrides.get("text_lang")
+                    or voice.get("language") or "zh",
+                    prompt_lang=overrides.get("prompt_lang")
+                    or voice.get("language") or "zh",
                     t2s_weights=voice.get("t2s_weights"),
                     vits_weights=voice.get("vits_weights"),
                     split_method=overrides.get("text_split_method"),
@@ -283,9 +288,9 @@ async def tts_ws_stream_input(websocket: WebSocket):
                 voice = v
                 session_voice_id = vid
                 overrides = {k: data.get(k) for k in (
-                    "text_lang", "speed_factor", "temperature", "top_k", "top_p",
-                    "seed", "batch_size", "text_split_method", "media_type",
-                    "fragment_interval",
+                    "text_lang", "prompt_lang", "speed_factor", "temperature",
+                    "top_k", "top_p", "seed", "batch_size",
+                    "text_split_method", "media_type", "fragment_interval",
                 ) if data.get(k) is not None}
                 await _safe_send_json({"type": "ready", "voice_id": vid})
 

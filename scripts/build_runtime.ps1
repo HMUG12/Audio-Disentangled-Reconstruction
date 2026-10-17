@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 # =====================================================================
 # ADR portable runtime builder (batch 44; batch 52 dual-variant)
 #
@@ -122,6 +122,12 @@ fast-langdetect==1.0.1
 fasttext-predict==0.9.2.4
 jaconv==0.5.0
 opencc-python-reimplemented==0.1.7
+# 批次53 多语言 G2P: 日/韩/粤合成 import 链 (ko 完整链还需 g2pk2+eunjeon,
+# Windows cp313 不可用 — v1.1 宣传口径: 中/英/日/粤 + 中英混说)
+pyopenjtalk==0.4.1
+jamo==0.4.1
+ToJyutping==3.2.0
+ko_pron==1.3
 peft==0.19.1
 scipy==1.17.1
 einops==0.8.2
