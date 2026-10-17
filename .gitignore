@@ -38,6 +38,9 @@ dist/
 # 批次44: 便携 runtime 构建输出 (python + 依赖 + 代码副本) 与缓存
 build/
 
+# ---- Docker (批次56: compose bind mount 持久化目录) ----
+docker/data/
+
 # ---- 本地实验/未整合的接口蓝本 ----
 .output/
 需要适配的一个接口/

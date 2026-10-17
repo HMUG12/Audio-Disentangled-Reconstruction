@@ -60,7 +60,7 @@
 **版本梯子**：v1.0.1（双包发布）→ v1.1（批次 53/54 多语言+i18n）→ v1.2（多形态分发）→ v1.3（推理加速）→ v1.4（训练加速）；B 分发生态/HF Space demo 零散穿插。
 
 ### H1. v1.2 多形态分发（用户拍板优先）
-- **容器版（Docker，优先）**：标准服务器版——无 UI、CLI/HTTP API 操作；Linux CUDA/CPU torch + adr server + compose；GSV 上游有官方镜像先例（amd64/arm64）。**注（2026-10-17 review）**：现存 `docker/` 目录为项目早期遗留草稿（torch 2.1/py3.10/Gradio 7860 `adr webui` 入口均与现状脱节），v1.2 落地时**重写而非沿用**
+- **容器版（Docker，优先）**：标准服务器版——无 UI、CLI/HTTP API 操作；Linux CUDA/CPU torch + adr server + compose；GSV 上游有官方镜像先例（amd64/arm64）。**注（2026-10-17 review）**：现存 `docker/` 目录为项目早期遗留草稿（torch 2.1/py3.10/Gradio 7860 `adr webui` 入口均与现状脱节），v1.2 落地时**重写而非沿用**。**落地（批次 56）**：Dockerfile/compose/README/构建脚本全量重写，GSV 钉版 clone + 24 补丁自动应用，双变体镜像 tag（cpu/cuda），ko 链 Linux 补齐；容器构建冒烟待实测
 - **Windows 无 UI 服务版**：同一 runtime 跳过 Tauri 壳，`python -m adr.server` 服务化脚本（低工作量）
 - **Windows 桌面版**：现状即此形态
 - 与 v1.3 协同：服务器多用户场景正是连续批处理（continuous batching）的价值面
@@ -113,6 +113,18 @@
 - [x] **源码用户 G2P 缺口**：批次 53 四包只进 build_runtime.ps1，pyproject/requirements 均缺 → 源码用户无法日/粤/韩合成 → pyproject 新增 `[multilang]` extra（pyopenjtalk/jamo/ToJyutping/ko_pron 钉版同 runtime）+ README 源码安装注记（不并入 `[all]`，防 CI/全量安装被 pyopenjtalk 源码构建拖挂）
 - [x] README 静默安装示例文件名 1.0.1→1.1.0；REPRODUCE.md 补 v1.1.0 安装包实测体积
 - 备注：docker/ 遗留草稿注记已入 H1；本地全量 pytest 回归 + 推送后盯 CI 转绿
+
+## 批次 56（2026-10-17）：v1.2 容器版 — Docker 分发落地
+
+> H1 容器版交付物全量重写（旧 docker/ 为早期草稿，torch 2.1/py3.10/Gradio 形态已脱节）：
+
+- [x] **docker/Dockerfile 重写（两阶段）**：python:3.11-slim；`TORCH_VARIANT=cpu|cuda` 构建参数（torch/torchaudio 2.10.0 分别从 cpu / cu130 源安装，与 Windows 双包同款）；venv + `pip install -e .` 保持源码布局（引擎逻辑锚定 REPO_ROOT/third_party，容器内 /app 同层）；GSV **钉版 clone**（见下）+ `apply_compat_patches.py` 自动打补丁；runtime 层 ENV：`ADR_DATA_DIR=/data`、`ADR_TTS_CACHE_DIR=/data/tts_cache`、`HF_HOME=/data/hf-cache`；HEALTHCHECK 探 `/api/adr/v1/health`；入口 `python -m adr.server --addr 0.0.0.0 --port 9881`（纯服务形态，无 WebUI）
+- [x] **docker/requirements-linux.txt**：蓝本 = build_runtime.ps1 钉版清单；去 gradio/gradio_client、audioop-lts/standard-aifc（Windows 专用）、torch（按变体单独装）；**补 ko 链 Linux 包**：`g2pk2==0.0.3`（纯 py）+ `python-mecab-ko==1.3.7`（cp311 manylinux 轮子；GSV 官方 requirements 同款 `python_mecab_ko; sys_platform != 'win32'`，词典包自动随拉）——Windows 沿用 eunjeon 不变，Linux 侧韩语链补齐
+- [x] **GSV 钉版可复现链**：commit `d523079fc05d9a8028d6085bffe4a2757c32abb6`（无 submodule，干净 clone 即可）；`GSV_PROXY_PREFIX` 构建参数支持 ghproxy 类加速；镜像 tag `adr-server:1.2.0-cpu` / `adr-server:1.2.0-cuda`（pyproject 暂 1.1.0，v1.2 发布时包版本对齐）
+- [x] **Track E 补丁收编**：批次 33 GPU→CPU 同步补丁从脚本内嵌字符串迁到 `scripts/patches/track_e_ar_sync.patch`（PATCH_FILES 机制：git apply --whitespace=nowarn + 幂等特征串检测）；修 patch 文件编码（去 UTF-8 BOM + CRLF→LF——PowerShell 重定向产物 git apply 直接失败）；本地已打补丁树上 `git apply --check --reverse` 通过 + 脚本幂等验证（应用 0 / 跳过 24 / 失败 0）
+- [x] **compose 双文件**：`docker-compose.yml`（CPU 默认：`./data:/data` bind mount + pretrained_models/G2PWModel 两个 named volume 挂权重自引导目录，不遮蔽 GSV 代码；shm 2g）+ `docker-compose.gpu.yml`（GPU override：cuda 变体 + nvidia 全卡透传 + ADR_TTS_DEVICE=auto）；仓库根 `.dockerignore`（context=.. 决定必须在根：裁 third_party/tests/docs/data，*.md 豁免 README.md）；.gitignore 追加 `docker/data/`
+- [x] **docker/README.md 重写 + scripts/build_docker.ps1**：双变体用法/数据卷/端口与 ADR_TTS_API_KEY 鉴权（0.0.0.0 无鉴权警告为容器预期行为）/代理与 GSV 加速/FAQ；构建脚本 `-Cuda`/`-Tag`/`-ProxyPrefix` 封装 docker build
+- [ ] 容器构建验证 + 冒烟（/health 200 + engine_ready + ko 链 `from g2pk2 import G2p`）——待 Docker Desktop 实测（构建需网络：拉镜像 / pip / clone）
 
 ## 原则
 
