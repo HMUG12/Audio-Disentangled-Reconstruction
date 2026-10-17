@@ -11,11 +11,14 @@ api_v2 / api_neko 端口一致, N.E.K.O 本机对接无需改端口配置。
 from __future__ import annotations
 
 import argparse
+import faulthandler
+import os
 import sys
 
 import uvicorn
 
 from adr.core import settings
+from adr.core.logging import setup_logging
 from adr.server.app import create_app
 
 
@@ -57,6 +60,10 @@ def _print_banner(addr: str, port: int) -> None:
 
 
 def main():
+    # 批次57: native 层崩溃 (如 Intel 13/14 代 AVX-512 缺陷触发 oneDNN/MKL 段错误)
+    # 通常无 Python traceback、stderr 零输出 — faulthandler 在崩溃瞬间把 Python 侧
+    # 调用栈写到 stderr, 随桌面壳泵入 server.log, 是"闪退无痕"的最后兜底。
+    faulthandler.enable(file=sys.stderr, all_threads=True)
     ap = argparse.ArgumentParser(
         description="ADR TTS 服务 (GSV api_v2 兼容层 + ADR 原生档案 API)")
     ap.add_argument("-p", "--port", type=int, default=9881,
@@ -65,6 +72,10 @@ def main():
                     help="监听地址 (默认 127.0.0.1 仅本机; 局域网访问用 "
                          "0.0.0.0, 必须同时设置 ADR_TTS_API_KEY)")
     args = ap.parse_args()
+    # 批次56 review: 此前 server 从不调 setup_logging, root logger 默认 WARNING —
+    # adr.* 的 INFO 日志 (gsv_engine [prewarm] 就绪/预热等排障关键行) 全部被吞,
+    # server.log 与 docker logs 只剩 uvicorn 行。级别可用 ADR_LOG_LEVEL 覆盖。
+    setup_logging(level=os.environ.get("ADR_LOG_LEVEL", "INFO"))
     _warn_unauthenticated_listen(args.addr)
     _print_banner(args.addr, args.port)
     uvicorn.run(create_app(), host=args.addr, port=args.port)

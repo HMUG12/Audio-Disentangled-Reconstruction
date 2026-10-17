@@ -174,7 +174,10 @@ def _acquire(entry: dict) -> None:
             last_err = e
             zip_path.unlink(missing_ok=True)
             continue
-    raise RuntimeError(f"all sources failed for {entry['zip_name']}: {last_err}")
+    raise RuntimeError(
+        f"all sources failed for {entry['zip_name']}: {last_err} — "
+        "请检查网络与代理 (需可达 hf-mirror.com / huggingface.co / modelscope.cn), "
+        "修复后重启引擎重试")
 
 
 def ensure() -> None:

@@ -31,6 +31,7 @@ from adr.core.exceptions import (
     SynthesisParamsError,
     error_code,
 )
+from adr.models.gsv_engine import handle_cuda_oom, is_cuda_oom
 from adr.server import tts_cache
 from adr.server.audio_codec import pack_audio, to_int16
 from adr.services import SynthesisService
@@ -149,7 +150,10 @@ def _stream_generator(engine, req: dict, media_type: str):
         )
     except Exception as e:
         # 流已开始, 无法改写状态码 — 记录后终止 (与 GSV api_v2 行为一致)
-        logger.exception("streaming tts failed: %s", e)
+        if is_cuda_oom(e):
+            handle_cuda_oom(e)  # 释放碎片显存 + 友好警告日志 (批次57)
+        else:
+            logger.exception("streaming tts failed: %s", e)
 
 
 async def tts_handle(req: dict, request: Request) -> Response:
@@ -229,6 +233,11 @@ async def tts_handle(req: dict, request: Request) -> Response:
         tts_cache.put(cache_key, buf.getvalue(), ext=media_type)
         return Response(buf.getvalue(), media_type=f"audio/{media_type}")
     except Exception as e:
+        if is_cuda_oom(e):
+            # 批次57: OOM 独立分流 — 释放碎片显存 + 503 友好提示 (此前是裸 400 堆栈原文)
+            return JSONResponse(status_code=503,
+                                content={"message": handle_cuda_oom(e),
+                                         "code": "cuda_oom"})
         return JSONResponse(status_code=400,
                             content={"message": "tts failed", "Exception": str(e),
                                      "code": error_code(e)})
