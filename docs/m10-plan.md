@@ -155,6 +155,9 @@
 - [x] **exp 名清洗 Windows 保留名**：新建 `adr/core/naming.py`（`sanitize_exp_name`：控制字符 `unicodedata.category=="Cc"` + `\/:*?"<>|` 删除 + strip + rstrip(". ") + 保留名加 `_` 前缀 + 空回退 my_voice；`is_windows_reserved`：CON/PRN/AUX/NUL/COM1-9/LPT1-9 大小写不敏感含带扩展名形式）；console.py train/start 与 webui `_run_gsv_finetune` 两处旧两行清洗替换调用；voice_library 与 pathsafe 两处 `is_safe_name` 追加保留名拒绝（落盘点 data/voices 与档案名目录需可 mkdir）
 - [x] **CLI 文件日志**：`adr/cli.py` main group 统一 `setup_logging(level=ADR_LOG_LEVEL env, log_file=<log_dir>/cli.log)`（log_dir 取 config，配置不可用回退 ./logs）；删除 12 处命令内 `setup_logging(level="INFO")` 重复调用及 import 中的 setup_logging（其 root.handlers.clear() 会重置 group 已挂的 file handler——幂等陷阱）
 - [x] 验证：7 文件 py_compile + naming 14 组断言 + is_safe_name 双实现保留名断言 + v3_compat import 与 cuda_oom 分支源码断言 + CLI 冒烟（`python -m adr.cli info` → logs/cli.log 生成含设备日志）+ cargo check 0 警告 + cargo test 5/5 + pytest security/voice_library/server_api 104 passed（pytest 系统临时目录被沙箱拒访，`--basetemp=.pytest_tmp` 绕过，跑后清理）
+- [x] **review 修复（双子代理交叉验证 2/2 确认）**：① **webui `sanitize_exp_name` NameError（major）**——import 误落在不使用它的 `_run_train_cmd`（SearchReplace 匹配到两函数雷同 import 块的第一处），使用点 `_run_gsv_finetune` 局部 import 块无该名 → 点击「开始克隆微调」/ REST clone_train 生成器首次迭代即 NameError；修复 = import 移至 `_run_gsv_finetune` 局部 import 块（与 json/subprocess/sys/time 并列）。② **CLI main group setup_logging 无兜底（minor）**——log_dir 指向不可写路径时 makedirs/FileHandler 抛 OSError，click group 回调先于全部子命令执行 → 所有命令（含 doctor）启动即崩；修复 = try/except OSError 降级为仅 stderr 的 setup_logging + click.echo 一行降级警告
+- [x] review 修复验证：py_compile + 冒烟（`python -m adr.cli info` exit 0）+ 降级场景 CliRunner 实测（log_file dirname 为普通文件 → FileExistsError → exit 0 + warning 输出）全绿
+- [x] **跨平台专项 review（Python 侧 + Rust 侧双子代理）**：Python 10 项（编码/路径/行尾/大小写/保留名/subprocess/asyncio/信号/原子操作/控制台 Unicode）全绿；Rust 8 项（CRLF/编码/mutex 中毒/写失败/路径/cfg 保护/进程终止/线程生命周期）主平台全绿；无 major/minor，info 级发现见当次汇报
 
 ## 原则
 
