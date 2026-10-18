@@ -60,8 +60,8 @@
 **版本梯子**：v1.0.1（双包发布）→ v1.1（批次 53/54 多语言+i18n）→ v1.2（多形态分发）→ v1.3（推理加速）→ v1.4（训练加速）；B 分发生态/HF Space demo 零散穿插。
 
 ### H1. v1.2 多形态分发（用户拍板优先）
-- **容器版（Docker，优先）**：标准服务器版——无 UI、CLI/HTTP API 操作；Linux CUDA/CPU torch + adr server + compose；GSV 上游有官方镜像先例（amd64/arm64）。**注（2026-10-17 review）**：现存 `docker/` 目录为项目早期遗留草稿（torch 2.1/py3.10/Gradio 7860 `adr webui` 入口均与现状脱节），v1.2 落地时**重写而非沿用**。**落地（批次 56）**：Dockerfile/compose/README/构建脚本全量重写，GSV 钉版 clone + 24 补丁自动应用，双变体镜像 tag（cpu/cuda），ko 链 Linux 补齐；容器构建冒烟待实测
-- **Windows 无 UI 服务版**：同一 runtime 跳过 Tauri 壳，`python -m adr.server` 服务化脚本（低工作量）
+- **容器版（Docker，优先）**：标准服务器版——无 UI、CLI/HTTP API 操作；Linux CUDA/CPU torch + adr server + compose；GSV 上游有官方镜像先例（amd64/arm64）。**注（2026-10-17 review）**：现存 `docker/` 目录为项目早期遗留草稿（torch 2.1/py3.10/Gradio 7860 `adr webui` 入口均与现状脱节），v1.2 落地时**重写而非沿用**。**落地（批次 56）**：Dockerfile/compose/README/构建脚本全量重写，GSV 钉版 clone + 24 补丁自动应用，双变体镜像 tag（cpu/cuda），ko 链 Linux 补齐；构建冒烟已实测通过（见批次 56 记录），ghcr.io 镜像发布入批次 60
+- **Windows 无 UI 服务版**：同一 runtime 跳过 Tauri 壳，`python -m adr.server` 服务化（批次 60 落地：server.bat + README 三形态对照）
 - **Windows 桌面版**：现状即此形态
 - 与 v1.3 协同：服务器多用户场景正是连续批处理（continuous batching）的价值面
 
@@ -169,6 +169,18 @@
 - [x] **动态点检（A-2）**：本地 `python -m adr.server`（9881）+ 浏览器自动化——控制台四页（/、/pro、/easy、/call）加载零 console error，back 默认隐藏、?desktop=1 可见且浏览器直开兜底 href="/" 符合设计；壳 launcher/prewarm 经临时静态服务加载零 SyntaxError（showToast/setTip 就位，Tauri 缺失守卫完好）；真壳逐按钮桌面自动化留白（需 cargo build 完整 Tauri 应用，发布前手测覆盖）
 - [x] **D 节闭环**：导出/导入核心批次 47 已交付（voice_package.py：manifest+meta+ref.wav+weights，FORMAT/VERSION 清单；导入防 zip-slip / 同 hash 复用 / validate_weights_file 两段式 / 失败回滚；native.py export/import 端点；pro.html 导入覆盖确认流）+ pytest test_voice_package 7/7——本轮补齐最后一项：**pExport 导出重写**，fetch→blob→a[download]（壳内由 on_download 接手，与 easy rSave 同模式）+ 600s 超时 + 完成/失败 toast 反馈 + 导出前 confirm 生物特征告知（i18n-pro 3 新键：pro.confirm_export_bio"权重即声音本体/仅提供可信对象"、pro.toast_export_done、pro.toast_export_fail）
 - [x] 验证：控制台四页 + 壳两页浏览器点检全绿（零 console error）+ 新 i18n 键浏览器实测（{name} 占位符替换正确）+ pytest voice_package 7/7（0.49s）
+
+## 批次 60（规划定稿 2026-10-18）：v1.2 收尾发布
+
+> 用户拍板：方向 = v1.2 收尾发布；无 UI 服务版 = server.bat + README 三形态；容器镜像 = 推 ghcr.io。真壳逐按钮手测按"后面完成后一起测试"落在本批发布前。
+
+- [ ] **Windows 无 UI 服务版（H1 收口）**：安装根目录 `server.bat`——调 `runtime\python\python.exe -m adr.server`（PYTHONUTF8=1/PYTHONIOENCODING=utf-8 对齐壳与 webui 做法）；env 直读（ADR_DATA_DIR 缺省 %LOCALAPPDATA%\ADR\data 对齐桌面版、ADR_TTS_API_KEY、ADR_TTS_DEVICE、ADR_LOG_LEVEL），与容器版同为 env 驱动无 UI 形态；README 新增桌面版/无 UI 版/容器版三形态对照小节
+- [ ] **容器镜像 ghcr.io 发布**：新增 GitHub Actions workflow（tag v* 触发）构建 cpu/cuda 双变体推 ghcr.io（GITHUB_TOKEN packages:write；buildx 层缓存压构建时长，torch 镜像体积大属预期）；README/release notes 补 `docker pull ghcr.io/<owner>/adr-server:1.2.0-cpu|cuda` 用法；镜像 tag 对齐 1.2.0（批次 56 已预留命名）
+- [ ] **版本面 1.2.0 对齐（批次 55 教训 checklist 化）**：pyproject.toml / adr `__version__` / tauri.conf.json / Cargo.toml（Cargo.lock 随动）/ package.json（package-lock 随动）/ installer.iss 六面 + launcher.html 版本显示 + README 静默安装示例文件名 + REPRODUCE.md 体积注记；新增 `scripts/check_versions.py` 六面一致性断言并纳入 CI smoke，防再犯
+- [ ] **发布前真壳逐按钮手测**：cargo build 完整 Tauri 壳 → launcher 全按钮走查（设置面板开合/保存/打开数据与日志目录/复制 URL/开机自启/检查更新/QQ 复制）+ prewarm 正常流与 skip + 壳内控制台四页导航与 back + pExport 真实导出→导入闭环 + 一次合成冒烟；发现问题当批即修
+- [ ] **双包构建**：build_installer.ps1 CPU + `-Gpu`（check_runtime.py 前置 + GPU 包冒烟断言 torch.cuda.is_available）
+- [ ] **Release 收尾**：release notes v1.2.0（容器版 + 双包 + 批次 57 日志体系/13-14 代加固 + 批次 58 review 收尾 + 批次 59 UI 质量与档案导出闭环 + **韩语容器版口径兑现**（Windows 限制不变，Linux 容器可装 ko 链）；已知限制：中英混说清晰度/流畅度）→ tag v1.2.0 → GitHub Release 附双安装包 → 123 云盘
+- [ ] plan 收口：H1 勾选 + 本节回填 [x] + 验证记录
 
 ## 原则
 

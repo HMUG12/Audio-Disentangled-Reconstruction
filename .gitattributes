@@ -2,3 +2,7 @@
 # patch 文件保持原始字节 (UTF-8 无 BOM + LF): BOM/CRLF 会破坏 git apply
 # (track_e_ar_sync.patch 曾因 PowerShell 重定向产物带 BOM+CRLF 而失败)
 *.patch -text
+
+# batch 文件必须 CRLF: cmd.exe 解析 goto 标签/括号块遇 LF-only 会行错位碎片化执行
+# (批次60 教训: server.bat 写成 LF-only 导致 stub 冒烟三次碎片化报错)
+*.bat text eol=crlf

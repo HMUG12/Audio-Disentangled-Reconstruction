@@ -1,0 +1,75 @@
+name: docker-publish
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-push:
+    name: build & push (${{ matrix.variant }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [cpu, cuda]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version (tag 剥 v 前缀; dispatch 回退 pyproject)
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            VER="${GITHUB_REF_NAME#v}"
+          else
+            VER="$(grep -m1 '^version' pyproject.toml | sed 's/.*"\(.*\)".*/\1/')"
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "publishing version: $VER (variant: ${{ matrix.variant }})"
+
+      # ghcr 镜像路径必须全小写 (owner HMUG12 -> hmug12)
+      - name: Lowercase ghcr image path
+        id: img
+        run: |
+          OWNER="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "path=${REGISTRY}/${OWNER}/adr-server" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ steps.img.outputs.path }}
+          tags: |
+            type=raw,value=${{ steps.ver.outputs.version }}-${{ matrix.variant }}
+            type=raw,value=${{ matrix.variant }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          build-args: |
+            TORCH_VARIANT=${{ matrix.variant }}
+            ADR_VERSION=${{ steps.ver.outputs.version }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=docker-${{ matrix.variant }}
+          cache-to: type=gha,mode=max,scope=docker-${{ matrix.variant }}
