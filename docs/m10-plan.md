@@ -158,6 +158,7 @@
 - [x] **review 修复（双子代理交叉验证 2/2 确认）**：① **webui `sanitize_exp_name` NameError（major）**——import 误落在不使用它的 `_run_train_cmd`（SearchReplace 匹配到两函数雷同 import 块的第一处），使用点 `_run_gsv_finetune` 局部 import 块无该名 → 点击「开始克隆微调」/ REST clone_train 生成器首次迭代即 NameError；修复 = import 移至 `_run_gsv_finetune` 局部 import 块（与 json/subprocess/sys/time 并列）。② **CLI main group setup_logging 无兜底（minor）**——log_dir 指向不可写路径时 makedirs/FileHandler 抛 OSError，click group 回调先于全部子命令执行 → 所有命令（含 doctor）启动即崩；修复 = try/except OSError 降级为仅 stderr 的 setup_logging + click.echo 一行降级警告
 - [x] review 修复验证：py_compile + 冒烟（`python -m adr.cli info` exit 0）+ 降级场景 CliRunner 实测（log_file dirname 为普通文件 → FileExistsError → exit 0 + warning 输出）全绿
 - [x] **跨平台专项 review（Python 侧 + Rust 侧双子代理）**：Python 10 项（编码/路径/行尾/大小写/保留名/subprocess/asyncio/信号/原子操作/控制台 Unicode）全绿；Rust 8 项（CRLF/编码/mutex 中毒/写失败/路径/cfg 保护/进程终止/线程生命周期）主平台全绿；无 major/minor，info 级发现见当次汇报
+- [x] **跨平台修复（review 后追加，用户拍板）**：webui 三处 `Popen`（`_run_train_cmd` 主训练 / `_run_gsv_finetune` 门禁 + 主微调）补注入 `PYTHONIOENCODING=utf-8` + `PYTHONUTF8=1`（对齐 console.py 同款做法），根除 zh-CN Windows + Python≤3.14 下子进程 GBK 输出经 utf-8/replace 解码乱码 → 早停标记「收到训练门禁早停信号」匹配失败、early_stop 指标静默丢失；两函数局部 import 块补 `import os`。验证：py_compile + 源码断言（2 处 import os + 3 处 PYTHONUTF8）全绿
 
 ## 原则
 

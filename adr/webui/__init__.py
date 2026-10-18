@@ -609,6 +609,7 @@ def _run_train_cmd(
 
     每次 yield (日志文本, 指标); 最后一次 yield 带最终指标或错误。
     """
+    import os
     import subprocess
     import sys
     import time
@@ -679,6 +680,8 @@ def _run_train_cmd(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace",
             cwd=str(REPO), bufsize=1,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8",
+                 "PYTHONUTF8": "1"},  # 训练链全 utf-8, 否则 Windows GBK 输出乱码
         )
     except Exception as e:
         yield "\n".join(log_buf), _err(f"训练进程启动失败: {e}")
@@ -745,6 +748,7 @@ def _run_gsv_finetune(
     门禁走 CPU (--cpu): 离线打分不与训练抢显存, 5 句均值 ≥0.80 发 STOP 早停。
     """
     import json
+    import os
     import subprocess
     import sys
     import time
@@ -791,6 +795,8 @@ def _run_gsv_finetune(
             gate_proc = subprocess.Popen(
                 gate_cmd, stdout=gate_fh, stderr=subprocess.STDOUT,
                 text=True, encoding="utf-8", errors="replace", cwd=str(REPO),
+                env={**os.environ, "PYTHONIOENCODING": "utf-8",
+                     "PYTHONUTF8": "1"},
             )
             log_buf.append(f"[gate] 质量门禁已启动 (PID {gate_proc.pid}, CPU 打分, "
                            f"曲线 {gate_curve.name})")
@@ -809,6 +815,8 @@ def _run_gsv_finetune(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace",
             cwd=str(REPO), bufsize=1,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8",
+                 "PYTHONUTF8": "1"},
         )
     except Exception as e:
         yield "\n".join(log_buf), _err(f"微调进程启动失败: {e}")
