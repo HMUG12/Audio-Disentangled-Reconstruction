@@ -32,10 +32,16 @@ def main() -> None:
     """
     # main group 统一挂日志 (含文件); 命令内不得再调 setup_logging
     # (其 root.handlers.clear() 会重置已有 handler)。
+    # 日志目录不可写时降级为仅 stderr, 保证所有子命令仍可运行。
     from adr.core import setup_logging
 
-    setup_logging(level=os.environ.get("ADR_LOG_LEVEL", "INFO"),
-                  log_file=_cli_log_file())
+    try:
+        setup_logging(level=os.environ.get("ADR_LOG_LEVEL", "INFO"),
+                      log_file=_cli_log_file())
+    except OSError as exc:
+        setup_logging(level=os.environ.get("ADR_LOG_LEVEL", "INFO"))
+        click.echo(f"warning: 日志文件不可用, 已降级为仅控制台输出: {exc}",
+                   err=True)
 
 
 @main.command()

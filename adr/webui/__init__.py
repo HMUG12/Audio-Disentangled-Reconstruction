@@ -613,8 +613,6 @@ def _run_train_cmd(
     import sys
     import time
 
-    from adr.core.naming import sanitize_exp_name
-
     log_buf = []
 
     # 解析 data_dir (去掉括号注释)
@@ -750,6 +748,8 @@ def _run_gsv_finetune(
     import subprocess
     import sys
     import time
+
+    from adr.core.naming import sanitize_exp_name
 
     log_buf = []
     if not audio_path:
