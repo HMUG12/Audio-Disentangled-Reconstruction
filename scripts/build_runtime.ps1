@@ -122,8 +122,10 @@ fast-langdetect==1.0.1
 fasttext-predict==0.9.2.4
 jaconv==0.5.0
 opencc-python-reimplemented==0.1.7
-# 批次53 多语言 G2P: 日/韩/粤合成 import 链 (ko 完整链还需 g2pk2+eunjeon,
-# Windows cp313 不可用 — v1.1 宣传口径: 中/英/日/粤 + 中英混说)
+# batch53 multilingual G2P: ja/ko/yue synthesis import chain (full ko also
+# needs g2pk2+eunjeon, unavailable on cp313 -- v1.1 claim: zh/en/ja/yue)
+# NOTE: keep this here-string pure ASCII -- PS 5.1 reads BOM-less files as
+# ANSI(GBK) and CJK comment bytes here silently drop the 4 lines below.
 pyopenjtalk==0.4.1
 jamo==0.4.1
 ToJyutping==3.2.0
