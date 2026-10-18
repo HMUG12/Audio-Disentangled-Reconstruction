@@ -155,7 +155,8 @@ document.getElementById("btnRetry").addEventListener("click", async () => {
   catch (e) { setTip(String(e), "warn"); acts.style.display = "flex"; }
 });
 document.getElementById("btnSkip").addEventListener("click", () => {
-  window.__TAURI__.core.invoke("skip_prewarm").catch(() => {});
+  window.__TAURI__.core.invoke("skip_prewarm")
+    .catch(e => setTip("强制进入失败: " + e, "warn"));
 });
 </script>
 </body>

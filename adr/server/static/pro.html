@@ -492,7 +492,16 @@ $("btnDoctorFix").onclick = () => runDoctor(true);
 const isDesktop = new URLSearchParams(location.search).get("desktop") === "1";
 const back = $("back");
 if (!isDesktop) back.style.display = "none";
-back.onclick = () => { if (isDesktop) location.href = "http://tauri.localhost/launcher.html"; };
+back.onclick = () => {
+  if (!isDesktop) return;
+  // 壳 origin 按 UA 构造 (lib.rs TAURI_ORIGIN: Windows=tauri.localhost, 其他=tauri://localhost);
+  // 无 Tauri 注入 (?desktop=1 但浏览器直开) 兜底回索引页
+  location.href = window.__TAURI__
+    ? (/Windows/i.test(navigator.userAgent)
+        ? "http://tauri.localhost/launcher.html"
+        : "tauri://localhost/launcher.html")
+    : "/";
+};
 
 /* ---- Tab 切换 ---- */
 let curTab = "ov";
@@ -895,15 +904,34 @@ $("pRollback").onclick = async () => {
   } catch (e) { toast(I.t("pro.toast_rollback_fail", { msg: e.message }), true); }
 };
 
-/* 批次47: 音色档案导出/导入 (.adrvoice 包, 含绑定权重) */
-$("pExport").onclick = () => {
+/* 批次47/59: 音色档案导出/导入 (.adrvoice 包, 含绑定权重) */
+$("pExport").onclick = async () => {
   const name = $("pSel").value;
   if (!name) { toast(I.t("pro.toast_pick_profile"), true); return; }
-  const a = document.createElement("a");
-  a.href = api("/api/adr/v1/profiles/" + encodeURIComponent(name) + "/export");
-  a.download = name + ".adrvoice";
-  document.body.appendChild(a); a.click(); a.remove();
+  // 批次59 (plan D): 权重即声音本体 — 导出前明确告知生物特征性质
+  if (!confirm(I.t("pro.confirm_export_bio", { name }))) return;
   toast(I.t("pro.toast_exporting"));
+  try {
+    const ctrl = new AbortController();
+    const kill = setTimeout(() => ctrl.abort(), 600000);
+    const r = await fetch(api("/api/adr/v1/profiles/" + encodeURIComponent(name) + "/export"),
+                          { signal: ctrl.signal });
+    clearTimeout(kill);
+    if (!r.ok) {
+      let m = r.status;
+      try { const j = await r.json(); if (j.message || j.detail) m = j.message || j.detail; } catch (_) { /* 非 JSON */ }
+      throw new Error(m);
+    }
+    // fetch→blob→a[download]: 壳内由 on_download 接手, 并可给出完成反馈
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name + ".adrvoice";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    toast(I.t("pro.toast_export_done"));
+  } catch (e) { toast(I.t("pro.toast_export_fail", { msg: e.message }), true); }
 };
 
 $("pImportBtn").onclick = () => $("pImportFile").click();

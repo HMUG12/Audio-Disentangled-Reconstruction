@@ -347,7 +347,16 @@ function human(e) {
 const back = $("back");
 const isDesktop = new URLSearchParams(location.search).get("desktop") === "1";
 if (!isDesktop) back.style.display = "none";
-back.onclick = () => { if (isDesktop) location.href = "http://tauri.localhost/launcher.html"; };
+back.onclick = () => {
+  if (!isDesktop) return;
+  // 壳 origin 按 UA 构造 (lib.rs TAURI_ORIGIN: Windows=tauri.localhost, 其他=tauri://localhost);
+  // 无 Tauri 注入 (?desktop=1 但浏览器直开) 兜底回索引页
+  location.href = window.__TAURI__
+    ? (/Windows/i.test(navigator.userAgent)
+        ? "http://tauri.localhost/launcher.html"
+        : "tauri://localhost/launcher.html")
+    : "/";
+};
 
 /* ---- 步骤切换 ---- */
 let step = 1;
