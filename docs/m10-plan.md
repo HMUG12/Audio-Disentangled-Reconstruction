@@ -7,10 +7,10 @@
 
 ### A. 桌面壳全面体检（候选批次 47）
 
-- [ ] **静态审计**：前端（launcher.html / pro / easy / call 控制台页）全部 `invoke()` / onclick 处理器对照 `lib.rs` 命令注册表，找出未注册/未绑定/无反馈的入口
-- [ ] **动态点检**：控制台四页（/, /pro, /easy, /call）用浏览器自动化逐按钮点检；壳内页面（启动器/托盘/关于页）用桌面自动化逐按钮点检
-- [ ] **修复**：死按钮当场修（历史上踩过：命令未注册、下载事件静默取消、fallback 导航缺失）
-- [ ] **交互反馈统一**：所有有副作用的按钮统一 loading 态 / 错误提示 / 成功反馈形态
+- [x] **静态审计**（批次 59）：前端（launcher.html / pro / easy / call 控制台页）全部 `invoke()` / onclick 处理器对照 `lib.rs` 命令注册表，找出未注册/未绑定/无反馈的入口——15 命令全注册、无真死按钮，实际问题 7 项（反馈缺口与跨平台断链）
+- [x] **动态点检**（批次 59）：控制台四页（/, /pro, /easy, /call）浏览器自动化点检零 console error；壳内页面经静态服务加载验证（零语法错误 + Tauri 缺失守卫完好）；真壳逐按钮桌面自动化留白（发布前手测覆盖）
+- [x] **修复**（批次 59）：死按钮审计确认无（历史踩坑已在前批修复）；本轮修 back 跨平台断链 ×3 + 空路径/空 catch 静默 ×3（详见批次 59）
+- [x] **交互反馈统一**（批次 59）：7 项反馈缺口全修——back 兜底、打开目录空路径 toast、prewarm skip 失败提示、剪贴板失败 toast ×2、pExport 完成/失败反馈 + 生物特征确认
 
 ### B. 设置中心 v1（批次 48，已交付主体）
 
@@ -38,10 +38,10 @@
 
 ### D. 音色档案导入导出（候选批次 50）
 
-- [ ] 导出 = zip 容器：档案元数据 + 参考音频 + 绑定的 t2s/vits 权重对 + 风格预设（清单文件带版本号）
-- [ ] 导入 = `validate_weights_file` 校验（批次 43 资产复用）+ 重名冲突处理（重命名/覆盖二选一）
-- [ ] **导出提示**：权重即声音本体，含生物特征性质数据，导出时明确告知
-- [ ] 解决"声音档案不在安装包内、换机即失"的债（m9 遗留）
+- [x] 导出 = zip 容器（批次 47）：档案元数据 + 参考音频 + 绑定的 t2s/vits/rvc 权重对（风格字段随 meta.json 可移植副本走）+ manifest 清单带版本号与 sha256 完整性
+- [x] 导入 = `validate_weights_file` 校验（批次 43 资产复用，批次 47 两段式）+ 重名冲突处理（同 hash 复用 / 覆盖二选一确认）+ 防 zip-slip + 失败回滚
+- [x] **导出提示**（批次 59）：权重即声音本体，含生物特征性质数据，导出前 confirm 明确告知（pro.confirm_export_bio，中英双语）
+- [x] 解决"声音档案不在安装包内、换机即失"的债（m9 遗留）：.adrvoice 包导出/导入全链路 + pytest 7/7
 
 ### E. 续训流程（批次 50 已交付 2026-10-10）
 
@@ -159,6 +159,16 @@
 - [x] review 修复验证：py_compile + 冒烟（`python -m adr.cli info` exit 0）+ 降级场景 CliRunner 实测（log_file dirname 为普通文件 → FileExistsError → exit 0 + warning 输出）全绿
 - [x] **跨平台专项 review（Python 侧 + Rust 侧双子代理）**：Python 10 项（编码/路径/行尾/大小写/保留名/subprocess/asyncio/信号/原子操作/控制台 Unicode）全绿；Rust 8 项（CRLF/编码/mutex 中毒/写失败/路径/cfg 保护/进程终止/线程生命周期）主平台全绿；无 major/minor，info 级发现见当次汇报
 - [x] **跨平台修复（review 后追加，用户拍板）**：webui 三处 `Popen`（`_run_train_cmd` 主训练 / `_run_gsv_finetune` 门禁 + 主微调）补注入 `PYTHONIOENCODING=utf-8` + `PYTHONUTF8=1`（对齐 console.py 同款做法），根除 zh-CN Windows + Python≤3.14 下子进程 GBK 输出经 utf-8/replace 解码乱码 → 早停标记「收到训练门禁早停信号」匹配失败、early_stop 指标静默丢失；两函数局部 import 块补 `import os`。验证：py_compile + 源码断言（2 处 import os + 3 处 PYTHONUTF8）全绿
+
+## 批次 59（2026-10-18）：M10 A 节 UI 质量批次收尾 + D 节音色档案导入导出闭环
+
+> 用户指令"把欠债类修完，然后再将功能做完"——A 节四项全勾，D 节确认批次 47 核心已交付并补齐最后一项 UX 债：
+
+- [x] **静态审计（A-1）**：子代理全量对照——lib.rs 15 命令全注册、控制台四页 fetch 路径全存在、onclick 函数全存在、id 全匹配；结论无真死按钮（历史踩坑 on_download / ACL / fallback 导航均已在前批修复），实际问题 7 项（反馈缺口与跨平台断链）
+- [x] **修复（A-3/A-4）**：① **back 跨平台断链 ×3**——easy/pro/call 硬编码 `http://tauri.localhost` 仅 Windows 壳有效（lib.rs TAURI_ORIGIN 非 Windows 为 `tauri://localhost`），改为按 UA 构造壳 origin + 无 Tauri 注入（浏览器直开）兜底回 `/`；② launcher st-open-data/log 空路径静默短路 → toast"目录信息暂不可用"；③ prewarm btnSkip 空 catch → setTip"强制进入失败"；④ launcher 剪贴板 ×2 失败静默 → toast"复制失败, 请手动复制"；⑤ pro pExport 重写（见 D 节条目）
+- [x] **动态点检（A-2）**：本地 `python -m adr.server`（9881）+ 浏览器自动化——控制台四页（/、/pro、/easy、/call）加载零 console error，back 默认隐藏、?desktop=1 可见且浏览器直开兜底 href="/" 符合设计；壳 launcher/prewarm 经临时静态服务加载零 SyntaxError（showToast/setTip 就位，Tauri 缺失守卫完好）；真壳逐按钮桌面自动化留白（需 cargo build 完整 Tauri 应用，发布前手测覆盖）
+- [x] **D 节闭环**：导出/导入核心批次 47 已交付（voice_package.py：manifest+meta+ref.wav+weights，FORMAT/VERSION 清单；导入防 zip-slip / 同 hash 复用 / validate_weights_file 两段式 / 失败回滚；native.py export/import 端点；pro.html 导入覆盖确认流）+ pytest test_voice_package 7/7——本轮补齐最后一项：**pExport 导出重写**，fetch→blob→a[download]（壳内由 on_download 接手，与 easy rSave 同模式）+ 600s 超时 + 完成/失败 toast 反馈 + 导出前 confirm 生物特征告知（i18n-pro 3 新键：pro.confirm_export_bio"权重即声音本体/仅提供可信对象"、pro.toast_export_done、pro.toast_export_fail）
+- [x] 验证：控制台四页 + 壳两页浏览器点检全绿（零 console error）+ 新 i18n 键浏览器实测（{name} 占位符替换正确）+ pytest voice_package 7/7（0.49s）
 
 ## 原则
 

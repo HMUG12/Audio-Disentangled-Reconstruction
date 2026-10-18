@@ -262,7 +262,12 @@ function applyBackLink() {
   if (new URLSearchParams(location.search).get("desktop") === "1") {
     const back = $("back");
     back.textContent = I.t("call.back_launcher");
-    back.href = "http://tauri.localhost/launcher.html";
+    // 壳 origin 按 UA 构造 (lib.rs TAURI_ORIGIN 同款); 浏览器直开兜底回索引页
+    back.href = window.__TAURI__
+      ? (/Windows/i.test(navigator.userAgent)
+          ? "http://tauri.localhost/launcher.html"
+          : "tauri://localhost/launcher.html")
+      : "/";
   }
 }
 

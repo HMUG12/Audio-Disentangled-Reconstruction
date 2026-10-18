@@ -419,7 +419,8 @@ aboutOv.addEventListener("click", e => { if (e.target === aboutOv) aboutOv.class
 })();
 document.getElementById("about-qq").addEventListener("click", e => {
   const t = e.currentTarget.textContent.replace(/^QQ\s*/, "");
-  navigator.clipboard?.writeText(t).then(() => showToast("QQ 号已复制"), () => {});
+  navigator.clipboard?.writeText(t)
+    .then(() => showToast("QQ 号已复制"), () => showToast("复制失败, 请手动复制"));
 });
 
 // ===== 设置中心 (批次48): shell.json 读写 + 环境变量注入面 =====
@@ -543,12 +544,14 @@ $st("set-x").addEventListener("click", () => setOv.classList.remove("on"));
 setOv.addEventListener("click", e => { if (e.target === setOv) setOv.classList.remove("on"); });
 $st("st-save").addEventListener("click", saveSettings);
 $st("st-open-data").addEventListener("click", () => {
-  stPaths?.data_dir && window.__TAURI__?.core.invoke("open_path", { path: stPaths.data_dir })
-    .catch(e => showToast(String(e)));
+  const p = stPaths?.data_dir;
+  if (!p) { showToast("目录信息暂不可用, 请重开设置面板"); return; }
+  window.__TAURI__?.core.invoke("open_path", { path: p }).catch(e => showToast(String(e)));
 });
 $st("st-open-log").addEventListener("click", () => {
-  stPaths?.log_dir && window.__TAURI__?.core.invoke("open_path", { path: stPaths.log_dir })
-    .catch(e => showToast(String(e)));
+  const p = stPaths?.log_dir;
+  if (!p) { showToast("目录信息暂不可用, 请重开设置面板"); return; }
+  window.__TAURI__?.core.invoke("open_path", { path: p }).catch(e => showToast(String(e)));
 });
 $st("st-update").addEventListener("click", () => {
   window.__TAURI__?.core.invoke("open_path", { path: RELEASES_URL })
@@ -557,7 +560,8 @@ $st("st-update").addEventListener("click", () => {
 $st("st-copy-url").addEventListener("click", () => {
   const url = $st("st-lan-url").textContent;
   if (url && url !== "引擎未运行") {
-    navigator.clipboard?.writeText(url).then(() => showToast("地址已复制", true), () => {});
+    navigator.clipboard?.writeText(url)
+      .then(() => showToast("地址已复制", true), () => showToast("复制失败, 请手动复制"));
   }
 });
 // 维护区版本号 (与关于框一致)

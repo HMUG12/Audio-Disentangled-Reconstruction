@@ -155,6 +155,9 @@ const I18N_DICT = {
   "pro.import_fail": ["导入失败", "Import failed"],
   "pro.import_ok": ["导入成功: ", "Imported: "],
   "pro.import_fail_msg": ["导入失败: {msg}", "Import failed: {msg}"],
+  "pro.confirm_export_bio": ["即将导出「{name}」.adrvoice 档案包（参考音频 + 微调权重）。\n\n权重即声音本体，属于生物特征性质数据——拿到包的人即可复现该声音。请仅提供给可信的对象，勿公开传播。\n\n继续导出？", "About to export the \"{name}\" .adrvoice package (reference audio + fine-tuned weights).\n\nThe weights ARE the voice — biometric-nature data. Anyone holding the package can reproduce this voice. Share only with trusted parties.\n\nContinue?"],
+  "pro.toast_export_done": ["导出完成，文件已开始下载", "Export finished, download started"],
+  "pro.toast_export_fail": ["导出失败: {msg}", "Export failed: {msg}"],
   /* ---- 语音合成: 结果 ---- */
   "pro.tts_result": ["合成结果", "Synthesis Result"],
   "pro.k_time": ["耗时", "Time"],
