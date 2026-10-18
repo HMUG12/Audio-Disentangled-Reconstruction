@@ -613,6 +613,8 @@ def _run_train_cmd(
     import sys
     import time
 
+    from adr.core.naming import sanitize_exp_name
+
     log_buf = []
 
     # 解析 data_dir (去掉括号注释)
@@ -757,8 +759,7 @@ def _run_gsv_finetune(
     if not Path(audio_path).exists():
         yield "[FAIL] 音频文件不存在", _err(f"找不到 {audio_path}")
         return
-    exp = (exp_name or "my_voice").strip()
-    exp = "".join(c for c in exp if c not in '\\/:*?"<>|') or "my_voice"
+    exp = sanitize_exp_name(exp_name)
 
     script = REPO / "scripts" / "gsv_finetune.py"
     cmd = [

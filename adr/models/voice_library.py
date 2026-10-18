@@ -16,21 +16,26 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from adr.core.naming import is_windows_reserved
+
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 VOICES_DIR = REPO_ROOT / "data" / "voices"
 
 
 def is_safe_name(name: str) -> bool:
-    """档案名安全校验 (批次41a): 单段纯名, 拒绝路径分隔符/``..``/空字节。
+    """档案名安全校验 (批次41a): 单段纯名, 拒绝路径分隔符/``..``/空字节,
+    并拒绝 Windows 设备保留名 (批次58, 落盘点 data/voices 需可 mkdir)。
 
     与 adr/server/pathsafe.py 同规则; models 层不 import server 包
-    (server.__init__ 会级联引入 fastapi), 故在此独立实现。
+    (server.__init__ 会级联引入 fastapi), 保留名判断复用 core.naming。
     """
     if not name:
         return False
     if any(ch in name for ch in ("/", "\\", "\x00")):
         return False
-    return ".." not in name
+    if ".." in name:
+        return False
+    return not is_windows_reserved(name)
 
 
 def _trim_silence(wav, sr: int, top_db: float = 30.0):

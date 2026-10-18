@@ -5,9 +5,21 @@
 
 from __future__ import annotations
 
+import os
 import sys
+from pathlib import Path
 
 import click
+
+
+def _cli_log_file() -> str:
+    """CLI 日志落盘点: <log_dir>/cli.log (配置不可用时回退 ./logs)。"""
+    try:
+        from adr.core.config import load_config
+        d = Path(load_config().path.log_dir)
+    except Exception:
+        d = Path("./logs")
+    return str(d / "cli.log")
 
 
 @click.group()
@@ -18,7 +30,12 @@ def main() -> None:
     一行命令克隆你的声音:
         adr clone --ref voice.wav --text "你好世界"
     """
-    pass
+    # main group 统一挂日志 (含文件); 命令内不得再调 setup_logging
+    # (其 root.handlers.clear() 会重置已有 handler)。
+    from adr.core import setup_logging
+
+    setup_logging(level=os.environ.get("ADR_LOG_LEVEL", "INFO"),
+                  log_file=_cli_log_file())
 
 
 @main.command()
@@ -57,10 +74,9 @@ def doctor(fix: bool) -> None:
 @main.command()
 def check() -> None:
     """运行安装检查。"""
-    from adr.core import get_logger, setup_logging
+    from adr.core import get_logger
     from adr.core.config import load_config
 
-    setup_logging(level="INFO")
     log = get_logger("adr.cli")
 
     log.info("Running installation check...")
@@ -151,10 +167,9 @@ def voice_import(package: str, name: str | None, overwrite: bool) -> None:
 @click.option("--no-f0", is_flag=True, help="跳过 F0 提取")
 def process(input: str, output: str, preset: str, no_asr: bool, no_f0: bool) -> None:
     """数据流水线: 音频 → 训练样本 (Day 2 完整实现)。"""
-    from adr.core import get_logger, setup_logging
+    from adr.core import get_logger
     from adr.data.pipeline import DataPipeline, PipelineConfig
 
-    setup_logging(level="INFO")
     log = get_logger("adr.cli")
 
     config = PipelineConfig(
@@ -185,11 +200,10 @@ def process(input: str, output: str, preset: str, no_asr: bool, no_f0: bool) -> 
 @click.option("--max-sec", default=10.0, help="最大切片时长(秒)")
 def slice(input: str, output: str, min_sec: float, max_sec: float) -> None:
     """仅切分音频 (Day 2 完整实现)。"""
-    from adr.core import get_logger, setup_logging
+    from adr.core import get_logger
     from adr.data.slice import SliceConfig, slice_audio, save_slices
     from adr.utils import load_audio
 
-    setup_logging(level="INFO")
     log = get_logger("adr.cli")
 
     log.info(f"Slicing audio: {input}")
@@ -206,10 +220,9 @@ def slice(input: str, output: str, min_sec: float, max_sec: float) -> None:
 @click.option("--no-tone", is_flag=True, help="不带声调")
 def g2p(text: str, backend: str, no_tone: bool) -> None:
     """G2P 文本转音素 (Day 2 完整实现)。"""
-    from adr.core import get_logger, setup_logging
+    from adr.core import get_logger
     from adr.data.g2p import G2P, G2PConfig
 
-    setup_logging(level="INFO")
     log = get_logger("adr.cli")
 
     g2p_obj = G2P(G2PConfig(backend=backend, with_tone=not no_tone))
@@ -246,10 +259,9 @@ def clone(
         adr clone --ref voice.wav --text "你好世界"
         adr clone --ref voice.wav --text "你好" --checkpoint model.pt --output out.wav
     """
-    from adr.core import get_logger, setup_logging
+    from adr.core import get_logger
     from adr.inference.pipeline import InferConfig, InferPipeline
 
-    setup_logging(level="INFO")
     log = get_logger("adr.cli.clone")
 
     # 检查 ref
@@ -316,9 +328,8 @@ def infer(ref: str, text: str, output: str, checkpoint: str | None, n_timesteps:
 @click.option("--format", "fmt", default="gguf", help="导出格式 (gguf/awq/onnx)")
 def export(fmt: str) -> None:
     """量化导出 (预留接口, 尚未实现)。"""
-    from adr.core import get_logger, setup_logging
+    from adr.core import get_logger
 
-    setup_logging(level="INFO")
     log = get_logger("adr.cli")
     log.warning(f"export --format {fmt} 尚未实现 (预留接口)。")
     log.info("量化训练可用: adr train --qlora; 导出需求请跟踪后续版本。")
@@ -336,10 +347,9 @@ def model() -> None:
 @click.option("--all", "show_all", is_flag=True, help="显示所有 (含未下载)")
 def model_list(category: str | None, show_all: bool) -> None:
     """列出所有可用预训练模型。"""
-    from adr.core import get_logger, setup_logging
+    from adr.core import get_logger
     from adr.models.hub import PRETRAINED_REGISTRY, get_hub
 
-    setup_logging(level="INFO")
     log = get_logger("adr.cli.model")
     hub = get_hub()
 
@@ -373,10 +383,9 @@ def model_download(name: str, force: bool) -> None:
     示例:
         adr model download bigvgan_22khz_80band
     """
-    from adr.core import get_logger, setup_logging
+    from adr.core import get_logger
     from adr.models.hub import get_hub
 
-    setup_logging(level="INFO")
     log = get_logger("adr.cli.model")
 
     hub = get_hub()
@@ -392,10 +401,9 @@ def model_download(name: str, force: bool) -> None:
 @click.argument("name")
 def model_info(name: str) -> None:
     """显示预训练模型详情。"""
-    from adr.core import get_logger, setup_logging
+    from adr.core import get_logger
     from adr.models.hub import PRETRAINED_REGISTRY, get_hub
 
-    setup_logging(level="INFO")
     log = get_logger("adr.cli.model")
 
     if name not in PRETRAINED_REGISTRY:
@@ -427,10 +435,9 @@ def model_info(name: str) -> None:
 @model.command("search")
 def model_search() -> None:
     """扫描本地已有的预训练权重 (用于发现未注册的资源)。"""
-    from adr.core import get_logger, setup_logging
+    from adr.core import get_logger
     from adr.models.hub import get_hub
 
-    setup_logging(level="INFO")
     log = get_logger("adr.cli.model")
     hub = get_hub()
 
@@ -505,11 +512,10 @@ def train(
         adr train -d output/processed --lora              # LoRA 微调
         adr train -d output/processed --qlora             # 4-bit QLoRA (8GB 可训 0.3B)
     """
-    from adr.core import get_logger, setup_logging
+    from adr.core import get_logger
     from adr.core.registry import REGISTRY
     from adr.training import Trainer, TrainerConfig
 
-    setup_logging(level="INFO")
     log = get_logger("adr.cli.train")
 
     use_lora = lora or qlora
@@ -607,9 +613,8 @@ def train(
 @click.option("--no-browser", is_flag=True, help="启动后不自动打开浏览器")
 def webui(host: str, port: int, share: bool, no_browser: bool) -> None:
     """启动 legacy WebUI (Gradio, 功能冻结期: 只修 bug 不加新功能)。"""
-    from adr.core import get_logger, setup_logging
+    from adr.core import get_logger
 
-    setup_logging(level="INFO")
     log = get_logger("adr.cli")
 
     log.info("Launching ADR WebUI...")

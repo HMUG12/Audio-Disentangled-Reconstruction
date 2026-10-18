@@ -146,6 +146,16 @@
 - [x] **review 修复（双子代理交叉验证 2/2 确认）**：① **launcher 保存固化 compat_cpu（major）**——loadSettings `!!null` 渲染成未勾选 + saveSettings 无条件发 checked，13 代用户保存任意设置即把自动兼容固化成 `Some(false)` 永久压制自动检测（单测语义铁证）；修复 = `_compatTouched` 触碰跟踪（change 监听 + loadSettings 重置 + auto 回调时序防御）+ 保存 `(touched || 此前显式值) ? checked : null` 保住 null 自动语义 + 勾选框回填实际生效状态（自动启用显示已勾选，消除提示与勾选框自相矛盾）；实现时捕获 saveSettings 对象字面量内引用正在构造的 `cfg` 自身（TDZ → 每次保存必 ReferenceError），改模块级 `stCompatLoaded` 记载上次加载真值。② **强制 CPU 驱动警告误报（minor）**——gsv_engine elif 分支只看"驱动已装"就落"请升级驱动"warning，config 显式 cpu（eval_secs/train_gate）与 env 强制 cpu（ADR_TTS_DEVICE）两条主动路径必误报；修复 = `_forced` 标记，主动选择 + 驱动正常落 info"按配置强制 CPU 运行"，警告仅保留 auto 判定回退场景
 - [x] review 修复验证：3 文件 ast + gsv_engine import + OOM 判定回归 + 两处修复源码级断言（含 TDZ 残留检查、括号平衡）全绿；cargo 侧无改动
 
+## 批次 58（2026-10-18）：review 遗留五项收尾（低优先延后项清零）
+
+> 批次 57 汇报时列出的 5 个低优先延后项，本轮全部落地：
+
+- [x] **v3_compat websocket OOM 分流**：`_produce` 生产者 except 与外层 stream-input 兜底 except 各加 `is_cuda_oom` 分流——OOM 走 `handle_cuda_oom(e)`（empty_cache + 用户可读提示）+ 帧码 `"cuda_oom"`，与 v2 tts_handle 同模式；非 OOM 保持原 `error_code(e)` 语义，错误帧 code 增量字段 wire 兼容
+- [x] **桌面壳 pump 双线程行交错**：`pump_server_log` 由"每线程独立开 append 句柄 + `io::copy` 8KB 块拷贝"改为"调用点单次开句柄 → `Arc<Mutex<File>>` 共享 + `read_until(b'\n')` 整行读 + 每行锁内 write"——块边界劈行与双线程字节交错根除；头行（stream open）由调用方单线程写一次，EOF 各写带 tag（stdout/stderr）的 stream closed 行。整流持锁会死锁（stdout 线程独占句柄时 stderr 永久阻塞），故必须逐行取锁
+- [x] **exp 名清洗 Windows 保留名**：新建 `adr/core/naming.py`（`sanitize_exp_name`：控制字符 `unicodedata.category=="Cc"` + `\/:*?"<>|` 删除 + strip + rstrip(". ") + 保留名加 `_` 前缀 + 空回退 my_voice；`is_windows_reserved`：CON/PRN/AUX/NUL/COM1-9/LPT1-9 大小写不敏感含带扩展名形式）；console.py train/start 与 webui `_run_gsv_finetune` 两处旧两行清洗替换调用；voice_library 与 pathsafe 两处 `is_safe_name` 追加保留名拒绝（落盘点 data/voices 与档案名目录需可 mkdir）
+- [x] **CLI 文件日志**：`adr/cli.py` main group 统一 `setup_logging(level=ADR_LOG_LEVEL env, log_file=<log_dir>/cli.log)`（log_dir 取 config，配置不可用回退 ./logs）；删除 12 处命令内 `setup_logging(level="INFO")` 重复调用及 import 中的 setup_logging（其 root.handlers.clear() 会重置 group 已挂的 file handler——幂等陷阱）
+- [x] 验证：7 文件 py_compile + naming 14 组断言 + is_safe_name 双实现保留名断言 + v3_compat import 与 cuda_oom 分支源码断言 + CLI 冒烟（`python -m adr.cli info` → logs/cli.log 生成含设备日志）+ cargo check 0 警告 + cargo test 5/5 + pytest security/voice_library/server_api 104 passed（pytest 系统临时目录被沙箱拒访，`--basetemp=.pytest_tmp` 绕过，跑后清理）
+
 ## 原则
 
 - 能统一的尽量统一，降低使用门槛（用户定调）

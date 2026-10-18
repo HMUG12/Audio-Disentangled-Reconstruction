@@ -30,6 +30,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from adr.core.naming import sanitize_exp_name
 from adr.server.exceptions import ProfileNameInvalid
 from adr.server.pathsafe import is_safe_name
 
@@ -296,8 +297,7 @@ async def train_start(body: TrainStartReq):
     with _train_lock:
         if _train["state"] == "running":
             raise HTTPException(409, "已有训练在进行, 请先停止或等待完成")
-        exp = (body.exp_name or "my_voice").strip()
-        exp = "".join(c for c in exp if c not in '\\/:*?"<>|') or "my_voice"
+        exp = sanitize_exp_name(body.exp_name)
         epochs = max(1, min(int(body.epochs), 50))
         recipe = body.recipe if body.recipe in ("8gb", "4gb") else "8gb"
 

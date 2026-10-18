@@ -33,6 +33,7 @@ from adr.core.exceptions import (
     error_code,
 )
 from adr.models import voice_library
+from adr.models.gsv_engine import handle_cuda_oom, is_cuda_oom
 from adr.services import SynthesisService
 
 logger = logging.getLogger(__name__)
@@ -217,8 +218,12 @@ async def tts_ws_stream_input(websocket: WebSocket):
             except Exception as e:
                 if not cancel.is_set():
                     logger.exception("v3 stream synth failed")
-                    loop.call_soon_threadsafe(
-                        _put, ("__err__", str(e), error_code(e)))
+                    if is_cuda_oom(e):
+                        loop.call_soon_threadsafe(
+                            _put, ("__err__", handle_cuda_oom(e), "cuda_oom"))
+                    else:
+                        loop.call_soon_threadsafe(
+                            _put, ("__err__", str(e), error_code(e)))
             finally:
                 if gen is not None:
                     gen.close()  # 触发生成器 finally → 引擎锁释放 (线程内安全)
@@ -337,9 +342,12 @@ async def tts_ws_stream_input(websocket: WebSocket):
         pass
     except Exception as e:
         logger.exception("v3 stream-input error")
+        if is_cuda_oom(e):
+            msg, code = handle_cuda_oom(e), "cuda_oom"
+        else:
+            msg, code = str(e), error_code(e)
         try:
-            await _safe_send_json({"type": "error", "message": str(e),
-                                   "code": error_code(e)})
+            await _safe_send_json({"type": "error", "message": msg, "code": code})
         except Exception:
             pass
     finally:
