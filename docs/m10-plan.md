@@ -174,13 +174,15 @@
 
 > 用户拍板：方向 = v1.2 收尾发布；无 UI 服务版 = server.bat + README 三形态；容器镜像 = 推 ghcr.io。真壳逐按钮手测按"后面完成后一起测试"落在本批发布前。
 
-- [ ] **Windows 无 UI 服务版（H1 收口）**：安装根目录 `server.bat`——调 `runtime\python\python.exe -m adr.server`（PYTHONUTF8=1/PYTHONIOENCODING=utf-8 对齐壳与 webui 做法）；env 直读（ADR_DATA_DIR 缺省 %LOCALAPPDATA%\ADR\data 对齐桌面版、ADR_TTS_API_KEY、ADR_TTS_DEVICE、ADR_LOG_LEVEL），与容器版同为 env 驱动无 UI 形态；README 新增桌面版/无 UI 版/容器版三形态对照小节
-- [ ] **容器镜像 ghcr.io 发布**：新增 GitHub Actions workflow（tag v* 触发）构建 cpu/cuda 双变体推 ghcr.io（GITHUB_TOKEN packages:write；buildx 层缓存压构建时长，torch 镜像体积大属预期）；README/release notes 补 `docker pull ghcr.io/<owner>/adr-server:1.2.0-cpu|cuda` 用法；镜像 tag 对齐 1.2.0（批次 56 已预留命名）
-- [ ] **版本面 1.2.0 对齐（批次 55 教训 checklist 化）**：pyproject.toml / adr `__version__` / tauri.conf.json / Cargo.toml（Cargo.lock 随动）/ package.json（package-lock 随动）/ installer.iss 六面 + launcher.html 版本显示 + README 静默安装示例文件名 + REPRODUCE.md 体积注记；新增 `scripts/check_versions.py` 六面一致性断言并纳入 CI smoke，防再犯
-- [ ] **发布前真壳逐按钮手测**：cargo build 完整 Tauri 壳 → launcher 全按钮走查（设置面板开合/保存/打开数据与日志目录/复制 URL/开机自启/检查更新/QQ 复制）+ prewarm 正常流与 skip + 壳内控制台四页导航与 back + pExport 真实导出→导入闭环 + 一次合成冒烟；发现问题当批即修
+- [x] **Windows 无 UI 服务版（H1 收口）**：安装根目录 `server.bat`——调 `runtime\python\python.exe -m adr.server`（PYTHONUTF8=1/PYTHONIOENCODING=utf-8 对齐壳与 webui 做法）；env 直读（ADR_DATA_DIR 缺省 %LOCALAPPDATA%\ADR\data 对齐桌面版、ADR_TTS_API_KEY、ADR_TTS_DEVICE、ADR_LOG_LEVEL），与容器版同为 env 驱动无 UI 形态；README 新增桌面版/无 UI 版/容器版三形态对照小节
+- [x] **容器镜像 ghcr.io 发布**：新增 GitHub Actions workflow（tag v* 触发）构建 cpu/cuda 双变体推 ghcr.io（GITHUB_TOKEN packages:write；buildx 层缓存压构建时长，torch 镜像体积大属预期）；README/release notes 补 `docker pull ghcr.io/<owner>/adr-server:1.2.0-cpu|cuda` 用法；镜像 tag 对齐 1.2.0（批次 56 已预留命名）
+- [x] **版本面 1.2.0 对齐（批次 55 教训 checklist 化）**：pyproject.toml / adr `__version__` / tauri.conf.json / Cargo.toml（Cargo.lock 随动）/ package.json（package-lock 随动）/ installer.iss 六面 + launcher.html 版本显示 + README 静默安装示例文件名 + REPRODUCE.md 体积注记；新增 `scripts/check_versions.py` 六面一致性断言并纳入 CI smoke，防再犯
+- [x] **发布前真壳逐按钮手测**：cargo build 完整 Tauri 壳 → launcher 全按钮走查（设置面板开合/保存/打开数据与日志目录/复制 URL/开机自启/检查更新/QQ 复制）+ prewarm 正常流与 skip + 壳内控制台四页导航与 back + pExport 真实导出→导入闭环 + 一次合成冒烟；发现问题当批即修（用户拍板 pass，后续真实用户手测反馈迭代）
 - [ ] **双包构建**：build_installer.ps1 CPU + `-Gpu`（check_runtime.py 前置 + GPU 包冒烟断言 torch.cuda.is_available）
 - [ ] **Release 收尾**：release notes v1.2.0（容器版 + 双包 + 批次 57 日志体系/13-14 代加固 + 批次 58 review 收尾 + 批次 59 UI 质量与档案导出闭环 + **韩语容器版口径兑现**（Windows 限制不变，Linux 容器可装 ko 链）；已知限制：中英混说清晰度/流畅度）→ tag v1.2.0 → GitHub Release 附双安装包 → 123 云盘
 - [ ] plan 收口：H1 勾选 + 本节回填 [x] + 验证记录
+
+> **验证记录（2026-10-18 会话内）**：① 防重入挡金标准复测通过——新构建单次点击经典卡恰好 +1 spawn（1 kill + 1 spawn + 1 banner + 探活 200），旧构建同场景 +2，Rust CAS 挡结构性免疫双投递；② 合成冒烟通过——GSV 权重缺失走结构化 error+suggestion 降级，SSE 流正常终结无崩溃；③ 音色库路径分裂 bug 证伪——UI choices 实测 3 项，此前系 /config 正则误读，未改代码；④ **PS 5.1 GBK 吞包陷阱（新）**：build_runtime.ps1 here-string 内中文注释在无 BOM ANSI 解析下静默吞掉后 4 行包记录（pyopenjtalk/jamo/ToJyutping/ko_pron），check_runtime 体检 FAIL 拦截坏包，注释已英文化（6cfb825）并补装四包复验导入 OK；⑤ 本机构建机代理 env 指向未运行代理，重跑需清 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY；⑥ CPU runtime 1847MB smoke 全绿（torch 2.10.0+cpu/adr/GSV imports/pip check），installer 重跑中，GPU 包因时间窗顺延（缓存已就位）。
 
 ## 原则
 
