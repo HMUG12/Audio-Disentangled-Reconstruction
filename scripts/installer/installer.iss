@@ -15,7 +15,7 @@
 ; 双包共用同一 AppId: GPU 包装在 CPU 包上 = 原地升级 runtime, 不产生双份安装。
 
 #define MyAppName "ADR Studio"
-#define MyAppVersion "1.1.0"
+#define MyAppVersion "1.2.0"
 #define MyAppPublisher "未知之致"
 #define MyAppExe "adr-desktop.exe"
 #define ReleaseDir "..\..\desktop\src-tauri\target\release"
@@ -65,6 +65,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; \
 
 [Files]
 Source: "{#ReleaseDir}\adr-desktop.exe"; DestDir: "{app}"; Flags: ignoreversion
+; 批次60: 无 UI 服务版入口 (env 驱动, 与容器版同形态)
+Source: "server.bat"; DestDir: "{app}"; Flags: ignoreversion
 ; Ship the AGPL-3.0 license text alongside the program (AGPL section 4)
 Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RuntimeDir}\*"; DestDir: "{app}\runtime"; \

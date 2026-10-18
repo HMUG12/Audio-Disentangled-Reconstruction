@@ -30,6 +30,10 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      # 纯标准库脚本, 防批次55式漏 bump: 任一版本面与 pyproject 不一致即红
+      - name: 版本面一致性断言
+        run: python scripts/check_versions.py
+
       - name: 安装依赖 (CPU torch + 全量 extras)
         run: |
           python -m pip install --upgrade pip

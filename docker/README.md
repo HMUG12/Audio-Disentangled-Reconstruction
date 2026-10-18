@@ -46,6 +46,25 @@ docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
 docker compose exec adr python -c "import torch; print(torch.cuda.is_available())"
 ```
 
+## 已发布镜像 (ghcr.io)
+
+tag `v*` 推送自动触发 GitHub Actions 构建双变体并发布至 ghcr.io，无需本地构建：
+
+```bash
+docker pull ghcr.io/hmug12/adr-server:1.2.0-cpu
+docker pull ghcr.io/hmug12/adr-server:1.2.0-cuda
+
+# 常青 tag: 始终指向最新发布版
+docker pull ghcr.io/hmug12/adr-server:cpu
+```
+
+直接运行（环境变量与数据卷语义同本地构建，见下文）：
+
+```bash
+docker run -d --name adr-server -p 9881:9881 -v adr-data:/data \
+  ghcr.io/hmug12/adr-server:1.2.0-cpu
+```
+
 ## 数据卷
 
 | 挂载点 | 内容 | 类型 |

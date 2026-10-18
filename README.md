@@ -20,16 +20,16 @@
 ### 方式一：Windows 安装包（推荐）
 
 1. 下载安装包（二选一；也可从 [123 云盘分享](https://1860775428.share.123pan.com/123pan/5KDqvd-oPPsv)（提取码 `ADRS`）下载）：
-   - **CPU 版**：[ADR-Studio-1.1.0-x64-setup.exe](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/download/v1.1.0/ADR-Studio-1.1.0-x64-setup.exe)（约 473MB，无独立显卡设备）
-   - **GPU 版**：[ADR-Studio-1.1.0-x64-gpu-setup.exe](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/download/v1.1.0/ADR-Studio-1.1.0-x64-gpu-setup.exe)（约 1.9GB，NVIDIA CUDA 加速）
+   - **CPU 版**：[ADR-Studio-1.2.0-x64-setup.exe](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/download/v1.2.0/ADR-Studio-1.2.0-x64-setup.exe)（约 473MB，无独立显卡设备）
+   - **GPU 版**：[ADR-Studio-1.2.0-x64-gpu-setup.exe](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/download/v1.2.0/ADR-Studio-1.2.0-x64-gpu-setup.exe)（约 1.9GB，NVIDIA CUDA 加速）
 
-   SHA256 校验值见 [Release 页面](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/tag/v1.1.0)；安装包未经充分测试，如遇问题请提 [Issues](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/issues)
+   SHA256 校验值见 [Release 页面](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/tag/v1.2.0)；安装包未经充分测试，如遇问题请提 [Issues](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/issues)
 2. 双击安装，按向导阅读并接受许可协议（per-user 安装，无需管理员权限）；两版共用同一 AppId，可原地升级覆盖旧版，已下载的底模与声音档案均保留
 3. 首次启动会自动进行环境预热：下载预训练底模（约 2GB，预热页实时显示进度，**下载 + 引擎加载完成后才进入启动器**）；完成后此后**完全离线**运行
 
 安装内容：Python 便携运行时 + 全部依赖 + GPT-SoVITS 代码 + ADR 引擎，磁盘占用约 2GB（CPU 版）/ 4GB（GPU 版），不含底模与声音档案数据。
 
-> 批量部署可使用静默安装：`ADR-Studio-1.1.0-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="安装目录"`
+> 批量部署可使用静默安装：`ADR-Studio-1.2.0-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="安装目录"`
 
 ### 方式二：源码安装
 
@@ -64,6 +64,38 @@ adr webui          # 等价于双击 启动WebUI.bat
 | `adr model list / download / info` | 预训练模型管理 |
 | `adr doctor [--fix]` | 环境 / 数据体检 |
 | `adr webui` | legacy WebUI（功能冻结期） |
+
+### 三种运行形态对照
+
+v1.2 起 ADR 有三种分发形态，引擎与 API 同源，按部署场景选择：
+
+| | 桌面版（Windows 安装包） | 无 UI 服务版（server.bat） | 容器版（Docker） |
+| --- | --- | --- | --- |
+| 适用场景 | Windows 桌面开箱即用 | Windows 后台常驻 / 无人值守 | Linux 服务器 / NAS / 云端 |
+| 启动方式 | 双击 `adr-desktop.exe` | 命令行运行安装目录下 `server.bat` | `docker run` |
+| 交互入口 | 壳内启动器 + 控制台 | HTTP API（五套 API 面） | HTTP API（五套 API 面） |
+| 数据目录 | `%LOCALAPPDATA%\ADR\data` | 同桌面版（`ADR_DATA_DIR` 可覆盖） | `/data`（挂卷） |
+| 变体 | CPU / GPU 双安装包 | 同桌面版 | 镜像 tag `-cpu` / `-cuda` |
+| 配置方式 | 壳内界面 | 环境变量：`ADR_DATA_DIR` / `ADR_TTS_API_KEY` / `ADR_TTS_DEVICE` / `ADR_LOG_LEVEL` | 环境变量 + 挂卷 |
+
+无 UI 服务版与桌面版共用同一安装目录（`server.bat` 随安装包附带），透传 `python -m adr.server` 全部参数：
+
+```powershell
+cd "C:\Users\you\AppData\Local\Programs\ADR Studio"
+.\server.bat                       # 默认 127.0.0.1:9881
+.\server.bat -a 0.0.0.0 -p 9881    # 局域网暴露（务必配合 ADR_TTS_API_KEY）
+```
+
+容器版镜像已发布至 GitHub Container Registry（cpu / cuda 双变体）：
+
+```powershell
+# CPU
+docker run -d --name adr-server -p 9881:9881 -v adr-data:/data ghcr.io/hmug12/adr-server:1.2.0-cpu
+# GPU（需 NVIDIA Container Toolkit）
+docker run -d --name adr-server --gpus all -p 9881:9881 -v adr-data:/data ghcr.io/hmug12/adr-server:1.2.0-cuda
+```
+
+常青 tag：`ghcr.io/hmug12/adr-server:cpu` / `:cuda` 始终指向最新发布版；容器版详细用法见 [docker/README.md](docker/README.md)。
 
 ### API 一览
 
