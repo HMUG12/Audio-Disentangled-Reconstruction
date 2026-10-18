@@ -30,7 +30,7 @@
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Child, Command};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
@@ -748,20 +748,31 @@ fn server_log_path() -> PathBuf {
     std::env::temp_dir().join("adr_server.log")
 }
 
-/// 后台泵: 把服务 stdout/stderr 追加写入日志文件 (进程退出时 copy 结束)。
-fn pump_server_log<R: std::io::Read>(mut reader: R, path: PathBuf) {
-    use std::io::Write;
-    let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&path)
-    else {
-        return;
-    };
+/// 后台泵: 把服务 stdout/stderr 逐行追加写入共享日志文件。
+/// 双线程共享同一句柄 (Arc<Mutex<File>>) 且整行读取 (read_until b'\n')，
+/// 避免 io::copy 8KB 块拷贝导致的行劈裂与双线程字节交错。
+fn pump_server_log<R: std::io::Read>(reader: R,
+                                     file: Arc<Mutex<std::fs::File>>,
+                                     tag: &str) {
+    use std::io::{BufRead, BufReader, Write};
+    let mut reader = BufReader::new(reader);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                let mut f = file.lock().unwrap();
+                let _ = f.write_all(&line);
+            }
+        }
+    }
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let _ = writeln!(file, "\n===== [server {ts}] stream open =====");
-    let _ = std::io::copy(&mut reader, &mut file);
-    let _ = writeln!(file, "\n===== [server {ts}] stream closed =====");
+    let mut f = file.lock().unwrap();
+    let _ = writeln!(f, "\n===== [server {tag} {ts}] stream closed =====");
 }
 
 /// server.log 简易轮转: 超 10MB → rename server.log.old (单代覆盖, 不累加)。
@@ -925,13 +936,29 @@ fn start_server(
         }
     };
     let log_path = server_log_path();
-    if let Some(out) = child.stdout.take() {
-        let p = log_path.clone();
-        std::thread::spawn(move || pump_server_log(out, p));
-    }
-    if let Some(err) = child.stderr.take() {
-        let p = log_path.clone();
-        std::thread::spawn(move || pump_server_log(err, p));
+    // 单次打开句柄共享给 stdout/stderr 两泵; 头行由调用方单线程写一次
+    if let Ok(file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        use std::io::Write;
+        let file = Arc::new(Mutex::new(file));
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        {
+            let mut f = file.lock().unwrap();
+            let _ = writeln!(f, "\n===== [server {ts}] stream open =====");
+        }
+        if let Some(out) = child.stdout.take() {
+            let file = file.clone();
+            std::thread::spawn(move || pump_server_log(out, file, "stdout"));
+        }
+        if let Some(err) = child.stderr.take() {
+            std::thread::spawn(move || pump_server_log(err, file, "stderr"));
+        }
     }
     state.pid.store(child.id(), Ordering::Relaxed);
     *state.base_url.lock().unwrap() = Some(base.clone());

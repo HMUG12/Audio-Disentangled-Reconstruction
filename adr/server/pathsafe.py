@@ -11,6 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional, Union
 
+from adr.core.naming import is_windows_reserved
+
 
 def resolve_within(root: Union[str, Path],
                    candidate: Union[str, Path]) -> Optional[Path]:
@@ -33,9 +35,12 @@ def resolve_within(root: Union[str, Path],
 
 
 def is_safe_name(name: str) -> bool:
-    """名称类参数 (档案名等) 必须是单段纯名, 拒绝任何路径成分穿越。"""
+    """名称类参数 (档案名等) 必须是单段纯名, 拒绝任何路径成分穿越,
+    并拒绝 Windows 设备保留名 (CON/NUL 等会致落盘失败或重定向为设备)。"""
     if not name:
         return False
     if any(ch in name for ch in ("/", "\\", "\x00")):
         return False
-    return ".." not in name
+    if ".." in name:
+        return False
+    return not is_windows_reserved(name)
