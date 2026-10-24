@@ -180,6 +180,13 @@ def split_max_chars() -> int:
     return _pos_int("ADR_TTS_SPLIT_MAX", 40)
 
 
+def runtime_autotune() -> bool:
+    """ADR_RUNTIME_AUTOTUNE — Runtime 闭环是否自动微调 (默认开; 0/false/no/off 只监控)。
+    微调范围仅限流式分块 (不影响音质), 显式 env 永远优先。"""
+    return os.environ.get("ADR_RUNTIME_AUTOTUNE", "1").strip().lower() not in (
+        "0", "false", "no", "off")
+
+
 def torch_threads() -> int:
     """ADR_TORCH_THREADS — torch.set_num_threads 线程数; 0/未设置/非法 = 默认
     (PyTorch 自按物理核)。低配核少机器 (如 4 核) 跑满会抢系统资源, 手动

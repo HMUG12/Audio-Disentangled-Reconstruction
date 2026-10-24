@@ -26,6 +26,29 @@ def pytest_addoption(parser):
     )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_runtime(monkeypatch):
+    """Runtime 闭环会直写 os.environ: 全局默认只监控, 并隔离模块状态与分块键。
+    test_runtime.py 自己的 fixture 会撤掉 ADR_RUNTIME_AUTOTUNE 以测试微调。"""
+    import os
+    from collections import deque
+
+    from adr.core import runtime
+
+    monkeypatch.setenv("ADR_RUNTIME_AUTOTUNE", "0")
+    for k in runtime.TUNE_KEYS:
+        if k in os.environ:
+            monkeypatch.setenv(k, os.environ[k])
+        else:   # 先 set 再 del: 让 monkeypatch 记下"原本不存在", 测试后被还原
+            monkeypatch.setenv(k, "x")
+            monkeypatch.delenv(k)
+    monkeypatch.setattr(runtime, "_samples", deque(maxlen=runtime.WINDOW))
+    monkeypatch.setattr(runtime, "_events", deque(maxlen=20))
+    monkeypatch.setattr(runtime, "_applied", {})
+    monkeypatch.setattr(runtime, "_known_good", None)
+    monkeypatch.setattr(runtime, "_frozen", False)
+
+
 @pytest.fixture(scope="session")
 def root_dir() -> Path:
     return ROOT

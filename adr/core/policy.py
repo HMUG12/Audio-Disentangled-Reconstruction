@@ -170,7 +170,13 @@ def export_snapshot() -> dict[str, Any]:
     eff = {}
     for k in keys:
         if k in os.environ:
-            src = "policy" if _applied.get(k) == os.environ[k] else "env"
+            from adr.core import runtime
+            if runtime.applied_value(k) == os.environ[k]:
+                src = "runtime"
+            elif _applied.get(k) == os.environ[k]:
+                src = "policy"
+            else:
+                src = "env"
             eff[k] = {"value": os.environ[k], "source": src}
         elif k in AUTO_KEYS and k in pending:
             # 本进程未 apply (如 CLI 诊断): 显示引擎启动时将生效的值
