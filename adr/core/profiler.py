@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import time
 import uuid
 from dataclasses import dataclass
@@ -124,6 +125,8 @@ def run_profile(
     """
     if text is None:
         text = "青山横北郭,白水绕东城。此地一为别,孤蓬万里征。"
+    # 固定 seed: 每次采样出的 token 数一致, RTF 波动只反映速度
+    voice_kw: dict[str, Any] = {"seed": 1234}
     if ref_audio is None:
         from adr.models.voice_library import list_voices, load_voice
         voices = list_voices()
@@ -131,6 +134,10 @@ def run_profile(
             raise ValueError("无音色档案, 无法自动选参考音频; 请传 ref_audio")
         prof = load_voice(voices[0])
         ref_audio = prof["ref_audio"]
+        # 透传档案条件 (prompt_text / 微调权重), 与真实合成路径一致
+        for k in ("prompt_text", "t2s_weights", "vits_weights"):
+            if prof.get(k):
+                voice_kw[k] = prof[k]
 
     log.info("[Profiler] 开始采样: text=%s 字, ref=%s, n_runs=%d",
              len(text), Path(ref_audio).name, n_runs)
@@ -139,10 +146,13 @@ def run_profile(
 
     # 测点 1: 默认参数 (graph=0 批次10 因音质漂移默认关, static_kv=0, top_k=15)
     log.info("  [1/1] default (top_k=15, no_graph, no_static_kv)")
-    rtf, mem = _measure_rtf_mem(text, ref_audio, n_runs, top_k=15)
+    rtf, mem = _measure_rtf_mem(text, ref_audio, n_runs, top_k=15, **voice_kw)
     results.append(BenchmarkResult(
         name="default",
-        params={"top_k": 15, "cudagraph": 0, "static_kv": 0},
+        # 记实际生效的开关 (用户可能手动开了 graph/static_kv), 而非假定默认
+        params={"top_k": 15,
+                "cudagraph": int(os.environ.get("ADR_T2S_CUDAGRAPH", "0") == "1"),
+                "static_kv": int(os.environ.get("ADR_T2S_STATIC_KV", "0") == "1")},
         rtf=round(rtf, 3),
         mem_mb=mem,
         notes=f"{n_runs} runs median",
