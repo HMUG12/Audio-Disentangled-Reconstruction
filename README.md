@@ -15,21 +15,31 @@
 - **控制台中英文切换** — 控制台四页（索引/新手/专业/调用）一键切换中/英，语言偏好自动记忆
 - **数据处理管线** — 音频切片 / ASR 转写 / F0 提取 / 音素化一条龙（`adr process`）
 
+## 风险披露与使用边界
+
+ADR 具备克隆任意人声的技术能力，使用前请务必确认以下边界（Windows 安装包首次启动时会在应用内展示完整条款）：
+
+- **授权前提** — 克隆、合成任何真实人物的声音，必须事先取得该声音权利人的明确授权
+- **禁止用途** — 严禁将本软件用于诈骗、冒充他人、诽谤、伪造证据、侵犯隐私等违法违规用途
+- **责任自负** — 您使用本软件生成的内容及其用途由您自行决定并负责，因滥用产生的法律后果由使用者承担
+- **声纹告知** — 您上传或录制的语音样本属于个人敏感信息（含声纹特征），仅在本地数据目录存储与处理，不上传云端；删除样本即删除对应声纹数据
+- **数据采集** — 默认不采集设备标识、不上报使用数据
+
 ## 安装
 
 ### 方式一：Windows 安装包（推荐）
 
 1. 下载安装包（二选一；也可从 [123 云盘分享](https://1860775428.share.123pan.com/123pan/5KDqvd-oPPsv)（提取码 `ADRS`）下载）：
-   - **CPU 版**：[ADR-Studio-1.2.0-x64-setup.exe](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/download/v1.2.0/ADR-Studio-1.2.0-x64-setup.exe)（约 460MB，无独立显卡设备）
-   - **GPU 版**：[ADR-Studio-1.2.0-x64-gpu-setup.exe](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/download/v1.2.0/ADR-Studio-1.2.0-x64-gpu-setup.exe)（约 1.9GB，NVIDIA CUDA 加速）
+   - **CPU 版**：[ADR-Studio-1.2.1-x64-setup.exe](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/download/v1.2.1/ADR-Studio-1.2.1-x64-setup.exe)（约 460MB，无独立显卡设备）
+   - **GPU 版**：[ADR-Studio-1.2.1-x64-gpu-setup.exe](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/download/v1.2.1/ADR-Studio-1.2.1-x64-gpu-setup.exe)（约 1.9GB，NVIDIA CUDA 加速）
 
-   SHA256 校验值见 [Release 页面](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/tag/v1.2.0)；安装包未经充分测试，如遇问题请提 [Issues](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/issues)
+   SHA256 校验值见 [Release 页面](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/tag/v1.2.1)；安装包未经充分测试，如遇问题请提 [Issues](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/issues)
 2. 双击安装，按向导阅读并接受许可协议（per-user 安装，无需管理员权限）；两版共用同一 AppId，可原地升级覆盖旧版，已下载的底模与声音档案均保留
 3. 首次启动会自动进行环境预热：下载预训练底模（约 2GB，预热页实时显示进度，**下载 + 引擎加载完成后才进入启动器**）；完成后此后**完全离线**运行
 
 安装内容：Python 便携运行时 + 全部依赖 + GPT-SoVITS 代码 + ADR 引擎，磁盘占用约 2GB（CPU 版）/ 4GB（GPU 版），不含底模与声音档案数据。
 
-> 批量部署可使用静默安装：`ADR-Studio-1.2.0-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="安装目录"`
+> 批量部署可使用静默安装：`ADR-Studio-1.2.1-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="安装目录"`
 
 ### 方式二：源码安装
 
@@ -164,7 +174,7 @@ A：见"技术架构"末条的数据目录优先级。安装包默认不含任�
 A：ADR 的推理服务实现了 GPT-SoVITS api_v3 兼容协议并复用其模型体系与训练思路，让 N.E.K.O 等现成客户端无需改动即可接入；本项目对训练流程做了低资源化改造（LoRA / QLoRA 等）。感谢上游开源项目，详见下节第三方声明。
 
 **Q：是否可以商用？**
-A：本软件以 AGPL-3.0 授权，允许商用，但需遵守其条款（包括网络服务场景下向用户提供修改版源代码、保留版权声明等）；同时必须遵守协议页中的声音伦理条款（未经许可不得克隆他人声音）。
+A：本软件以 AGPL-3.0-only 授权，允许商用，但需遵守其条款（包括网络服务场景下向用户提供修改版源代码、保留版权声明等）；同时必须遵守协议页中的声音伦理条款（未经许可不得克隆他人声音）。
 
 ## 第三方组件
 
@@ -175,11 +185,15 @@ A：本软件以 AGPL-3.0 授权，允许商用，但需遵守其条款（包括
 | python-build-standalone | MIT |
 | Tauri | MIT / Apache-2.0 |
 
-各组件遵循其原始许可证，相应许可声明随软件一同分发。
+各组件遵循其原始许可证，相应许可声明随软件一同分发；完整清单与说明见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)。
 
 ## License
 
-本项目以 [GNU Affero General Public License v3.0（AGPL-3.0）](LICENSE)授权发布。Windows 安装包的许可协议页中另附本项目附加使用条款（声音伦理与使用边界等）。
+本项目以 [GNU Affero General Public License v3.0（AGPL-3.0-only）](LICENSE)授权发布。
+
+- **源码获取** — 本项目的完整对应源码随版本发布：可从 [GitHub Releases](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases) 下载源码包（`Source code (zip / tar.gz)`），或直接克隆本仓库（AGPL-3.0 §6：以任何形式分发软件须同时提供对应源码）
+- **网络服务义务** — 若您修改本软件并以其对外提供网络服务，须以 AGPL-3.0-only 向服务使用者提供您修改版的完整源码
+- **附加条款** — Windows 安装包的许可协议页另附本项目附加使用条款（声音伦理与使用边界等），首次启动时应用内也会展示；闭源集成或商用授权请通过「联系方式」洽谈
 
 ## 文档
 

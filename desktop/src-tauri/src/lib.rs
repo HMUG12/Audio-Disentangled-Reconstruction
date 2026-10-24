@@ -419,6 +419,9 @@ pub fn run() {
             enter_console,
             on_launcher_ready,
             engine_status,
+            terms_agreed,
+            agree_terms,
+            reject_terms,
             skip_prewarm,
             retry_prewarm,
             back_to_launcher,
@@ -544,6 +547,11 @@ fn engine_status(app: AppHandle) -> serde_json::Value {
 /// 用户强制放行 (预热页失败/超时的「仍要进入」): 跳启动器, 引擎继续后台加载。
 #[tauri::command]
 fn skip_prewarm(app: AppHandle) {
+    // 批次61: 条款门禁 — 未同意首启条款时「仍要进入」不放行 (条款视图下该按钮
+    // 本就不可达, 此处为纯防御兜底, 防止未来 UI 变动绕过条款流)。
+    if !terms_agreed_flag() {
+        return;
+    }
     let state: State<ServerState> = app.state();
     // 服务确实在跑 (pid != 0) 才标 Ready (批次40): 服务已被杀/从未启动时
     // 标 Ready 会谎报就绪 (launcher 顶栏/托盘显示失真); 导航保留 —
@@ -740,6 +748,50 @@ fn adr_data_dir() -> Option<PathBuf> {
         .ok()
         .filter(|v| !v.trim().is_empty())
         .map(|la| PathBuf::from(la).join(r"ADR\data"))
+}
+
+// ---------------------------------------------------------------------------
+// 首启条款 (批次61): prewarm 前置条款页 + .terms_agreed_v1 标记 + 拒绝退出态
+// ---------------------------------------------------------------------------
+
+/// 条款同意标记路径: <数据目录>\.terms_agreed_v1 (数据目录与 Python adr_data_dir()
+/// 同源推导)。覆盖安装保留数据目录 → 升级/重装不重复弹条款。
+fn terms_flag_path() -> Option<PathBuf> {
+    adr_data_dir().map(|d| d.join(".terms_agreed_v1"))
+}
+
+/// 内部查询 (prewarm_flow 门禁与 skip_prewarm 兜底共用): 标记文件存在即视为已同意。
+fn terms_agreed_flag() -> bool {
+    terms_flag_path().map(|p| p.exists()).unwrap_or(false)
+}
+
+/// 前端查询: 是否已同意首启条款 (prewarm.html 加载时调用, 决定展示条款页还是步骤流)。
+#[tauri::command]
+fn terms_agreed() -> bool {
+    terms_agreed_flag()
+}
+
+/// 前端「同意」: 写标记文件 (内容含毫秒时间戳, 便于审计追溯)。
+#[tauri::command]
+fn agree_terms() -> Result<(), String> {
+    let p = terms_flag_path()
+        .ok_or_else(|| "数据目录不可用, 无法记录条款同意状态".to_string())?;
+    if let Some(parent) = p.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    std::fs::write(&p, format!("agreed_at={ts}\n"))
+        .map_err(|e| format!("写入条款标记失败: {e}"))
+}
+
+/// 前端「拒绝」: 落日志留痕后退出 (禁止性条款, 拒绝即不可用)。
+#[tauri::command]
+fn reject_terms(app: AppHandle) {
+    proc_log("terms", "用户拒绝使用条款, 应用退出");
+    app.exit(0);
 }
 
 /// 服务日志目录 (批次26, 批次27 重构): ADR_LOG_DIR > <数据目录>\logs
@@ -1107,6 +1159,24 @@ fn prewarm_flow(app: AppHandle) {
     state.set_phase(Phase::Ready);
     if let Some(t) = app.tray_by_id("adr-tray") {
         let _ = t.set_tooltip(Some("ADR Studio — 引擎已预热 (启动器)"));
+    }
+    // 批次61: 首启条款门禁 — 未同意条款前停在预热页不放行导航。
+    // 引擎已在 setup 阶段照常预热 (本函数即预热流程), gate 只拦导航:
+    // 用户点「同意」写入标记后, 下轮 500ms 轮询放行; 条款阅读期间不浪费预热等待。
+    if !terms_agreed_flag() {
+        eval_prewarm(&window, "kernel", "引擎已就绪, 请先阅读并同意使用条款");
+        loop {
+            if SHUTTING_DOWN.load(Ordering::Relaxed) {
+                return;
+            }
+            if state.base_url.lock().unwrap().as_deref() != Some(base.as_str()) {
+                return;
+            }
+            if terms_agreed_flag() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
     }
     navigate(&window, &format!("{TAURI_ORIGIN}/launcher.html"));
 }

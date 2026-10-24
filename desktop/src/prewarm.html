@@ -70,6 +70,36 @@
   #btnRetry { background: #172a52; color: #60a5fa; border: 1px solid #2b3f6e; }
   #btnSkip { background: transparent; color: #7f92b5; border: 1px solid #223050; }
   .foot { color: #47556e; font-size: 11.5px; margin-top: 26px; }
+
+  /* 批次61: 首启条款视图 — 盖住预热流程 (引擎后台照常预热), 同意后切回 */
+  body.terms-mode .sub, body.terms-mode .panel,
+  body.terms-mode #tip, body.terms-mode #acts, body.terms-mode .foot { display: none; }
+  #terms { display: none; }
+  body.terms-mode #terms { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .tcard {
+    width: min(560px, 92vw); border-radius: 13px; padding: 20px 26px 16px;
+    background: linear-gradient(160deg, #131a2a, #0e1422); border: 1px solid #202a44;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .tcard h2 { font-size: 16.5px; font-weight: 700; }
+  .tcard h2 em { font-style: normal; color: #2dd4bf; }
+  .tbody {
+    max-height: 44vh; overflow-y: auto; font-size: 12.5px; line-height: 1.85;
+    color: #aeb9cf; padding-right: 8px; user-select: text;
+  }
+  .tbody p { margin: 0 0 9px; }
+  .tbody b { color: #e8ecf4; }
+  .tbody .tno { color: #fbbf24; }
+  .tacts { display: flex; gap: 12px; justify-content: center; margin-top: 2px; }
+  .tacts button {
+    font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+    border-radius: 10px; padding: 9px 24px; transition: transform .15s, opacity .15s;
+  }
+  .tacts button:hover { transform: translateY(-2px); }
+  .tacts button:disabled { opacity: .55; cursor: default; transform: none; }
+  #btnAgree { background: #134e4a; color: #5eead4; border: 1px solid #2dd4bf66; }
+  #btnReject { background: transparent; color: #7f92b5; border: 1px solid #223050; }
+  .tfoot { color: #47556e; font-size: 11px; text-align: center; }
 </style>
 </head>
 <body>
@@ -101,6 +131,25 @@
     <button id="btnSkip">仍要进入</button>
   </div>
   <div class="foot">预热完成后引擎常驻后台，专业 / 新手控制台均可秒进</div>
+
+  <div id="terms">
+    <div class="tcard">
+      <h2>使用条款与<em>声音安全告知</em></h2>
+      <div class="tbody">
+        <p><b>1. 开源许可</b>：本软件按 GNU AGPL-3.0-only 授权发布，本地使用免费。修改本软件或以其对外提供网络服务，须遵守 AGPL 条款（包括以相同许可向使用者开放对应源代码）。</p>
+        <p><b>2. 禁止行为</b>：<span class="tno">未经声音权利人明确授权，不得克隆、合成其声音</span>；不得将本软件用于诈骗、冒充他人、诽谤、伪造证据、侵犯隐私或其他违法违规用途。</p>
+        <p><b>3. 责任边界</b>：您生成内容的具体用途由您自行决定并负责；因滥用本软件产生的法律后果由使用者承担。</p>
+        <p><b>4. 声纹个人信息告知</b>：您上传或录制的语音样本属于个人敏感信息（含声纹特征）。样本仅在本地数据目录存储与处理，<b>全程不上传云端</b>；删除样本即删除对应声纹数据。</p>
+        <p><b>5. 数据采集</b>：本版本默认不采集设备标识、不上报使用数据。</p>
+        <p><b>6. 同意生效</b>：点击「同意并继续」即表示您已阅读并接受上述条款。</p>
+      </div>
+      <div class="tacts">
+        <button id="btnAgree">同意并继续</button>
+        <button id="btnReject">拒绝并退出</button>
+      </div>
+    </div>
+    <div class="tfoot">拒绝将退出应用；同意状态仅保存在本机数据目录（.terms_agreed_v1）</div>
+  </div>
 
 <script>
 const steps = [0, 1, 2, 3].map(i => document.getElementById("st" + i));
@@ -157,6 +206,36 @@ document.getElementById("btnRetry").addEventListener("click", async () => {
 document.getElementById("btnSkip").addEventListener("click", () => {
   window.__TAURI__.core.invoke("skip_prewarm")
     .catch(e => setTip("强制进入失败: " + e, "warn"));
+});
+
+// 批次61: 首启条款流 — 加载即查标记, 未同意则切条款视图; 引擎预热照常在后台进行
+// (Rust eval 持续更新被隐藏的步骤条 DOM), 同意切回后直接显示最新进度, 不浪费等待。
+const termsEl = document.getElementById("terms");
+function setTermsMode(on) {
+  document.body.classList.toggle("terms-mode", on);
+  if (on) termsEl.querySelector(".tbody").scrollTop = 0;
+}
+(async () => {
+  try {
+    const ok = await window.__TAURI__.core.invoke("terms_agreed");
+    if (!ok) setTermsMode(true);
+  } catch (_) { /* 命令不可用 (异常壳状态) → 保持原预热流程, 不阻塞启动 */ }
+})();
+document.getElementById("btnAgree").addEventListener("click", async () => {
+  const b = document.getElementById("btnAgree");
+  b.disabled = true; b.textContent = "正在进入…";
+  try {
+    await window.__TAURI__.core.invoke("agree_terms");
+    setTermsMode(false);
+    setTip("条款已同意, 引擎就绪后自动进入启动器");
+  } catch (e) {
+    setTip("条款标记写入失败: " + e, "warn");
+  }
+  b.disabled = false; b.textContent = "同意并继续";
+});
+document.getElementById("btnReject").addEventListener("click", async () => {
+  setTip("您已拒绝使用条款, 应用即将退出…", "warn");
+  try { await window.__TAURI__.core.invoke("reject_terms"); } catch (_) { /* 退出失败仅提示, 不做强制手段 */ }
 });
 </script>
 </body>

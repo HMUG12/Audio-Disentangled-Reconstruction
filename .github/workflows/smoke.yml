@@ -34,6 +34,10 @@ jobs:
       - name: 版本面一致性断言
         run: python scripts/check_versions.py
 
+      # 批次61 合规门禁: LICENSE 精确化 / README 披露 / 第三方清单 / 首启条款流
+      - name: 合规门禁断言
+        run: python scripts/check_compliance.py
+
       - name: 安装依赖 (CPU torch + 全量 extras)
         run: |
           python -m pip install --upgrade pip

@@ -1,8 +1,9 @@
 {
   "name": "adr-desktop",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "description": "ADR Studio 桌面壳 (Tauri 2 + Python sidecar)",
+  "license": "AGPL-3.0-only",
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",
