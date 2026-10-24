@@ -111,6 +111,8 @@ def save_voice(
     rvc_index: Optional[str] = None,     # D1: faiss 索引路径
     style: str = "",                     # 批次7: 默认说话风格/人设描述
     language: str = "zh",                # 批次53: 参考音频语种 (语言默认联动面)
+    source: str = "",                    # 批次62: 素材来源声明 (空=未声明)
+    consent: Optional[dict] = None,      # 批次62: 声纹权利人单独同意记录
 ) -> Path:
     """保存音色档案, 返回档案目录。ref 超长自动裁剪 (见 _materialize_ref)。"""
     name = name.strip().replace("/", "_").replace("\\", "_")
@@ -145,6 +147,8 @@ def save_voice(
         "rvc_index": rvc_index,
         "style": style,
         "language": (language or "zh").lower(),
+        "source": source or None,    # 批次62: 素材来源声明 (旧档案无此键, 读侧 .get)
+        "consent": consent,          # 批次62: 声纹单独同意 {granted, at, statement}
         "sampling": prev_sampling,
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -350,6 +354,8 @@ def save_voice_auto(
     progress=None,
     style: str = "",
     language: str = "zh",
+    source: str = "",                # 批次62: 素材来源声明透传
+    consent: Optional[dict] = None,  # 批次62: 声纹单独同意透传
 ):
     """A2: 长音频自动选段建档。
 
@@ -374,7 +380,8 @@ def save_voice_auto(
     if dur <= 15:
         _log(f"音频 {dur:.1f}s ≤15s, 直接整段建档")
         vdir = save_voice(name, audio_path, prompt_text, t2s_weights, vits_weights,
-                          style=style, language=language)
+                          style=style, language=language,
+                          source=source, consent=consent)
         return vdir, {"mode": "whole", "duration_s": round(dur, 1)}
 
     from adr.eval.speaker_sim import similarity
@@ -409,7 +416,8 @@ def save_voice_auto(
         _log("所有段未过节奏过滤, 取相似度最高段兜底")
     sim, best_seg = best
     vdir = save_voice(name, str(best_seg), prompt_text, t2s_weights, vits_weights,
-                      style=style, language=language)
+                      style=style, language=language,
+                      source=source, consent=consent)
     for f in tmp_dir.glob("*"):
         f.unlink(missing_ok=True)
     _log(f"建档完成, 最优段相似度 {sim:.3f}")

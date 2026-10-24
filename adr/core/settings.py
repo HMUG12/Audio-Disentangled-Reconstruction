@@ -164,3 +164,19 @@ def torch_threads() -> int:
         return max(0, int(os.environ.get("ADR_TORCH_THREADS", 0)))
     except ValueError:
         return 0
+
+
+# ===== 声音安全 (批次62, m10 方案 C) =====
+def agree_terms() -> bool:
+    """ADR_AGREE_TERMS — 无 UI 形态条款 env 同意入口 (1/true/yes/on)。"""
+    return os.environ.get("ADR_AGREE_TERMS", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def safety_audit_enabled() -> bool:
+    """ADR_SAFETY_AUDIT=0 关闭审计日志, 其余 (含未设置) 开。"""
+    return os.environ.get("ADR_SAFETY_AUDIT", "1") != "0"
+
+
+def wav_metadata_enabled() -> bool:
+    """ADR_WAV_METADATA=0 关闭分发侧 WAV AI 生成标识注入, 其余 (含未设置) 开。"""
+    return os.environ.get("ADR_WAV_METADATA", "1") != "0"

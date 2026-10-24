@@ -299,6 +299,19 @@
         <input type="checkbox" id="st-autostart">
       </div>
 
+      <div class="st-sec">声音安全</div>
+      <div class="st-row">
+        <span>审计日志 (上传/建档/合成事件记入数据目录 logs/audit.log，不含文本与声纹明文)</span>
+        <input type="checkbox" id="st-audit">
+      </div>
+      <div class="st-row">
+        <span>分发 WAV 标注 AI 生成 (输出 WAV 尾部写 LIST/INFO 元数据，默认开)</span>
+        <input type="checkbox" id="st-wavmeta">
+      </div>
+      <div class="st-row">
+        <span>设备标识: ADR 不采集设备指纹、不上报遥测，无任何外发设备标识。</span>
+      </div>
+
       <div class="st-sec">维护</div>
       <div class="st-row st-links">
         <a id="st-open-log">打开日志目录</a> · <a id="st-update">检查更新</a> · <span id="st-ver"></span>
@@ -423,7 +436,7 @@ aboutOv.addEventListener("click", e => { if (e.target === aboutOv) aboutOv.class
   try {
     const v = await window.__TAURI__.app.getVersion();
     el.textContent = `version ${v}`;
-  } catch (_) { el.textContent = "version 1.2.1"; }
+  } catch (_) { el.textContent = "version 1.2.2"; }
 })();
 document.getElementById("about-qq").addEventListener("click", e => {
   const t = e.currentTarget.textContent.replace(/^QQ\s*/, "");
@@ -475,6 +488,9 @@ async function openSettings() {
     $st("st-port").value = cfg.service_port || "";
     $st("st-numba").value = cfg.numba_cache_dir || "";
     $st("st-cuda").checked = !!cfg.cudagraph;
+    // 批次62 声音安全: 两项默认开 (null/缺字段 = 开), 显式 false 才勾掉
+    $st("st-audit").checked = cfg.safety_audit !== false;
+    $st("st-wavmeta").checked = cfg.wav_metadata !== false;
     $st("st-device").value = (cfg.device === "cuda" || cfg.device === "cpu") ? cfg.device : "auto";
     $st("st-threads").value = cfg.torch_threads || "";
     _compatTouched = false;   // 每次打开面板重置触碰标记
@@ -521,6 +537,8 @@ async function saveSettings() {
       service_port: port,
       numba_cache_dir: $st("st-numba").value.trim(),
       cudagraph: $st("st-cuda").checked,
+      safety_audit: $st("st-audit").checked,
+      wav_metadata: $st("st-wavmeta").checked,
       device: $st("st-device").value,
       torch_threads: Math.min(Math.max(parseInt($st("st-threads").value, 10) || 0, 0), 128),
       // 批次57 review: 仅用户主动设置过 (或此前就是显式值) 才发 true/false —

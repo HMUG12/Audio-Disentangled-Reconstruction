@@ -26,7 +26,7 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -429,7 +429,12 @@ async def system_doctor(fix: bool = False):
 
 
 @router.post("/train/upload", summary="上传克隆录音 (wav/mp3/flac/m4a/ogg/zip)")
-async def train_upload(file: UploadFile = File(...)):
+async def train_upload(file: UploadFile = File(...),
+                       source_declaration: str = Form("")):
+    """批次62 上传侧声音安全: ``source_declaration`` 为素材来源声明 (谁的声音/
+    授权关系), 只入审计不落业务库; 建档时请在 /profiles/create 再次携带并
+    传 ``consent_granted=true``。"""
+    from adr.core.audit import log_event, text_fp
     orig = Path(file.filename or "audio.wav")
     ext = orig.suffix.lower()
     if ext not in _UPLOAD_EXT:
@@ -472,8 +477,13 @@ async def train_upload(file: UploadFile = File(...)):
                 413, f"音频时长 {duration_s / 60:.0f} 分钟超过 "
                      f"{_UPLOAD_MAX_DURATION // 3600} 小时上限; "
                      "训练素材建议 5~30 分钟, 请裁剪后上传")
+    # 批次62 上传侧审计: 不记文件名/路径 (可能含人名), 声明只记指纹
+    decl = (source_declaration or "").strip()
+    log_event("material_upload", ext=ext, size=size,
+              decl_fp=text_fp(decl) if decl else None)
     return {"path": str(dest), "size": size, "filename": fname,
-            "duration_s": duration_s, "samplerate": samplerate}
+            "duration_s": duration_s, "samplerate": samplerate,
+            "source_declaration": (source_declaration or "").strip()[:200]}
 
 
 # ---------------------------------------------------------------------------
@@ -491,10 +501,14 @@ class ProfileCreateReq(BaseModel):
     prompt_text: str = ""
     style: str = ""
     language: str = "zh"           # 批次53: 参考音频语种 → 语言默认联动面
+    # 批次62 上传侧声音安全: 声纹属个人敏感信息, 建档必须声明来源并勾选权利人同意
+    source_declaration: str = ""
+    consent_granted: bool = False
 
 
 def _profile_worker(name: str, audio_path: str, prompt_text: str, style: str,
-                    language: str = "zh") -> None:
+                    language: str = "zh", source: str = "",
+                    consent: dict | None = None) -> None:
     from adr.models import voice_library
 
     def _prog(msg: str) -> None:
@@ -504,7 +518,7 @@ def _profile_worker(name: str, audio_path: str, prompt_text: str, style: str,
     try:
         vdir, info = voice_library.save_voice_auto(
             name, audio_path, prompt_text, progress=_prog, style=style,
-            language=language)
+            language=language, source=source, consent=consent)
         with _profile_lock:
             _profile_job.update(state="done", info={**info, "path": str(vdir)},
                                 message=f"建档完成: {name}")
@@ -525,6 +539,18 @@ async def profile_create(body: ProfileCreateReq):
     audio = Path(body.audio_path)
     if not audio.exists():
         raise HTTPException(400, f"音频不存在: {body.audio_path}")
+    # 批次62 上传侧声音安全: 声纹建档需声音权利人单独同意 (不信任客户端
+    # 传入的同意结构, 服务端按声明重组后落 meta/审计)
+    if not body.consent_granted:
+        raise HTTPException(
+            422, "未获得声音权利人同意, 无法建档 (声纹属个人敏感信息); "
+                 "请确认你已获授权后传 consent_granted=true")
+    decl = (body.source_declaration or "").strip()
+    consent = {"granted": True,
+               "at": datetime.now().astimezone().isoformat(timespec="seconds"),
+               "statement": decl[:200]}
+    from adr.core.audit import log_event, text_fp
+    log_event("voice_enroll", name=name, decl_fp=text_fp(decl) if decl else None)
     if name in voice_library.list_voices():
         raise HTTPException(409, f"已存在同名声音「{name}」, 请换一个名字")
     with _profile_lock:
@@ -535,7 +561,8 @@ async def profile_create(body: ProfileCreateReq):
     threading.Thread(target=_profile_worker,
                      args=(name, str(audio), body.prompt_text.strip(),
                            body.style.strip(),
-                           (body.language or "zh").lower().strip()),
+                           (body.language or "zh").lower().strip(),
+                           decl, consent),
                      daemon=True).start()
     return {"state": "working", "name": name}
 

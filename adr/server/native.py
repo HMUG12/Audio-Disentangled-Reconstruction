@@ -178,6 +178,8 @@ async def profile_import(package: UploadFile = File(...),
                             content={"message": str(e), "code": "import_failed"})
     finally:
         os.unlink(tmp)
+    from adr.core.audit import log_event
+    log_event("voice_import", name=name or "", overwrite=overwrite)
     return {"imported": r}
 
 
