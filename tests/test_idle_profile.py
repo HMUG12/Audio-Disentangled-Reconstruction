@@ -20,6 +20,8 @@ def isolated_env(monkeypatch, tmp_path):
     monkeypatch.setattr(adr.models.voice_library, "VOICES_DIR", voices_dir)
     # 测试不等空闲期; 引擎换成空闲桩, 不触发真实加载
     monkeypatch.setattr(gsv_engine, "_PROFILE_IDLE_DELAY", 0.0)
+    monkeypatch.setattr(gsv_engine, "_PROFILE_BUILD_DELAY", 0.0)
+    monkeypatch.setattr(gsv_engine, "_PROFILE_STATE", "idle")
     idle = MagicMock()
     idle.queue_depth.return_value = 0
     idle.synth_busy.return_value = 0
@@ -35,9 +37,6 @@ def _info_logs(caplog):
 def test_idle_profile_scheduled_once(isolated_env):
     """空闲调度每进程至多触发一次 (重复调 _schedule_idle_profile 不重复启线程)。"""
     from adr.models import gsv_engine
-
-    # 重置状态 (测试间隔离)
-    gsv_engine._PROFILE_SCHEDULED = False
 
     with patch("adr.models.gsv_engine.threading.Thread") as mock_thread:
         gsv_engine._schedule_idle_profile()

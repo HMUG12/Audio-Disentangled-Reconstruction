@@ -524,6 +524,9 @@ def _profile_worker(name: str, audio_path: str, prompt_text: str, style: str,
         with _profile_lock:
             _profile_job.update(state="done", info={**info, "path": str(vdir)},
                                 message=f"建档完成: {name}")
+        # v1.3.x: 首个档案建好即补跑本机采样, 新用户不必等下次启动
+        from adr.models.gsv_engine import try_schedule_profile
+        try_schedule_profile()
     except Exception as e:
         with _profile_lock:
             _profile_job.update(state="failed", message=str(e))
