@@ -310,6 +310,13 @@ class GSVEngine:
         # 批次63 第三子批 (m10 ④): N=1 硬预算调度 — 排队/预算/调度报告收口到
         # SynthesisScheduler; _lock 仍是引擎态硬闸 (旁路调度者也被串行化)
         self._sched = SynthesisScheduler(settings.scheduler_max_concurrency())
+        # v1.3.x Policy (conservative-v1): 只应用不影响音质的 overrides
+        # (线程数 / 流式分块), 显式 env 优先; 构造时应用, 首个请求的切分即生效
+        try:
+            from adr.core import policy
+            policy.apply()
+        except Exception as e:
+            print(f"[ADR] policy 应用失败, 走默认值: {e}")
 
     def queue_depth(self) -> int:
         """正在排队等待合成的请求数 (批次23 引入, 批次63 委托调度器)。"""
@@ -630,8 +637,9 @@ class GSVEngine:
         ref_audio = str(Path(ref_audio).resolve())
         t2s_weights = str(Path(t2s_weights).resolve()) if t2s_weights else None
         vits_weights = str(Path(vits_weights).resolve()) if vits_weights else None
-        head, rest = self._stream_head_split(text)
-        segments = [head, *self._split_long(rest)] if rest else [text]
+        head, rest = self._stream_head_split(text, settings.stream_head_chars())
+        segments = ([head, *self._split_long(rest, settings.split_max_chars())]
+                    if rest else [text])
         # 批次63 第三子批: 调度准入 (N=1 硬预算) — 排队/忙闲计数由调度器
         # 持有 (批次23 观测语义不变); 生成器被客户端断连关闭时 CM finally 兜住
         with self._admit():

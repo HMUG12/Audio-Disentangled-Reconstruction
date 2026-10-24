@@ -148,6 +148,37 @@ def profile(ref: str | None, runs: int, force: bool, show: bool) -> None:
     click.echo(f"✓ 已保存: {path}")
 
 
+@main.command()
+@click.option("--show", is_flag=True, help="只显示已有 policy.json, 不重新推断")
+@click.option("--snapshot", is_flag=True, help="诊断导出: 当前生效值与来源")
+def policy(show: bool, snapshot: bool) -> None:
+    """调度层 Policy: 由本机 profile 推断配置档 (conservative-v1)。"""
+    from adr.core import policy as pol_mod
+    from adr.core import profiler
+
+    if snapshot:
+        click.echo(json.dumps(pol_mod.export_snapshot(), indent=2, ensure_ascii=False))
+        return
+    if show:
+        data = pol_mod.load()
+        if data is None:
+            click.echo("尚无 policy.json, 运行 `adr policy` 生成")
+            sys.exit(1)
+        click.echo(json.dumps(data, indent=2, ensure_ascii=False))
+        return
+    prof = profiler.load_profile()
+    if prof is None:
+        click.echo("✗ 本机尚无 profile, 先运行 `adr profile`")
+        sys.exit(1)
+    data = pol_mod.generate(prof)
+    click.echo(f"规则 {data['rules']} (policy_version={data['policy_version']})")
+    for k, v in data["overrides"].items():
+        click.echo(f"  自动生效 {k}={v}")
+    for k, r in data["recommendations"].items():
+        click.echo(f"  仅推荐   {k}={r['value']}  ({r['reason']})")
+    click.echo(f"✓ 已保存: {pol_mod.policy_path()}")
+
+
 @main.group("voice")
 def voice() -> None:
     """音色档案导入导出: 跨机迁移 .adrvoice 包。"""

@@ -17,6 +17,9 @@
 - ADR_T2S_CUDAGRAPH / ADR_T2S_STATIC_KV / ADR_T2S_CUDAGRAPH_BUCKETS — 是写默认值
   (setdefault) 的引擎启动行为, 留在 gsv_engine。
 
+Policy (core/policy.py, v1.3.x) 只会往 env 写 ADR_TORCH_THREADS /
+ADR_TTS_STREAM_HEAD / ADR_TTS_SPLIT_MAX, 且不覆盖显式 env; 本文件读取口径不变。
+
 各函数解析口径与被替换的原地读取**逐字等价** (含容错回退), 不统一不重构。
 """
 from __future__ import annotations
@@ -155,6 +158,26 @@ def tts_device() -> str:
     """
     raw = (os.environ.get("ADR_TTS_DEVICE") or "").strip().lower()
     return raw if raw in ("auto", "cuda", "cpu") else "auto"
+
+
+def _pos_int(name: str, default: int) -> int:
+    try:
+        v = int(os.environ.get(name, default))
+        return v if v > 0 else default
+    except ValueError:
+        return default
+
+
+def stream_head_chars() -> int:
+    """ADR_TTS_STREAM_HEAD — 流式首段最大字数 (默认 14, 批次9)。
+
+    Policy conservative-v1 慢机可自动收短; 只改切分位置, 不改模型分布。"""
+    return _pos_int("ADR_TTS_STREAM_HEAD", 14)
+
+
+def split_max_chars() -> int:
+    """ADR_TTS_SPLIT_MAX — 无句读长段细分字数 (默认 40, 批次20)。"""
+    return _pos_int("ADR_TTS_SPLIT_MAX", 40)
 
 
 def torch_threads() -> int:

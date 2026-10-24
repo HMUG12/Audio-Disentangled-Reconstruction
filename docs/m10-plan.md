@@ -209,7 +209,7 @@
 |------|------|------|------|
 | 61 | v1.2.1 | 合规速赢：纪要"立即执行"四项（README 风险披露 / 首启禁止性条款 / 源码随包 / AGPL-3.0-only）+ SPDX + CLA/DCO 拍板 + 门禁清单 v1（③清单 1/2/3/6）+ **最小条款流**（prewarm 前置条款页 + data 标记 `.terms_agreed_v1` + 拒绝退出态，按 2 天增量排；条款文案中文版先行，英文版后补不阻塞 61） | **已完成（2026-10-24，落地记录见下）** |
 | 62 | v1.2.2 | 安全模块 MVP：声音安全三层 + WAV 元数据 + 素材授权台账/声纹单独同意 + 无 UI 形态条款（`--agree-terms` / `ADR_AGREE_TERMS` env，**server 形态下默认写日志便于审计**）+ 声音安全设置 + 审计（③清单 4/5） | **已完成（2026-10-24，落地记录见下）** |
-| 63+ | v1.3.0 | **v1.3 "Autopilot"**：内核底座（H2 静态 KV / 分桶 CUDA Graph / 连续批处理）+ 调度层，N=1 硬预算起步（见④） | 首子批（t2s 静态 KV）+ 次子批（分桶 CUDA Graph）+ 第三子批（调度层 N=1 硬预算）+ 第四子批（Profiler 微基准）已完成（2026-10-24，记录见下）；连续批处理内核 / 准入控制 / Policy / Runtime 待后续子批 |
+| 63+ | v1.3.0 | **v1.3 "Autopilot"**：内核底座（H2 静态 KV / 分桶 CUDA Graph / 连续批处理）+ 调度层，N=1 硬预算起步（见④） | 首子批（t2s 静态 KV）+ 次子批（分桶 CUDA Graph）+ 第三子批（调度层 N=1 硬预算）+ 第四子批（Profiler 微基准）已完成（2026-10-24，记录见下）；**v1.3.0 tag 已推送（指向 062f475，含 Review 修正），Release 与安装包后补**；连续批处理内核 / 准入控制 / Policy / Runtime 待后续子批 |
 | 框架线 | — | 自动更新链：launcher"检查更新"现为直开 Releases 页（launcher.html L564），缺版本比对/下载/安装闭环；建议插 62 后或与 63 并行 | 待排期 |
 
 **稳定里程碑 v2.0（2026.10–2027.6）**：验收 = 合规门禁全绿（③）+ Autopilot 五指标达标（④）+ 平台矩阵（Windows 全形态 / Linux 容器 / macOS 窗口末段可滑出⑤）。
@@ -298,7 +298,17 @@
 - **接口**：CLI `adr profile [--ref --runs --force --show]`（已有本机档默认只显示不重采）；`/system/stats` 新增 `sched` 字段（第三子批调度报告，引擎未初始化为 null），模块级 `gsv_engine.sched_stats()` 不触发加载
 - **测试（tests/test_profiler.py，7 项全绿，假引擎不依赖模型/GPU）**：档结构与测点参数、warmup+n 次调用计数与参数透传、测量失败归零、无档案报错、存取往返（ADR_DATA_DIR 隔离）、缺档返回 None、机器指纹稳定、模块级 sched_stats 未初始化为 None
 - **验证**：check_versions 9 OK / check_compliance 7 组 OK / 全量 pytest 489 passed + 1 skipped（357s）
-- **遗留**：真机标定（4060Ti/CPU 两锚点实测入档）；Policy（档→配置档映射，可手动覆盖——首启配置⑯）与壳首启接线；Runtime 闭环监控 + 自愈回退；v1.3.0 tag 后发
+- **遗留**：真机标定（4060Ti/CPU 两锚点实测入档）；~~Policy~~（v1.3.x 首子批已完成）与壳首启接线；Runtime 闭环监控 + 自愈回退；~~v1.3.0 tag 后发~~（已打于 062f475）
+
+**v1.3.x 首子批落地记录（2026-10-24，分支 main，维持 v1.3.0）**：
+
+- **范围**：调度层 Policy（Profiler→**Policy**→Runtime 第二段），规则集 conservative-v1。原则：音质敏感开关（STATIC_KV / CUDA_GRAPH / 分桶 / INT8）**只推荐不自动开**，音质门通过前默认值不变；不影响音质的流式分块与 torch 线程数可自动调；不查设备表，只用 profile 实测 RTF / 显存 + 本机物理核数
+- **实现（adr/core/policy.py 新建）**：`infer(profile, thresholds)` 纯函数 → `{policy_version, rules, generated_at, profile_id, basis, thresholds, overrides, recommendations}`；`policy.json`（`<data_dir>/policy.json`）**只存 overrides + 元数据**，阈值进文件可手改、重新生成时沿用；`apply()` 只应用白名单 `AUTO_KEYS`（ADR_TORCH_THREADS / ADR_TTS_STREAM_HEAD / ADR_TTS_SPLIT_MAX），手写进 overrides 的音质敏感键忽略并告警，`policy_version` 高于代码版本整体不应用；完整快照另做诊断导出 `export_snapshot()`（生效值 + 来源 env/policy/default）
+- **规则（阈值默认）**：RTF>1.0 慢机 → 首段 14→10 字、长句细分 40→30 字；CPU 且物理核≥4 → 线程数 = 核数−1；CUDA → 推荐 STATIC_KV=1，显存≥6G 再推荐 CUDAGRAPH=1 + 分桶 default；INT8 推理侧未实现，推荐保持关
+- **开关与接线**：优先级 显式 env > policy.json overrides > 代码默认值；引擎构造时 `policy.apply()`（早于首个请求切分与 `_lazy_init` 线程设置），失败不阻断合成；`settings` 新增 `stream_head_chars()` / `split_max_chars()`，流式切分改读这两项（默认值与原字面常量一致）；CLI `adr policy [--show --snapshot]`
+- **测试（tests/test_policy.py，10 项全绿）**：CPU 慢机自动项、少核不留核/快机不收短、GPU 门控项只推荐不入 overrides、显存阈值、阈值可配、重新生成沿用用户阈值、apply 白名单 + env 优先 + 自写键可更新、拒绝高版本、缺档/坏档、快照来源、settings 分块默认与非法回退
+- **验证**：（待填）
+- **遗留**：policy_version 随规则变化递增；音质门通过后另出规则集（如 balanced-v1）才允许自动开加速开关；壳首启接线（首启配置⑯：首启跑 profile→policy）；真机两锚点标定阈值；Runtime 闭环
 
 ### ④ Autopilot 与 v1.3 范围说明
 
