@@ -1,6 +1,6 @@
 [package]
 name = "adr-desktop"
-version = "1.3.0"
+version = "1.3.1"
 description = "ADR Studio 桌面壳: 托管本地 ADR TTS 服务 (Python sidecar)"
 license = "AGPL-3.0-only"
 edition = "2021"
