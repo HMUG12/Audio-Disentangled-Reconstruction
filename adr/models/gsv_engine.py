@@ -351,6 +351,9 @@ class GSVEngine:
         # 批次63: t2s 静态 KV Cache 桥 — decode 每步 cat 重建 KV (O(L^2) 拷贝)
         # 换预分配 buffer + 原地写, 与原路径逐 token 位等; 默认关闭
         os.environ.setdefault("ADR_T2S_STATIC_KV", "0")
+        # 批次63: 分桶 CUDA Graph — 仅在 ADR_T2S_CUDAGRAPH=1 时生效; 非空非 "0"
+        # 时桥改用分桶 runner ("1"/"default" = 默认 9 档, 或逗号分隔档位)
+        os.environ.setdefault("ADR_T2S_CUDAGRAPH_BUCKETS", "")
         # 兼容补丁: NLTK (英文 G2P 依赖) 离线环境下载默认超时 72s/次,
         # 收紧到 5s 快速失败走内置回退发音
         import socket

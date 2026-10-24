@@ -209,7 +209,7 @@
 |------|------|------|------|
 | 61 | v1.2.1 | 合规速赢：纪要"立即执行"四项（README 风险披露 / 首启禁止性条款 / 源码随包 / AGPL-3.0-only）+ SPDX + CLA/DCO 拍板 + 门禁清单 v1（③清单 1/2/3/6）+ **最小条款流**（prewarm 前置条款页 + data 标记 `.terms_agreed_v1` + 拒绝退出态，按 2 天增量排；条款文案中文版先行，英文版后补不阻塞 61） | **已完成（2026-10-24，落地记录见下）** |
 | 62 | v1.2.2 | 安全模块 MVP：声音安全三层 + WAV 元数据 + 素材授权台账/声纹单独同意 + 无 UI 形态条款（`--agree-terms` / `ADR_AGREE_TERMS` env，**server 形态下默认写日志便于审计**）+ 声音安全设置 + 审计（③清单 4/5） | **已完成（2026-10-24，落地记录见下）** |
-| 63+ | v1.3.0 | **v1.3 "Autopilot"**：内核底座（H2 静态 KV / 分桶 CUDA Graph / 连续批处理）+ 调度层，N=1 硬预算起步（见④） | 首子批已完成（2026-10-24，t2s 静态 KV，记录见下）；分桶 CUDA Graph / 连续批处理 / 调度层待后续子批 |
+| 63+ | v1.3.0 | **v1.3 "Autopilot"**：内核底座（H2 静态 KV / 分桶 CUDA Graph / 连续批处理）+ 调度层，N=1 硬预算起步（见④） | 首子批（t2s 静态 KV）+ 次子批（分桶 CUDA Graph）已完成（2026-10-24，记录见下）；连续批处理 / 调度层待后续子批 |
 | 框架线 | — | 自动更新链：launcher"检查更新"现为直开 Releases 页（launcher.html L564），缺版本比对/下载/安装闭环；建议插 62 后或与 63 并行 | 待排期 |
 
 **稳定里程碑 v2.0（2026.10–2027.6）**：验收 = 合规门禁全绿（③）+ Autopilot 五指标达标（④）+ 平台矩阵（Windows 全形态 / Linux 容器 / macOS 窗口末段可滑出⑤）。
@@ -271,7 +271,16 @@
 - **等价性测试（tests/test_t2s_static_kv.py，6 项全绿 41s）**：自建 2 层 32 维 Text2SemanticDecoder（config 纪律 embedding==hidden、EOS==vocab-1）；单步 decode 位等（masked/unmasked 双变体）；batch1 端到端 y 位等 + `_last_kv` 三元组断言（kv_len=MAX_LEN+PREFIX+步数、buffer 形状）；install 分派两路（batch_infer / naive_batched）位等；流式逐块位等（chunk_length=8）；mute 分支位等（chunk_length=6 + mute_emb_sim_matrix）
 - **版本面**：v1.3.0 十一面同法对齐（批次 62 口径：pyproject / `__init__.py` / tauri.conf.json / Cargo.toml / package.json / package-lock.json 两处 / installer.iss / launcher.html fallback / README 下载链接）
 - **验证**：check_versions 9 项 OK（all faces = 1.3.0）/ check_compliance 7 组 OK / 等价性测试 6 passed（41s）/ 全量 pytest 467 passed + 1 skipped（256.6s）/ cargo check 通过 12.29s（版本面 JSON/TOML 语法核验，adr-desktop v1.3.0 编译）
-- **遗留**：v1.3.0 tag 与 Release 随 v1.3 收口（首子批不发版）；分桶 CUDA Graph、连续批处理、调度层（Profiler→Policy→Runtime）待后续子批
+- **遗留**：v1.3.0 tag 与 Release 随 v1.3 收口（首子批不发版）；~~分桶 CUDA Graph~~（次子批已完成）、连续批处理、调度层（Profiler→Policy→Runtime）待后续子批
+
+**批次 63 次子批落地记录（2026-10-24，分支 main，维持 v1.3.0）**：
+
+- **范围**：分桶 CUDA Graph——修正批次 10 单 graph 缺陷（官方 CUDAGraphRunner 绑全量 `(1,2500,H,D)` KV、SDPA 无 mask，未写零槽各贡献 `exp(0)=1` 假 softmax 质量致 AR 分布漂移，故 `ADR_T2S_CUDAGRAPH` 默认 0）；分桶把假质量从 `(2500-L)` 压到 `(B-L)`，向 masked 精确 softmax 收敛，非新近似
+- **实现（adr/models/adr_t2s_bucketed.py，不动 fork）**：`_PrefixView` 代理原地写真 buffer、返回 `[:, :B]` 前缀视图（捕获的 SDPA kernel 永久只读前 B 行，replay 零 Python 开销）；全档共享一份 2500 buffer（档间零拷贝、显存同单 graph）、graph 懒捕获；dispatch：idx=k≥1 取最小 `B ≥ prefill_len+k`（`dispatch_log` 单调不减）；默认档 `256,384,512,768,1024,1280,1536,2048,2500`（`parse_buckets` 去重升序、越界 ValueError、末档自动补 max_len）；`BucketedGraphRunner._handle_request` 逐行对齐官方循环（去 tqdm、bs==1、无 CUDA 走 eager 前缀视图）
+- **开关与挂钩**：env `ADR_T2S_CUDAGRAPH_BUCKETS` 默认空（gsv_engine.py 同址 setdefault；settings.py docstring 同步）；在 `ADR_T2S_CUDAGRAPH=1` 已装的桥内选择 runner（非空且非 "0" 用分桶，"1"/"default" 走默认档），**无新增 TTS.py 补丁**；优先级 static_kv > 分桶 > 单 graph
+- **等价性测试（tests/test_t2s_bucketed.py，7 项全绿 2.42s，含 2 项 GPU）**：ladder=[2500] 与 eager 参考 CPU 位等 + 与官方 CUDAGraphRunner GPU graph 位等（测试锚点）；子档 dispatch 规则（单调 / 首档 / 最小可容档）；前缀视图确实改变注意力（分桶生效证据）；`parse_buckets`/`_bucket_for` 边界；`_PrefixView` 是视图非拷贝（data_ptr 同、其余行不动）；graph 键 = 用过的档集合、二次请求复用不重捕获
+- **验证**：check_versions 9 项 OK（all faces = 1.3.0）/ check_compliance 7 组 OK / 全量 pytest 474 passed + 1 skipped（272.5s）
+- **遗留**：分桶仍挂在 `ADR_T2S_CUDAGRAPH=1` 之下（默认关）；真实模型音质/时长回归与开默认值需过落地门音质把关；连续批处理、调度层待后续子批；v1.3.0 tag 后发
 
 ### ④ Autopilot 与 v1.3 范围说明
 
