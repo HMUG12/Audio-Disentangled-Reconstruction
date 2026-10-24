@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "adr-clone"
-version = "1.2.0"
+version = "1.2.1"
 description = "ADR: Audio Disentangled Reconstruction — low-resource fast voice cloning training framework"
 readme = "README.md"
-license = {text = "AGPL-3.0"}
+license = {text = "AGPL-3.0-only"}
 authors = [{name = "ADR Team"}]
 requires-python = ">=3.10"
 keywords = ["tts", "voice-cloning", "low-resource", "training-framework"]

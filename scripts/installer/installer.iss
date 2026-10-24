@@ -15,7 +15,7 @@
 ; 双包共用同一 AppId: GPU 包装在 CPU 包上 = 原地升级 runtime, 不产生双份安装。
 
 #define MyAppName "ADR Studio"
-#define MyAppVersion "1.2.0"
+#define MyAppVersion "1.2.1"
 #define MyAppPublisher "未知之致"
 #define MyAppExe "adr-desktop.exe"
 #define ReleaseDir "..\..\desktop\src-tauri\target\release"

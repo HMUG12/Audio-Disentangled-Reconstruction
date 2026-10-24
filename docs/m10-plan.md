@@ -186,6 +186,88 @@
 >
 > **验证记录（2026-10-24 会话内，v1.2.0 发布收口）**：⑦ GPU runtime 4092MB smoke 全绿（python 3.13.16 / torch 2.10.0+cu130 / cuda_available True / RTX A2000 Laptop GPU 识别 / adr+GSV imports / pip check）；补装 G2P 四包后 check_runtime 七项体检通过（4.00GB，GPU 上限告警线 4.6GB）；GPU installer 1926.4MB ISCC 全绿；⑧ 双包 SHA256——CPU `c429beb3348e…f7ad90` / GPU `905965a738f8…bf15feb`（全值入 release notes 下载节）；⑨ **防重入修复补提交**（ea49355）：lib.rs Rust CAS + launcher.html launching 标记在 10-18 已构建进双包（修复 15:20 早于 CPU 包构建 17:07），仅漏 git 提交；⑩ 发布链实操：gh CLI 未安装 → git credential manager 取 token + curl 直调 REST API（创建 Release 201 / 资产 uploads 上传）；PS 5.1 ConvertTo-Json 序列化 release notes 触发 GitHub 422（properties/body 校验拒），改用 runtime python json.dumps 生成请求体绕开；⑪ tag v1.2.0 已推，docker-publish.yml 自动触发 ghcr cpu/cuda 双镜像构建；⑫ 代理注意：push 阶段 44444 代理一度未起（直连被 reset），复探测后进程在位恢复推送——构建/push 前先探活代理。
 
+## 规划重排（2026-10-24 会议纪要定稿）：合规门禁 + v1.3 Autopilot + v2.0 路线
+
+> 依据《会议纪要.txt》（302 行：四版本分层 / 合规六提案 / Autopilot 技术线 / 四版本性能表）对照现状差距盘点后重排。**已定稿（2026-10-24 用户拍板，首启条款流取方案 C，会议做记录不阻塞）**：六决策点全部落定，②批次排期与③门禁表按方案 C 一次定稿。文档以 **draft/WIP** 提交至分支，定稿（会议记录确认）后合并回 main。
+
+### ① 决策记录表（2026-10-24）
+
+| # | 决策点 | 结论 | 状态 |
+|---|--------|------|------|
+| 1 | 版本号口径 | 1.x 全算测试线（含 v1.3 Autopilot）；稳定版另立 **v2.0**，窗口 2026.10–2027.6 | **已定** |
+| 2 | Studio Pro+ 联合 max | 物理 6×96G；联合预算上限 **192G**；对外注明**预算≠物理总和**（Server Pro+ 8×96G 维持已确认口径） | 已定（口径表述待会议复核） |
+| 3 | 原生二进制编译 | 评估后缓行，**不作发布门禁**；分发以便携运行时为准 | **已定** |
+| 4 | 首启条款流 | **方案 C**：条款流放批次 61（最小条款流），安全模块检测/审计随批次 62（三方案对比见③） | **已定（2026-10-24，方案 C）** |
+| 5 | Autopilot 合并 | 认可并入 v1.3，命名 **v1.3 "Autopilot"**；"内核底座 + 调度层"两层关系见④ | **已定** |
+| 6 | macOS | 纳入 v2.0 窗口（27.6）**末段**；可滑出、不阻塞主线，规则见⑤ | 已定（可滑出） |
+
+### ② 版本与批次排期（按方案 C 定稿）
+
+**1.x 测试线**：
+
+| 批次 | 版本 | 内容 | 状态 |
+|------|------|------|------|
+| 61 | v1.2.1 | 合规速赢：纪要"立即执行"四项（README 风险披露 / 首启禁止性条款 / 源码随包 / AGPL-3.0-only）+ SPDX + CLA/DCO 拍板 + 门禁清单 v1（③清单 1/2/3/6）+ **最小条款流**（prewarm 前置条款页 + data 标记 `.terms_agreed_v1` + 拒绝退出态，按 2 天增量排；条款文案中文版先行，英文版后补不阻塞 61） | **已完成（2026-10-24，落地记录见下）** |
+| 62 | v1.2.2 | 安全模块 MVP：声音安全三层 + WAV 元数据 + 素材授权台账/声纹单独同意 + 无 UI 形态条款（`--agree-terms` / `ADR_AGREE_TERMS` env，**server 形态下默认写日志便于审计**）+ 声音安全设置 + 审计（③清单 4/5） | 待启动 |
+| 63+ | v1.3.0 | **v1.3 "Autopilot"**：内核底座（H2 静态 KV / 分桶 CUDA Graph / 连续批处理）+ 调度层，N=1 硬预算起步（见④） | 待启动 |
+| 框架线 | — | 自动更新链：launcher"检查更新"现为直开 Releases 页（launcher.html L564），缺版本比对/下载/安装闭环；建议插 62 后或与 63 并行 | 待排期 |
+
+**稳定里程碑 v2.0（2026.10–2027.6）**：验收 = 合规门禁全绿（③）+ Autopilot 五指标达标（④）+ 平台矩阵（Windows 全形态 / Linux 容器 / macOS 窗口末段可滑出⑤）。
+
+### ③ 合规门禁与首启条款流（61 vs 62 细分析）
+
+**门禁清单（61 起逐项落地，新 check_compliance 固化进 CI）**：
+
+1. LICENSE 精确化：`AGPL-3.0-only`（现状 pyproject.toml L10 为模糊 `AGPL-3.0`，LICENSE 全文无 -only/-or-later 声明）+ SPDX 标识 + 第三方许可清单（GSV MIT / 依赖面）
+2. 源码随包提供：release 页源码压缩包 + README/条款内源码获取途径（AGPL §6 对应源码义务；third_party 钉版补丁已在仓库，源码包可重构）
+3. README 风险披露：声音克隆滥用风险 + 合规使用边界 + 刑事风险分发隔离声明（release notes 同步）
+4. 声音安全三层（批次 62）：上传侧素材来源声明 / 合成侧文本审计 / 分发侧 WAV 元数据——**现状 WAV 输出无元数据写入能力（全仓零命中），需新增**；配套素材授权台账与声纹单独同意（纪要"ADRserver 对外可用之前"项，server 已随 v1.2.0 对外，提前至 62）
+5. 首启条款 + 声纹个人信息告知（方案见下）+ 设备标识默认关/可选（纪要 L111，隐私面归 62）
+6. 发布门禁：check_versions / check_runtime 之外新增 check_compliance（条款资源存在性 + LICENSE/SPDX/风险披露断言）
+
+- 另：CLA/DCO 贡献者治理路径拍板 + CI 许可证扫描（纪要"1.0 稳定版之前"项）→ 归 61 文档面；算法备案/安评离线分发不适用、在线部署场景标识义务提示写入部署文档（归 62）
+
+**首启条款流三方案**：
+
+| 方案 | 内容 | 判定 |
+|------|------|------|
+| A 全放 61 | 条款流 + 安全检测/审计/元数据一并 | ✗ 检测能力工程量把 v1.2.1 拖成大版本，违背速赢定位 |
+| B 全放 62 | 61 只做 LICENSE/README 文档面 | ✗ 61 过轻（半天量）；入口约束晚一批生效；62 混入 UI 改动后"安全模块 MVP"边界不清 |
+| **C 拆分（已拍板）** | **61 = 最小条款流**：prewarm 前置条款页（AGPL 义务通俗化 + 禁止性条款 + 声纹个人信息告知，对应纪要首启配置⑫；文案中文版先行，英文后补不阻塞）+ data 标记 `.terms_agreed_v1`（升级/重装不重复弹）+ 拒绝退出态，~2 天增量；**62 = 安全模块**：三层检测/审计 + WAV 元数据 + 无 UI 形态条款（server.bat `--agree-terms` / `ADR_AGREE_TERMS` env，**server 形态默认写日志便于审计**，容器 compose 同步）+ 声音安全设置（纪要首启配置⑬） | ✓ 61 = 合规基线（UI 壳面），62 = 安全能力（模型无关可测），切分干净、两版都不拖 |
+
+方案 C 依据：① prewarm.html 现状为纯步骤展示页（4 步骤条 + setStep/setTip），条款页作前置视图低成本插入，desktop/src 三页（launcher/prewarm/loading）零条款代码（Grep terms/consent/同意 零命中），从零加但量小；② 纪要"立即执行"清单点名"首次启动禁止性条款"，入口约束是 ADRstudio 义务重心（纪要提案二）；③ 拒绝退出态兜底合规姿态。风险：条款文案口径（AGPL 义务通俗化 + 声纹告知措辞）需会议/法务把关，61 内出初稿过目。
+
+**已拍板（2026-10-24）：按方案 C 定稿**——61 = 门禁 1/2/3/6 + 条款流，发 v1.2.1；62 = 门禁 4/5 + 无 UI 条款 + 声音安全设置，发 v1.2.2。条款文案中文版先行（英文后补不阻塞 61）；`--agree-terms` 在 server 形态下默认写日志便于审计。
+
+**批次 61 落地记录（2026-10-24，分支 plan-v2-roadmap）**：
+
+- **门禁 1（LICENSE 精确化 + 第三方清单）**：pyproject.toml / Cargo.toml / package.json 三构建面 license 字段精确为 `AGPL-3.0-only`；`adr/__init__.py` 顺手补 `__license__ = "AGPL-3.0-only"`；新增 THIRD_PARTY_LICENSES.md（随包四组件 GSV/BigVGAN/python-build-standalone/Tauri + Python 依赖面许可表，注明底模与声音档案非分发物）
+- **门禁 2（源码随包）**：README License 节重写——源码获取途径（Releases 源码压缩包 + 克隆仓库，AGPL §6）+ 网络服务同许可开放义务 + 附加条款联系方式
+- **门禁 3（风险披露）**：README 新增"风险披露与使用边界"节（授权前提 / 禁止用途 / 责任自负 / 声纹个人信息告知 / 数据采集五条，提及首启条款流）；FAQ 商用答同步 AGPL-3.0-only
+- **门禁 6（check_compliance 进 CI）**：新增 scripts/check_compliance.py 六组检查（LICENSE 全文 + 三面 license 字段 / README 源码获取 / README 风险披露 / 第三方清单条目 / 条款流 invoke 与命令存在性 / smoke.yml 自证接入），smoke.yml 在 check_versions 步骤后接入
+- **最小条款流（方案 C）**：lib.rs 新增 `terms_agreed` / `agree_terms` / `reject_terms` 三命令 + `.terms_agreed_v1` 标记写入 `adr_data_dir()` 根（内容 `agreed_at=<ms>` 便于审计；与 Python 数据目录推导同源，升级/重装不重复弹）；prewarm.html 前置条款视图（`body.terms-mode` 盖住步骤流，中文文案：AGPL 义务通俗化 / 禁止性条款 / 责任边界 / 声纹告知 / 数据采集）；prewarm_flow ready 后导航前插 500ms 轮询 gate（未同意停在预热页，同意后放行导航，预热期间不浪费等待）；skip_prewarm 加 `terms_agreed_flag()` 防御兜底
+- **版本面**：v1.2.1 十面对齐（pyproject / `__init__.py` / tauri.conf.json / Cargo.toml / package.json / package-lock.json 两处 / installer.iss / launcher.html fallback / README 四处下载链接）
+- **验证**：cargo check 通过（19.85s 无错）/ check_versions 9 项 OK（all faces = 1.2.1）/ check_compliance 6 组 OK / pytest 基线不破
+- **遗留**：条款英文版后补（不阻塞）；CLA/DCO 拍板待会议记录确认后补文档；v1.2.1 tag 与 Release 在本批合并 main 后进行
+
+### ④ Autopilot 与 v1.3 范围说明
+
+- **命名**：v1.3 "Autopilot"——纪要 Autopilot 技术线与原 H2 推理加速线合并为一条
+- **两层关系**：
+  - **内核底座**（= H2 已规划项）：静态 KV Cache 原地写 + 分桶 CUDA Graph + 连续批处理 + FA2→SDPA→动态三级降级（GSV-TTS-Lite / Aqua-TTS 借鉴；批次 10 CUDAGraphRunner 音质崩的正解，落地门音质把关不变）
+  - **调度层**（Autopilot 新增）：Profiler（微基准 20–30s 采样 RTF/显存）→ Policy（画像映射配置档，**不查设备表**，可自动生成也可手动覆盖——纪要首启配置⑯）→ Runtime（闭环监控 + 自愈回退 + 调度报告）
+- **并发落地顺序**（纪要）：N=1 硬预算 → N=2 固定份额 → 动态份额 + 隔离 → 准入控制；v1.3.0 交付 N=1，N=2 起进 1.3.x
+- **标定锚点**（纪要实测）：E5-2667 v3 RTF≈1.7（CPU 服务器）/ 4060Ti ≈2G 显存（低配 GPU）——Autopilot 标定、预算分配与并发上限推算的两组基准
+- **验收五指标**（纪要）：调参遗憾值 / 收敛时间 / 免调参率 / 自愈成功率 / 流式连续性
+- **四版本性能口径**（纪要表，Pro+ 两版缓行、口径备案不进近期批次）：ADRstudio 并发 3（双卡 48G 联合 96G）/ ADRserver 并发 100（6×96G）/ Studio Pro+ 并发 10（联合预算 192G，物理 6×96G，**预算≠物理总和**）/ Server Pro+ 并发 1000（8×96G）
+
+### ⑤ macOS 窗口与滑出规则
+
+- **窗口**：v2.0（2026.10–2027.6）**末段**启动——约 27.3 起预研立项（GSV 上游 macOS/MPS 可用性 + python runtime macOS 打包 + Tauri 壳签名链，三项过门才正式进批次）
+- **不阻塞主线**：Windows 全形态 + Linux 容器的发布与门禁不等 macOS
+- **滑出规则**：v2.0 发布时点若 macOS 未达成"安装包构建 + 合成冒烟 + 三形态文档"三项，则滑出至 v2.0.x patch 补发，v2.0 按 Windows + Linux 容器双平台发布、不延窗口
+- 纪要平台矩阵另含鸿蒙/国产 OS（L224/237/273）：列 v2.0 后远期观察项，不进窗口承诺
+
 ## 原则
 
 - 能统一的尽量统一，降低使用门槛（用户定调）
