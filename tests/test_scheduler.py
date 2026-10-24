@@ -77,7 +77,7 @@ def test_stats_snapshot():
     st = s.stats()
     assert st["admitted_total"] == 1
     assert st["last_wait_ms"] >= 0 and st["max_wait_ms"] >= 0
-    assert st["max_waiting_observed"] >= 0
+    assert st["max_waiting_observed"] == 0   # 无竞争准入不计排队
 
 
 def test_env_bad_value_falls_back(monkeypatch):

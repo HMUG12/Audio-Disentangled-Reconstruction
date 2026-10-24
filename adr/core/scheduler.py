@@ -74,17 +74,22 @@ class SynthesisScheduler:
         yield AdmissionTicket (wait_ms / waiting / busy) 供调用方记调度报告。
         """
         with self._cond:
-            self._waiting += 1
-            if self._waiting > self._max_waiting:
-                self._max_waiting = self._waiting
             start = time.monotonic()
-            try:
-                while self._busy >= self._max:
-                    self._cond.wait()
-            except BaseException:
+            if self._busy >= self._max:
+                # 只有真正排队才计入 waiting (无竞争准入不抬峰值)
+                self._waiting += 1
+                if self._waiting > self._max_waiting:
+                    self._max_waiting = self._waiting
+                try:
+                    while self._busy >= self._max:
+                        self._cond.wait()
+                except BaseException:
+                    self._waiting -= 1
+                    # 可能已消费了一次 notify: 转交给下一个等待者, 防止唤醒丢失
+                    if self._busy < self._max:
+                        self._cond.notify()
+                    raise
                 self._waiting -= 1
-                raise
-            self._waiting -= 1
             self._busy += 1
             self._admitted += 1
             wait_ms = int((time.monotonic() - start) * 1000)

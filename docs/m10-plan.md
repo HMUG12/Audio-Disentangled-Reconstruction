@@ -297,7 +297,7 @@
 - **实现（adr/core/profiler.py 新建）**：`run_profile()` 微基准——固定 20 字测试文本 + 档案库首个档案参考音频（可 `--ref` 覆盖），warmup 1 次不计（JIT），测 n 次取中位数；RTF = 耗时/音频时长（<1 快于实时，与纪要锚点 E5-2667 v3 ≈1.7 同口径）；CUDA 下采 `max_memory_allocated` 峰值显存。档 = `{profile_id, timestamp, device_info, profiles[]}` 落 `<data_dir>/profile_<id>.json`；`profile_id` 为 MAC 哈希前 16 位，`device_info` 只取算力 + 显存总量（不记型号，贯彻"不查设备表"）。当前单测点 default（top_k=15，加速全关），加速测点待音质门过后扩展
 - **接口**：CLI `adr profile [--ref --runs --force --show]`（已有本机档默认只显示不重采）；`/system/stats` 新增 `sched` 字段（第三子批调度报告，引擎未初始化为 null），模块级 `gsv_engine.sched_stats()` 不触发加载
 - **测试（tests/test_profiler.py，7 项全绿，假引擎不依赖模型/GPU）**：档结构与测点参数、warmup+n 次调用计数与参数透传、测量失败归零、无档案报错、存取往返（ADR_DATA_DIR 隔离）、缺档返回 None、机器指纹稳定、模块级 sched_stats 未初始化为 None
-- **验证**：check_versions 9 OK / check_compliance 7 组 OK / 全量 pytest 488 passed + 1 skipped（263s）
+- **验证**：check_versions 9 OK / check_compliance 7 组 OK / 全量 pytest 489 passed + 1 skipped（357s）
 - **遗留**：真机标定（4060Ti/CPU 两锚点实测入档）；Policy（档→配置档映射，可手动覆盖——首启配置⑯）与壳首启接线；Runtime 闭环监控 + 自愈回退；v1.3.0 tag 后发
 
 ### ④ Autopilot 与 v1.3 范围说明

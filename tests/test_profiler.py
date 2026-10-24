@@ -29,6 +29,8 @@ def fake_engine(monkeypatch):
     from adr.models import gsv_engine
 
     eng = _FakeEngine()
+    monkeypatch.delenv("ADR_T2S_CUDAGRAPH", raising=False)
+    monkeypatch.delenv("ADR_T2S_STATIC_KV", raising=False)
     monkeypatch.setattr(gsv_engine, "get_gsv_engine", lambda: eng)
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     return eng
@@ -45,7 +47,22 @@ def test_run_profile_schema(fake_engine):
     assert 0 <= p["rtf"] < 1 and p["mem_mb"] == 0   # 假引擎瞬时返回 1s 音频
     # warmup 1 次 + 测量 3 次, 均透传 top_k
     assert len(fake_engine.calls) == 4
-    assert all(c["top_k"] == 15 and c["ref"] == "ref.wav" for c in fake_engine.calls)
+    assert all(c["top_k"] == 15 and c["ref"] == "ref.wav" and c["seed"] == 1234
+               for c in fake_engine.calls)
+
+
+def test_voice_profile_conditions_passed(fake_engine, monkeypatch):
+    """默认档案: prompt_text / 微调权重透传到合成 (测的是真实合成路径)。"""
+    from adr.models import voice_library
+
+    monkeypatch.setattr(voice_library, "list_voices", lambda: ["v1"])
+    monkeypatch.setattr(voice_library, "load_voice", lambda n: {
+        "ref_audio": "v1.wav", "prompt_text": "参考", "t2s_weights": "a.ckpt",
+        "vits_weights": ""})
+    profiler.run_profile(text="你好", n_runs=1)
+    c = fake_engine.calls[-1]
+    assert c["ref"] == "v1.wav" and c["prompt_text"] == "参考"
+    assert c["t2s_weights"] == "a.ckpt" and "vits_weights" not in c
 
 
 def test_measure_failure_returns_zero(monkeypatch):
