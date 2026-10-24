@@ -48,8 +48,18 @@ def install_cudagraph_infer_panel(model, tts):
         runner = _bridge_cache.get((ckpt, dtype))
         if runner is None:
             from AR.models.t2s_model_cudagraph import CUDAGraphRunner
-            runner = CUDAGraphRunner(
-                CUDAGraphRunner.load_decoder(ckpt), dev, dtype)
+            decoder = CUDAGraphRunner.load_decoder(ckpt)
+            # 批次63: ADR_T2S_CUDAGRAPH_BUCKETS 非空非 "0" → 分桶 graph runner
+            # (按 KV 有效长度多档捕获, 修正单 graph 全量 2500 行假 softmax 质量)
+            spec = os.environ.get("ADR_T2S_CUDAGRAPH_BUCKETS", "").strip()
+            if spec and spec != "0":
+                from adr.models.adr_t2s_bucketed import (
+                    BucketedGraphRunner, parse_buckets)
+                buckets = parse_buckets(spec, decoder.h.max_seq_length)
+                runner = BucketedGraphRunner(decoder, dev, dtype, buckets)
+                print(f"[ADR] t2s 分桶 CUDA Graph: buckets={buckets}")
+            else:
+                runner = CUDAGraphRunner(decoder, dev, dtype)
             _bridge_cache[(ckpt, dtype)] = runner
 
     from AR.models.structs_cudagraph import T2SRequest

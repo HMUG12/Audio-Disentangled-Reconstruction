@@ -14,7 +14,8 @@
 不在此收编:
 - ADR_DATA_DIR / ADR_CONFIG / ADR_PRESET — 已有各自单点 (core/config.py);
 - rvc_engine 的 weight_root 等 / HF_HUB_CACHE — 第三方库桥接变量, 非配置面;
-- ADR_T2S_CUDAGRAPH — 是写默认值 (setdefault) 的引擎启动行为, 留在 gsv_engine。
+- ADR_T2S_CUDAGRAPH / ADR_T2S_STATIC_KV / ADR_T2S_CUDAGRAPH_BUCKETS — 是写默认值
+  (setdefault) 的引擎启动行为, 留在 gsv_engine。
 
 各函数解析口径与被替换的原地读取**逐字等价** (含容错回退), 不统一不重构。
 """
