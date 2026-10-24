@@ -163,6 +163,8 @@ def system_stats():
         # 批次23: 并发排队可视化 (排队等待数 / 合成中数)
         "queue_depth": gsv_engine.queue_depth(),
         "synth_busy": gsv_engine.synth_busy(),
+        # 批次63: 调度报告 (预算/累计准入/等待时延), 引擎未初始化时 None
+        "sched": gsv_engine.sched_stats(),
         "profiles": _profile_count(),
         "models": _model_stats(),
         # 注意: train_status 是 async, 直接调用返回 coroutine 会被
