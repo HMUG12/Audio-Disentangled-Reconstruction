@@ -348,6 +348,9 @@ class GSVEngine:
         # 漂移 (同输入 45→254 token, 音频时长翻倍), 默认关闭; 需上游修复后
         # 可设 ADR_T2S_CUDAGRAPH=1 启用 (诊断见 docs/m9-phase3-plan.md 批次10)
         os.environ.setdefault("ADR_T2S_CUDAGRAPH", "0")
+        # 批次63: t2s 静态 KV Cache 桥 — decode 每步 cat 重建 KV (O(L^2) 拷贝)
+        # 换预分配 buffer + 原地写, 与原路径逐 token 位等; 默认关闭
+        os.environ.setdefault("ADR_T2S_STATIC_KV", "0")
         # 兼容补丁: NLTK (英文 G2P 依赖) 离线环境下载默认超时 72s/次,
         # 收紧到 5s 快速失败走内置回退发音
         import socket
