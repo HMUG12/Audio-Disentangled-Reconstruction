@@ -309,7 +309,8 @@
 - **测试（tests/test_policy.py，11 项全绿）**：CPU 慢机自动项、少核不留核/快机不收短、GPU 门控项只推荐不入 overrides、显存阈值、阈值可配、重新生成沿用用户阈值、apply 白名单 + env 优先 + 自写键可更新、拒绝高版本、缺档/坏档、快照来源、未 apply 进程快照显示待生效值、settings 分块默认与非法回退
 - **验证**：check_versions 9 OK / check_compliance 7 组 OK / 全量 pytest 499 passed + 1 skipped（269s，efea18e）；真机（CUDA cc 8.6 / 8G / 20 物理核）`adr profile` → default RTF=1.166、显存 1206MB（3 次中位数）→ `adr policy` 自动生效 STREAM_HEAD=10 / SPLIT_MAX=30，GPU 设备不改线程数，STATIC_KV / CUDAGRAPH / 分桶仅推荐、INT8 保持关，符合 conservative-v1 预期
 - **真机修正**：`--snapshot` 在 CLI 进程（未调 apply）把 policy 自动项误标为 default；改为未进 env 的 AUTO_KEYS 按 policy.json overrides 显示（source=policy），显式 env 仍优先，补测试 1 项
-- **遗留**：policy_version 随规则变化递增；音质门通过后另出规则集（如 balanced-v1）才允许自动开加速开关；壳首启接线（首启配置⑯：首启跑 profile→policy）；真机两锚点标定阈值；Runtime 闭环
+- **首启接线（首启配置⑯）**：服务端实现，壳不改（CLI / Docker 同享）。`gsv_engine.prewarm` 到 ready 后调度一次后台线程（每进程至多一次，failed 不触发）：等 10s 空闲期 → 再等引擎无排队 / 无合成 → 本机已有 profile 或档案库为空则跳过（建档后下次启动再跑）→ `run_profile` → `policy.generate` + `apply`，当次进程后续请求即受益；采样走引擎调度槽，期间用户请求排队一次；失败只记日志。测试 tests/test_idle_profile.py 4 项（单次调度 / 已有 profile 跳过 / 无档案跳过 / 采样后生成并应用）
+- **遗留**：policy_version 随规则变化递增；音质门通过后另出规则集（如 balanced-v1）才允许自动开加速开关；无档案首启是否内置测定用参考音频（待定，当前跳过）；真机两锚点标定阈值；Runtime 闭环
 
 ### ④ Autopilot 与 v1.3 范围说明
 

@@ -898,8 +898,59 @@ def prewarm(default_profile: str | None = None) -> None:
         except Exception as e:
             log.warning("[prewarm] kernel 预热失败 (不影响功能): %s", e)
         _STAGE = "ready"
+        # 空闲期后台 profile + policy (仅 ready 态调度, failed 不触发)
+        _schedule_idle_profile()
     except Exception as e:
         _STAGE = "failed"
         log.warning("[prewarm] GSV 预热失败 (首次合成时将现场加载): %s", e)
     finally:
         _LOADING = False
+
+
+_PROFILE_IDLE_DELAY = 10.0  # 秒: 预热 ready 后的空闲期, 之后再启动后台采样
+_PROFILE_LOCK = threading.Lock()
+_PROFILE_SCHEDULED = False
+
+
+def _schedule_idle_profile() -> None:
+    """预热 ready 后调度一次后台 profile + policy (每进程至多一次)。
+
+    daemon 线程: 先等空闲期, 再等引擎无排队/无合成。本机已有 profile
+    或档案库为空 (profiler 至少需要一个档案) 时跳过, 建档后下次启动再跑。
+    采样经引擎调度器排队, 期间到来的用户请求排队等本次测完。
+    """
+    global _PROFILE_SCHEDULED
+    with _PROFILE_LOCK:
+        if _PROFILE_SCHEDULED:
+            return
+        _PROFILE_SCHEDULED = True
+    threading.Thread(target=_idle_profile_worker, name="adr-idle-profile",
+                     daemon=True).start()
+
+
+def _idle_profile_worker() -> None:
+    import time
+    log = logging.getLogger("adr.models.gsv_engine")
+    try:
+        time.sleep(_PROFILE_IDLE_DELAY)
+        eng = get_gsv_engine()
+        while eng.queue_depth() > 0 or eng.synth_busy() > 0:
+            time.sleep(1.0)
+        from adr.core import policy, profiler
+
+        if profiler.load_profile() is not None:
+            log.info("[profile] 本机已有 profile, 跳过后台采样")
+            return
+        from adr.models.voice_library import list_voices
+
+        if not list_voices():
+            log.info("[profile] 档案库为空, 跳过后台采样 (建档后下次启动再跑)")
+            return
+        log.info("[profile] 服务端空闲, 开始后台采样")
+        result = profiler.run_profile()
+        # 采样完成立即生成 policy 并应用, 后续请求即受益
+        policy.generate(result)
+        policy.apply()
+        log.info("[profile] 采样完成, policy 已生成并应用")
+    except Exception as e:
+        log.warning("[profile] 后台采样失败 (不影响功能): %s", e)
