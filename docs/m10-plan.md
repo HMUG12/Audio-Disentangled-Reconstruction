@@ -310,7 +310,16 @@
 - **验证**：check_versions 9 OK / check_compliance 7 组 OK / 全量 pytest 499 passed + 1 skipped（269s，efea18e）；真机（CUDA cc 8.6 / 8G / 20 物理核）`adr profile` → default RTF=1.166、显存 1206MB（3 次中位数）→ `adr policy` 自动生效 STREAM_HEAD=10 / SPLIT_MAX=30，GPU 设备不改线程数，STATIC_KV / CUDAGRAPH / 分桶仅推荐、INT8 保持关，符合 conservative-v1 预期
 - **真机修正**：`--snapshot` 在 CLI 进程（未调 apply）把 policy 自动项误标为 default；改为未进 env 的 AUTO_KEYS 按 policy.json overrides 显示（source=policy），显式 env 仍优先，补测试 1 项
 - **首启接线（首启配置⑯）**：服务端实现，壳不改（CLI / Docker 同享）。`gsv_engine.prewarm` 到 ready 后调度一次后台线程（每进程至多一次，failed 不触发）：等 10s 空闲期 → 再等引擎无排队 / 无合成 → 本机已有 profile 或档案库为空则跳过（建档后下次启动再跑）→ `run_profile` → `policy.generate` + `apply`，当次进程后续请求即受益；采样走引擎调度槽，期间用户请求排队一次；失败只记日志。测试 tests/test_idle_profile.py 4 项（单次调度 / 已有 profile 跳过 / 无档案跳过 / 采样后生成并应用）
-- **遗留**：policy_version 随规则变化递增；音质门通过后另出规则集（如 balanced-v1）才允许自动开加速开关；无档案首启是否内置测定用参考音频（待定，当前跳过）；真机两锚点标定阈值；Runtime 闭环
+- **遗留**：policy_version 随规则变化递增；音质门通过后另出规则集（如 balanced-v1）才允许自动开加速开关；无档案首启是否内置测定用参考音频（待定，当前跳过）；真机两锚点标定阈值；~~Runtime 闭环~~（v1.3.x 第二子批已完成）
+
+**v1.3.x 第二子批落地记录（2026-10-24，分支 main，维持 v1.3.0）**：
+
+- **范围**：调度层 Runtime（Profiler→Policy→**Runtime** 第三段）闭环监控 + 自愈回退；只动音质中性的流式分块（STREAM_HEAD / SPLIT_MAX），不碰加速开关
+- **实现**：新建 `adr/core/runtime.py`。引擎每次非缓存合成上报 `record(ok, elapsed_s, audio_s)`，滑动窗口记 RTF（首请求计时始于 `_lazy_init` 之后，不含模型加载）；窗口 ≥ MIN_SAMPLES 且无失败、RTF 中位数 > policy 阈值 `slow_rtf` → 收短分块至 policy 慢机值，记下调整前快照为已知良好配置并清窗口；之后窗口失败率 ≥ FAIL_RATE_FALLBACK → 回退快照并冻结不再调。显式 env 不覆盖、目标值已生效不重复调；`ADR_RUNTIME_AUTOTUNE=0` 只监控不调。报告挂 `/api/adr/v1/system/stats` 的 `sched.runtime`；`policy.export_snapshot` 中 Runtime 所改键来源显示 `runtime`
+- **首启接线修正**：后台采样原只 `run_profile` 不 `save_profile`，导致每次启动重采；已补存盘
+- **测试**：tests/test_runtime.py 9 项；全量 pytest 513 passed / 1 skip，check_versions 9 项、check_compliance 7 组 OK
+- **真机验收（本机 GPU，RTF≈1.1）**：① 移走 profile/policy 首启 → 后台采样写出两文件，再启跳过；② 有 policy（10/30 已生效）→ 不重复调；③ 无 policy + `AUTOTUNE=0`，6 条 → 只记样本；④ 无 policy + autotune，8 条 → 中位 RTF 1.11 触发 `tune`，分块收至 10/30，记已知良好快照，后续请求正常
+- **遗留**：`adr policy --snapshot` 为独立进程，看不到服务进程内 Runtime 改动（以 stats 接口为准）；失败回退路径仅单测覆盖，未在真机制造失败；stats 事件 reason 在 PowerShell 5 显示乱码（客户端解码问题，待确认服务端 charset）
 
 ### ④ Autopilot 与 v1.3 范围说明
 

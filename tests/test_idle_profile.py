@@ -109,3 +109,5 @@ def test_idle_profile_samples_and_applies(isolated_env, tmp_path, caplog):
     # policy.json 应已落盘
     policy_path = tmp_path / "policy.json"
     assert policy_path.exists()
+    # profile 必须落盘, 否则下次启动会重复采样
+    assert (tmp_path / "profile_test_mock.json").exists()

@@ -299,6 +299,62 @@ class _OnnxBertFeat:
         return {"hidden_states": [torch.from_numpy(feat), None, None]}
 
 
+class _RuntimeProbe:
+    """v1.3.x Runtime 闭环探针: 持槽后计时, 退出时把 RTF / 首包 / 显存峰值
+    交给 runtime.record。客户端断连 (GeneratorExit) 不算失败也不计样本;
+    record 内部吞异常, 探针永不影响合成。"""
+
+    def __init__(self, stream: bool):
+        self.stream = stream
+        self.samples = 0
+        self.sr = 0
+        self.ttfb_ms: Optional[int] = None
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def start(self) -> None:
+        """(重新) 起表 + 清显存峰值; 模型就绪后再调一次, 排除懒加载耗时。"""
+        import time
+        try:   # sys.modules 查: 不为探针主动导入 torch
+            torch = sys.modules.get("torch")
+            if torch is not None and torch.cuda.is_available():
+                torch.cuda.reset_peak_memory_stats()
+        except Exception:
+            pass
+        self._t0 = time.perf_counter()
+
+    def chunk(self, n: int, sr: int) -> None:
+        import time
+        if self.ttfb_ms is None:
+            self.ttfb_ms = int((time.perf_counter() - self._t0) * 1000)
+        self.samples += int(n)
+        self.sr = int(sr) or self.sr
+
+    def __exit__(self, exc_type, exc, tb):
+        import time
+        if exc_type is GeneratorExit:      # 客户端断连: 不计样本
+            return False
+        try:
+            from adr.core import runtime
+            mem_mb = None
+            try:
+                torch = sys.modules.get("torch")
+                if torch is not None and torch.cuda.is_available():
+                    mem_mb = int(torch.cuda.max_memory_allocated() / 1048576)
+            except Exception:
+                pass
+            audio_s = self.samples / self.sr if self.sr else 0.0
+            runtime.record(ok=exc_type is None and self.samples > 0,
+                           elapsed_s=time.perf_counter() - self._t0,
+                           audio_s=audio_s, ttfb_ms=self.ttfb_ms,
+                           mem_mb=mem_mb, stream=self.stream)
+        except Exception:
+            pass
+        return False
+
+
 class GSVEngine:
     """GPT-SoVITS 推理引擎 (懒加载 + 锁 + cwd 上下文, 同 DiffSingerEngine 模式)。"""
 
@@ -327,8 +383,15 @@ class GSVEngine:
         return self._sched.busy
 
     def sched_stats(self) -> dict:
-        """调度报告 (批次63 第三子批): 预算/排队/等待时延统计快照。"""
-        return self._sched.stats()
+        """调度报告 (批次63 第三子批): 预算/排队/等待时延统计快照。
+        v1.3.x 起附 runtime 闭环报告 (窗口 RTF / 微调 / 回退事件)。"""
+        st = self._sched.stats()
+        try:
+            from adr.core import runtime
+            st["runtime"] = runtime.report()
+        except Exception:
+            pass
+        return st
 
     @contextlib.contextmanager
     def _admit(self):
@@ -642,9 +705,10 @@ class GSVEngine:
                     if rest else [text])
         # 批次63 第三子批: 调度准入 (N=1 硬预算) — 排队/忙闲计数由调度器
         # 持有 (批次23 观测语义不变); 生成器被客户端断连关闭时 CM finally 兜住
-        with self._admit():
+        with self._admit(), _RuntimeProbe(stream=True) as probe:
             with self._lock:
                 self._lazy_init()
+                probe.start()   # 计时从模型就绪起: 首次懒加载不计入 RTF
                 inputs = {
                     "text": head,
                     "text_lang": text_lang,
@@ -680,6 +744,7 @@ class GSVEngine:
                             if hit is not None:
                                 pcm, hit_sr = hit
                                 buf = np.frombuffer(pcm, dtype=np.int16)
+                                probe.chunk(len(buf), int(hit_sr))
                                 yield buf.astype(np.float32) / 32767.0, int(hit_sr)
                                 continue
                         seg_chunks: list = []
@@ -690,6 +755,7 @@ class GSVEngine:
                                 chunk = chunk / 32768.0
                             seg_chunks.append(chunk)
                             seg_sr = int(sr)
+                            probe.chunk(len(chunk), seg_sr)
                             yield chunk, int(sr)
                         if ckey is not None and seg_chunks:
                             full = (seg_chunks[0] if len(seg_chunks) == 1
@@ -735,9 +801,10 @@ class GSVEngine:
         t2s_weights = str(Path(t2s_weights).resolve()) if t2s_weights else None
         vits_weights = str(Path(vits_weights).resolve()) if vits_weights else None
         # 批次63 第三子批: 调度准入 (N=1 硬预算), 计数/报告由调度器持有
-        with self._admit():
+        with self._admit(), _RuntimeProbe(stream=False) as probe:
             with self._lock:
                 self._lazy_init()
+                probe.start()
                 inputs = {
                     "text": text,
                     "text_lang": text_lang,
@@ -760,6 +827,8 @@ class GSVEngine:
                     sr, audio = None, None
                     for sr, audio in self._tts.run(inputs):
                         pass  # 非流式只 yield 一次完整音频
+            if audio is not None:
+                probe.chunk(len(audio), int(sr))
         if audio is None:
             raise RuntimeError("GPT-SoVITS 未返回音频")
         audio = np.asarray(audio, dtype=np.float32)
@@ -948,6 +1017,8 @@ def _idle_profile_worker() -> None:
             return
         log.info("[profile] 服务端空闲, 开始后台采样")
         result = profiler.run_profile()
+        # 先落盘 profile: 否则下次启动 load_profile 仍为空, 每次都重采
+        profiler.save_profile(result)
         # 采样完成立即生成 policy 并应用, 后续请求即受益
         policy.generate(result)
         policy.apply()
