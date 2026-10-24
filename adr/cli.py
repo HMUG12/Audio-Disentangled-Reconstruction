@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -116,6 +117,35 @@ def list() -> None:
     for name, reg in REGISTRY.all().items():
         items = reg.keys() or ["(empty)"]
         click.echo(f"  {name}: {', '.join(items)}")
+
+
+@main.command()
+@click.option("--ref", default=None, help="参考音频 (默认取档案库首个档案)")
+@click.option("--runs", default=3, help="每测点运行次数 (取中位数)")
+@click.option("--force", is_flag=True, help="已有本机档也重新采样")
+@click.option("--show", is_flag=True, help="只显示本机已有档, 不采样")
+def profile(ref: str | None, runs: int, force: bool, show: bool) -> None:
+    """调度层 Profiler: TTS 微基准采样 RTF/显存 (批次63)。"""
+    from adr.core import profiler
+
+    existing = profiler.load_profile()
+    if show or (existing and not force):
+        if existing is None:
+            click.echo("本机尚无 profile, 运行 `adr profile` 采样")
+            sys.exit(1)
+        if not show:
+            click.echo("本机已有 profile (用 --force 重新采样):")
+        click.echo(json.dumps(existing, indent=2, ensure_ascii=False))
+        return
+    try:
+        data = profiler.run_profile(ref_audio=ref, n_runs=runs)
+    except ValueError as e:
+        click.echo(f"✗ {e}")
+        sys.exit(1)
+    path = profiler.save_profile(data)
+    for p in data["profiles"]:
+        click.echo(f"  {p['name']}: RTF={p['rtf']} mem={p['mem_mb']}MB ({p['notes']})")
+    click.echo(f"✓ 已保存: {path}")
 
 
 @main.group("voice")

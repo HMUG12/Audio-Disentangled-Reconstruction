@@ -820,6 +820,11 @@ def synth_busy() -> int:
     return _ENGINE.synth_busy() if _ENGINE is not None else 0
 
 
+def sched_stats() -> Optional[dict]:
+    """进程级调度报告 (批次63, 引擎未初始化时 None, 不触发加载)。"""
+    return _ENGINE.sched_stats() if _ENGINE is not None else None
+
+
 def get_gsv_engine() -> GSVEngine:
     """进程级单例 (批次41a: 双重检查锁 — 已初始化后走无锁快路径,
     多线程首次并发调用只创建一个实例)。"""
