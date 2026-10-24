@@ -209,7 +209,7 @@
 |------|------|------|------|
 | 61 | v1.2.1 | 合规速赢：纪要"立即执行"四项（README 风险披露 / 首启禁止性条款 / 源码随包 / AGPL-3.0-only）+ SPDX + CLA/DCO 拍板 + 门禁清单 v1（③清单 1/2/3/6）+ **最小条款流**（prewarm 前置条款页 + data 标记 `.terms_agreed_v1` + 拒绝退出态，按 2 天增量排；条款文案中文版先行，英文版后补不阻塞 61） | **已完成（2026-10-24，落地记录见下）** |
 | 62 | v1.2.2 | 安全模块 MVP：声音安全三层 + WAV 元数据 + 素材授权台账/声纹单独同意 + 无 UI 形态条款（`--agree-terms` / `ADR_AGREE_TERMS` env，**server 形态下默认写日志便于审计**）+ 声音安全设置 + 审计（③清单 4/5） | **已完成（2026-10-24，落地记录见下）** |
-| 63+ | v1.3.0 | **v1.3 "Autopilot"**：内核底座（H2 静态 KV / 分桶 CUDA Graph / 连续批处理）+ 调度层，N=1 硬预算起步（见④） | 首子批（t2s 静态 KV）+ 次子批（分桶 CUDA Graph）已完成（2026-10-24，记录见下）；连续批处理 / 调度层待后续子批 |
+| 63+ | v1.3.0 | **v1.3 "Autopilot"**：内核底座（H2 静态 KV / 分桶 CUDA Graph / 连续批处理）+ 调度层，N=1 硬预算起步（见④） | 首子批（t2s 静态 KV）+ 次子批（分桶 CUDA Graph）+ 第三子批（调度层 N=1 硬预算）已完成（2026-10-24，记录见下）；连续批处理内核 / 准入控制 / Profiler→Policy 待后续子批 |
 | 框架线 | — | 自动更新链：launcher"检查更新"现为直开 Releases 页（launcher.html L564），缺版本比对/下载/安装闭环；建议插 62 后或与 63 并行 | 待排期 |
 
 **稳定里程碑 v2.0（2026.10–2027.6）**：验收 = 合规门禁全绿（③）+ Autopilot 五指标达标（④）+ 平台矩阵（Windows 全形态 / Linux 容器 / macOS 窗口末段可滑出⑤）。
@@ -281,6 +281,15 @@
 - **等价性测试（tests/test_t2s_bucketed.py，7 项全绿 2.42s，含 2 项 GPU）**：ladder=[2500] 与 eager 参考 CPU 位等 + 与官方 CUDAGraphRunner GPU graph 位等（测试锚点）；子档 dispatch 规则（单调 / 首档 / 最小可容档）；前缀视图确实改变注意力（分桶生效证据）；`parse_buckets`/`_bucket_for` 边界；`_PrefixView` 是视图非拷贝（data_ptr 同、其余行不动）；graph 键 = 用过的档集合、二次请求复用不重捕获
 - **验证**：check_versions 9 项 OK（all faces = 1.3.0）/ check_compliance 7 组 OK / 全量 pytest 474 passed + 1 skipped（272.5s）
 - **遗留**：分桶仍挂在 `ADR_T2S_CUDAGRAPH=1` 之下（默认关）；真实模型音质/时长回归与开默认值需过落地门音质把关；连续批处理、调度层待后续子批；v1.3.0 tag 后发
+
+**批次 63 第三子批落地记录（2026-10-24，分支 main，维持 v1.3.0）**：
+
+- **范围**：调度层 Runtime 起步——N=1 硬预算（纪要并发落地顺序第一级）。批次 23 以来引擎锁事实上 N=1 但无显式预算、无统计；本子批把并发预算收口为一等公民。准入控制（队列上限/等待超时/拒绝语义）属第四阶段刻意不引入，排队无界不拒绝，线行为与批次 23 完全一致
+- **实现（adr/core/scheduler.py 新建，GSVEngine 接线）**：`SynthesisScheduler`（N 预算并发槽：满额条件变量排队、释放唤醒一个；`AdmissionTicket(wait_ms/waiting/busy)`；`stats()` 快照 = max_concurrent/busy/waiting/admitted_total/max_waiting_observed/last_wait_ms/max_wait_ms）；GSVEngine 删批次 23 手工计数（`_qlock/_queue_waiters/_busy` 与 entered 标志舞蹈），两合成入口收口为 `_admit()`（slot + 审计 `schedule` 事件 wait_ms/waiting/busy，log_event 吞异常降级）；`queue_depth()/synth_busy()` 委托调度器——批次 23 观测语义与消费方（native /health、console /system/stats、call/pro 两页）不变
+- **开关**：`ADR_SCHED_MAX_CONCURRENCY` 默认 1（settings.py `scheduler_max_concurrency` 单源解析，非数字/小于 1 回落 1）；≥2 为 1.3.x 预留——真并行需等引擎内连续批处理内核，当前 >1 仅放宽准入、合成仍被引擎锁串行
+- **测试（tests/test_scheduler.py，7 项全绿）**：N=1 互斥与排队时序（waiting 可观测/预算满不准入/释放准入）；N=2 双槽并发（1.3.x 插槽位）；stats 快照；env 解析回落；引擎接线（非流式 admitted=1 后归零、流式请求级准入多段一槽、env 贯通）
+- **验证**：check_versions 9 项 OK / check_compliance 7 组 OK / 全量 pytest 481 passed + 1 skipped（261s）
+- **遗留**：真连续批处理内核（t2s bs>1 动态批，per-seq RNG + 音质门）与 N=2 固定份额进 1.3.x；准入控制为并发落地第四阶段；Profiler→Policy（画像映射配置档，不查设备表）待后续子批；v1.3.0 tag 后发
 
 ### ④ Autopilot 与 v1.3 范围说明
 

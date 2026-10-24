@@ -38,6 +38,8 @@ from adr.models.gsv_runtime import (  # noqa: F401
     _seg_cache_put,
 )
 from adr.core import settings
+from adr.core.audit import log_event
+from adr.core.scheduler import SynthesisScheduler
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 GSV_DIR = REPO_ROOT / "third_party" / "gpt_sovits"
@@ -305,20 +307,32 @@ class GSVEngine:
         self._tts = None
         self._lock = threading.Lock()
         self._loaded = {"t2s": None, "vits": None}   # 已热换权重路径 (批次9幂等跳过)
-        # 批次23: 并发排队可视化计数 (_lock 外等待数 + 持锁合成中数)
-        self._qlock = threading.Lock()
-        self._queue_waiters = 0
-        self._busy = 0
+        # 批次63 第三子批 (m10 ④): N=1 硬预算调度 — 排队/预算/调度报告收口到
+        # SynthesisScheduler; _lock 仍是引擎态硬闸 (旁路调度者也被串行化)
+        self._sched = SynthesisScheduler(settings.scheduler_max_concurrency())
 
     def queue_depth(self) -> int:
-        """正在 _lock 外排队等待合成的请求数 (批次23, 供前端可视化)。"""
-        with self._qlock:
-            return self._queue_waiters
+        """正在排队等待合成的请求数 (批次23 引入, 批次63 委托调度器)。"""
+        return self._sched.waiting
 
     def synth_busy(self) -> int:
-        """正在合成 (持 _lock) 的请求数 (批次23)。"""
-        with self._qlock:
-            return self._busy
+        """正在合成 (持预算槽) 的请求数 (批次23 引入, 批次63 委托调度器)。"""
+        return self._sched.busy
+
+    def sched_stats(self) -> dict:
+        """调度报告 (批次63 第三子批): 预算/排队/等待时延统计快照。"""
+        return self._sched.stats()
+
+    @contextlib.contextmanager
+    def _admit(self):
+        """调度准入 (批次63 第三子批): N=1 硬预算排队 + 调度报告落审计。
+
+        log_event 内部吞异常降级, 审计失败不影响合成。
+        """
+        with self._sched.slot() as tk:
+            log_event("schedule", wait_ms=tk.wait_ms,
+                      waiting=tk.waiting, busy=tk.busy)
+            yield
 
     @property
     def is_ready(self) -> bool:
@@ -618,17 +632,10 @@ class GSVEngine:
         vits_weights = str(Path(vits_weights).resolve()) if vits_weights else None
         head, rest = self._stream_head_split(text)
         segments = [head, *self._split_long(rest)] if rest else [text]
-        # 批次23: 排队可视化 — 进锁前计 waiter, 拿到锁转入 busy (entered
-        # 标志防懒加载抛异常漏减; 生成器被客户端断连关闭时 finally 同样兜住)
-        with self._qlock:
-            self._queue_waiters += 1
-        entered = False
-        try:
+        # 批次63 第三子批: 调度准入 (N=1 硬预算) — 排队/忙闲计数由调度器
+        # 持有 (批次23 观测语义不变); 生成器被客户端断连关闭时 CM finally 兜住
+        with self._admit():
             with self._lock:
-                with self._qlock:
-                    self._queue_waiters -= 1
-                    self._busy += 1
-                entered = True
                 self._lazy_init()
                 inputs = {
                     "text": head,
@@ -683,12 +690,6 @@ class GSVEngine:
                                 ckey,
                                 (np.clip(full, -1.0, 1.0) * 32767).astype(np.int16).tobytes(),
                                 seg_sr)
-        finally:
-            with self._qlock:
-                if entered:
-                    self._busy -= 1
-                else:
-                    self._queue_waiters -= 1
 
     def synthesize(
         self,
@@ -725,16 +726,9 @@ class GSVEngine:
         ref_audio = str(Path(ref_audio).resolve())
         t2s_weights = str(Path(t2s_weights).resolve()) if t2s_weights else None
         vits_weights = str(Path(vits_weights).resolve()) if vits_weights else None
-        # 批次23: 排队可视化 (同 synthesize_stream, entered 标志防漏减)
-        with self._qlock:
-            self._queue_waiters += 1
-        entered = False
-        try:
+        # 批次63 第三子批: 调度准入 (N=1 硬预算), 计数/报告由调度器持有
+        with self._admit():
             with self._lock:
-                with self._qlock:
-                    self._queue_waiters -= 1
-                    self._busy += 1
-                entered = True
                 self._lazy_init()
                 inputs = {
                     "text": text,
@@ -758,12 +752,6 @@ class GSVEngine:
                     sr, audio = None, None
                     for sr, audio in self._tts.run(inputs):
                         pass  # 非流式只 yield 一次完整音频
-        finally:
-            with self._qlock:
-                if entered:
-                    self._busy -= 1
-                else:
-                    self._queue_waiters -= 1
         if audio is None:
             raise RuntimeError("GPT-SoVITS 未返回音频")
         audio = np.asarray(audio, dtype=np.float32)
