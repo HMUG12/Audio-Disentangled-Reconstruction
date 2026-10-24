@@ -181,3 +181,16 @@ def safety_audit_enabled() -> bool:
 def wav_metadata_enabled() -> bool:
     """ADR_WAV_METADATA=0 关闭分发侧 WAV AI 生成标识注入, 其余 (含未设置) 开。"""
     return os.environ.get("ADR_WAV_METADATA", "1") != "0"
+
+
+def scheduler_max_concurrency() -> int:
+    """调度层并发预算 (ADR_SCHED_MAX_CONCURRENCY, 批次63 第三子批 m10 ④)。
+
+    v1.3.0 交付 N=1 硬预算 (默认); >=2 为 N=2 固定份额 (1.3.x) 预留 —
+    真并行需等引擎内连续批处理内核, 当前 >1 仅放宽准入, 合成仍被引擎锁串行。
+    非数字 / 小于 1 一律回落 1。
+    """
+    try:
+        return max(1, int(os.environ.get("ADR_SCHED_MAX_CONCURRENCY", "1")))
+    except ValueError:
+        return 1
