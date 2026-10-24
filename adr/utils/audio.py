@@ -162,6 +162,8 @@ def inject_wav_info(wav: bytes) -> bytes:
         return wav
     if len(wav) < 12 or wav[:4] != b"RIFF" or wav[8:12] != b"WAVE":
         return wav
+    if b"ISFT" in wav:  # 幂等: 已标注过的不重复注入 (防双重 LIST 冗余)
+        return wav
 
     def _sub(fourcc: bytes, data: bytes) -> bytes:
         chunk = fourcc + struct.pack("<I", len(data)) + data
