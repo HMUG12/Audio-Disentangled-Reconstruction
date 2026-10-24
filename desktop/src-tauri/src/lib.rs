@@ -451,6 +451,12 @@ pub fn run() {
 // Tauri commands (前端通过 window.__TAURI__.core.invoke 调用)
 // ---------------------------------------------------------------------------
 
+/// 防重入互斥: UIA 单击也可能双投递 (相隔数秒的两个独立事件, JS 层 launching
+/// 挡不住)。两次并发 launch_blocking 会双 spawn 引擎: kill_current 的
+/// swap→store 窗口让第二个 kill_current 静默通过, 双 spawn 抢探活, 输家流程
+/// 被别人引擎的 200 响应误判成功。Rust 侧 CAS 对一切事件来源免疫。
+static LAUNCH_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
 /// 启动指定控制台 (阻塞到探活通过并完成导航, 前端转 loading 态)。
 /// expose = 调用模式: 服务监听 0.0.0.0 供局域网调用 (默认仅 127.0.0.1)。
 #[tauri::command]
@@ -458,10 +464,20 @@ async fn launch_console(app: AppHandle, mode: String, expose: Option<bool>) -> R
     if !matches!(mode.as_str(), "legacy" | "pro" | "easy" | "call") {
         return Err(format!("未知控制台模式: {mode}"));
     }
+    if LAUNCH_IN_PROGRESS
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        return Err("已有控制台启动流程进行中".into());
+    }
     // 探活最长 180s, 放到阻塞线程池, 避免卡住 async runtime
-    tauri::async_runtime::spawn_blocking(move || launch_blocking(app, mode, expose.unwrap_or(false)))
+    let result = tauri::async_runtime::spawn_blocking(move || launch_blocking(app, mode, expose.unwrap_or(false)))
         .await
-        .map_err(|e| format!("内部任务失败: {e}"))?
+        .map_err(|e| format!("内部任务失败: {e}"))?;
+    // 完成即复位: 成功后壳已导航离开, 失败时前端要能重试。防重入窗口只需
+    // 覆盖启动过程本身 (双投递的第二发落在 600ms + wait_healthy 窗口内)。
+    LAUNCH_IN_PROGRESS.store(false, Ordering::Release);
+    result
 }
 
 /// 进入控制台: pro/easy 优先走热通道 (服务常驻且 expose 一致 → 直接导航, 秒进);
