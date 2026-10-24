@@ -306,8 +306,9 @@
 - **实现（adr/core/policy.py 新建）**：`infer(profile, thresholds)` 纯函数 → `{policy_version, rules, generated_at, profile_id, basis, thresholds, overrides, recommendations}`；`policy.json`（`<data_dir>/policy.json`）**只存 overrides + 元数据**，阈值进文件可手改、重新生成时沿用；`apply()` 只应用白名单 `AUTO_KEYS`（ADR_TORCH_THREADS / ADR_TTS_STREAM_HEAD / ADR_TTS_SPLIT_MAX），手写进 overrides 的音质敏感键忽略并告警，`policy_version` 高于代码版本整体不应用；完整快照另做诊断导出 `export_snapshot()`（生效值 + 来源 env/policy/default）
 - **规则（阈值默认）**：RTF>1.0 慢机 → 首段 14→10 字、长句细分 40→30 字；CPU 且物理核≥4 → 线程数 = 核数−1；CUDA → 推荐 STATIC_KV=1，显存≥6G 再推荐 CUDAGRAPH=1 + 分桶 default；INT8 推理侧未实现，推荐保持关
 - **开关与接线**：优先级 显式 env > policy.json overrides > 代码默认值；引擎构造时 `policy.apply()`（早于首个请求切分与 `_lazy_init` 线程设置），失败不阻断合成；`settings` 新增 `stream_head_chars()` / `split_max_chars()`，流式切分改读这两项（默认值与原字面常量一致）；CLI `adr policy [--show --snapshot]`
-- **测试（tests/test_policy.py，10 项全绿）**：CPU 慢机自动项、少核不留核/快机不收短、GPU 门控项只推荐不入 overrides、显存阈值、阈值可配、重新生成沿用用户阈值、apply 白名单 + env 优先 + 自写键可更新、拒绝高版本、缺档/坏档、快照来源、settings 分块默认与非法回退
-- **验证**：（待填）
+- **测试（tests/test_policy.py，11 项全绿）**：CPU 慢机自动项、少核不留核/快机不收短、GPU 门控项只推荐不入 overrides、显存阈值、阈值可配、重新生成沿用用户阈值、apply 白名单 + env 优先 + 自写键可更新、拒绝高版本、缺档/坏档、快照来源、未 apply 进程快照显示待生效值、settings 分块默认与非法回退
+- **验证**：check_versions 9 OK / check_compliance 7 组 OK / 全量 pytest 499 passed + 1 skipped（269s，efea18e）；真机（CUDA cc 8.6 / 8G / 20 物理核）`adr profile` → default RTF=1.166、显存 1206MB（3 次中位数）→ `adr policy` 自动生效 STREAM_HEAD=10 / SPLIT_MAX=30，GPU 设备不改线程数，STATIC_KV / CUDAGRAPH / 分桶仅推荐、INT8 保持关，符合 conservative-v1 预期
+- **真机修正**：`--snapshot` 在 CLI 进程（未调 apply）把 policy 自动项误标为 default；改为未进 env 的 AUTO_KEYS 按 policy.json overrides 显示（source=policy），显式 env 仍优先，补测试 1 项
 - **遗留**：policy_version 随规则变化递增；音质门通过后另出规则集（如 balanced-v1）才允许自动开加速开关；壳首启接线（首启配置⑯：首启跑 profile→policy）；真机两锚点标定阈值；Runtime 闭环
 
 ### ④ Autopilot 与 v1.3 范围说明

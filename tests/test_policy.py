@@ -111,6 +111,16 @@ def test_snapshot_sources(monkeypatch):
     assert eff["ADR_T2S_CUDAGRAPH"]["source"] == "default"
 
 
+def test_snapshot_without_apply_shows_pending(monkeypatch):
+    # CLI 诊断进程未 apply: 仍应显示引擎启动时将生效的 policy 值
+    policy.save(policy.infer(CPU_SLOW, physical_cores=8))
+    eff = policy.export_snapshot()["effective"]
+    assert eff["ADR_TTS_SPLIT_MAX"] == {"value": "30", "source": "policy"}
+    monkeypatch.setenv("ADR_TTS_SPLIT_MAX", "50")
+    eff = policy.export_snapshot()["effective"]
+    assert eff["ADR_TTS_SPLIT_MAX"] == {"value": "50", "source": "env"}
+
+
 def test_settings_chunk_defaults(monkeypatch):
     assert settings.stream_head_chars() == 14 and settings.split_max_chars() == 40
     monkeypatch.setenv("ADR_TTS_SPLIT_MAX", "0")

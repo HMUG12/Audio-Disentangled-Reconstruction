@@ -164,12 +164,17 @@ def apply(policy: dict | None = None) -> dict[str, str]:
 def export_snapshot() -> dict[str, Any]:
     """诊断导出: 全部调度相关键的当前生效值 + 来源 (env / policy / default)。"""
     pol = load()
+    ver = (pol or {}).get("policy_version")
+    pending = ((pol or {}).get("overrides") or {}) if isinstance(ver, int) and ver <= POLICY_VERSION else {}
     keys = (*AUTO_KEYS, *GATED_KEYS, "ADR_SCHED_MAX_CONCURRENCY")
     eff = {}
     for k in keys:
         if k in os.environ:
             src = "policy" if _applied.get(k) == os.environ[k] else "env"
             eff[k] = {"value": os.environ[k], "source": src}
+        elif k in AUTO_KEYS and k in pending:
+            # 本进程未 apply (如 CLI 诊断): 显示引擎启动时将生效的值
+            eff[k] = {"value": str(pending[k]), "source": "policy"}
         else:
             eff[k] = {"value": None, "source": "default"}
     return {
