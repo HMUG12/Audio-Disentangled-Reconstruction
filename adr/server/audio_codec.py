@@ -81,13 +81,25 @@ def pack_raw(io_buffer: BytesIO, data: np.ndarray, rate: int) -> BytesIO:
 
 
 def pack_wav(io_buffer: BytesIO, data: np.ndarray, rate: int) -> BytesIO:
-    """编码为 WAV (标准库 wave, 单声道 16bit)。"""
+    """编码为 WAV (标准库 wave, 单声道 16bit)。
+
+    批次62 分发侧: 编码完成后尾部追加 LIST/INFO 标注 AI 生成
+    (inject_wav_info); 流式首块 wave_header_chunk 不注入。
+    """
     data = to_int16(data)
     with wave.open(io_buffer, "wb") as wf:
         wf.setnchannels(1)
         wf.setsampwidth(2)  # int16 = 2 bytes
         wf.setframerate(rate)
         wf.writeframes(data.tobytes())
+    # 延迟导入: utils.audio 顶部拉 torch/torchaudio, 避免拖慢本模块导入
+    from adr.utils.audio import inject_wav_info
+    raw = io_buffer.getvalue()
+    out = inject_wav_info(raw)
+    if out != raw:
+        io_buffer.seek(0)
+        io_buffer.truncate(0)
+        io_buffer.write(out)
     return io_buffer
 
 

@@ -208,7 +208,7 @@
 | 批次 | 版本 | 内容 | 状态 |
 |------|------|------|------|
 | 61 | v1.2.1 | 合规速赢：纪要"立即执行"四项（README 风险披露 / 首启禁止性条款 / 源码随包 / AGPL-3.0-only）+ SPDX + CLA/DCO 拍板 + 门禁清单 v1（③清单 1/2/3/6）+ **最小条款流**（prewarm 前置条款页 + data 标记 `.terms_agreed_v1` + 拒绝退出态，按 2 天增量排；条款文案中文版先行，英文版后补不阻塞 61） | **已完成（2026-10-24，落地记录见下）** |
-| 62 | v1.2.2 | 安全模块 MVP：声音安全三层 + WAV 元数据 + 素材授权台账/声纹单独同意 + 无 UI 形态条款（`--agree-terms` / `ADR_AGREE_TERMS` env，**server 形态下默认写日志便于审计**）+ 声音安全设置 + 审计（③清单 4/5） | 待启动 |
+| 62 | v1.2.2 | 安全模块 MVP：声音安全三层 + WAV 元数据 + 素材授权台账/声纹单独同意 + 无 UI 形态条款（`--agree-terms` / `ADR_AGREE_TERMS` env，**server 形态下默认写日志便于审计**）+ 声音安全设置 + 审计（③清单 4/5） | **已完成（2026-10-24，落地记录见下）** |
 | 63+ | v1.3.0 | **v1.3 "Autopilot"**：内核底座（H2 静态 KV / 分桶 CUDA Graph / 连续批处理）+ 调度层，N=1 硬预算起步（见④） | 待启动 |
 | 框架线 | — | 自动更新链：launcher"检查更新"现为直开 Releases 页（launcher.html L564），缺版本比对/下载/安装闭环；建议插 62 后或与 63 并行 | 待排期 |
 
@@ -249,6 +249,19 @@
 - **版本面**：v1.2.1 十面对齐（pyproject / `__init__.py` / tauri.conf.json / Cargo.toml / package.json / package-lock.json 两处 / installer.iss / launcher.html fallback / README 四处下载链接）
 - **验证**：cargo check 通过（19.85s 无错）/ check_versions 9 项 OK（all faces = 1.2.1）/ check_compliance 6 组 OK / pytest 基线不破
 - **遗留**：条款英文版后补（不阻塞）；CLA/DCO 拍板待会议记录确认后补文档；v1.2.1 tag 与 Release 在本批合并 main 后进行
+
+**批次 62 落地记录（2026-10-24，分支 main，发 v1.2.2）**：
+
+- **审计设施（三层底座）**：新增 adr/core/audit.py 单点 — JSONL 追加写 `<adr_data_dir()>/logs/audit.log`；隐私边界：合成文本与素材声明只记 sha256 前 16 位指纹 + 长度（不落明文，声纹/文本属敏感信息，审计日志需可长期留存，参考音频只记文件名）；全 try/except 降级（写失败仅 warning 不阻断业务）；`ADR_SAFETY_AUDIT=0` 全局关闭
+- **上传侧（③清单 4：素材声明 + 声纹单独同意）**：train_upload 加 `source_declaration` Form 字段（审计记 ext/size/decl_fp，**不记文件名/路径**，可能含人名）；profile_create 加 `consent_granted` 校验（缺失 422 拒绝建档）+ 同意结构**不信任客户端**，服务端重组 `{granted, at, statement[:200]}` 落 meta；save_voice/save_voice_auto 透传 source/consent（旧档案缺键读侧 .get 兼容）
+- **合成侧（文本审计）**：SynthesisService 单点 `_audit_synthesis`（text_fp/text_len/参考音频名），stream_chunks 与 synthesize_once 两入口全覆盖
+- **分发侧（③清单 4：WAV 元数据）**：新增 `inject_wav_info`（adr/utils/audio.py，依赖方向 server→utils 正确）— 尾部 LIST/INFO chunk（ISFT "ADR x.y (AI-generated speech)" + ICRD 日期 + ICMT "AI-generated voice cloning output, not a real person"，word-align pad）+ RIFF size 回写；`ADR_WAV_METADATA=0` 关闭；注入点**只有合成输出两条链**（audio_codec.pack_wav 延迟导入 + pipeline.save_wav）——素材预处理链（data/slice、data/separate 走 save_audio）不注入，真人素材不能标 AI 生成；流式 44B 头契约不动（N.E.K.O 按偏移切流）
+- **无 UI 形态条款**：__main__ `_enforce_terms` 四级检查（`.terms_agreed_v1` 标记放行 → `--from-shell` 壳担保放行不写标记（prewarm 先于用户同意）→ `--agree-terms`/`ADR_AGREE_TERMS=1` 写标记 + 审计 `terms_agreed` 后放行 → 其余打印条款要点 exit 2）；compose 补注释形态 `ADR_AGREE_TERMS: "1"`（容器默认拒绝启动，标记写挂载 /data 仅需同意一次）
+- **声音安全设置 + 设备标识（③清单 5）**：壳 ShellSettings 加 `safety_audit` / `wav_metadata` 两 `Option<bool>`（None=默认开，仅显式关注入 =0，旧 shell.json 缺字段自动默认开）；launcher.html"声音安全"节两开关 + 设备标识说明行（不采集不外发）；settings.py 新增 agree_terms / safety_audit_enabled / wav_metadata_enabled 三函数（单源函数式）
+- **门禁**：check_compliance 升 **7 组**（第七组声音安全：audit/terms/条款 gate/inject_wav_info/_audit_synthesis/consent+declaration/compose/lib.rs 十项断言）
+- **版本面**：v1.2.2 十一面同法对齐（+installer.iss `#define MyAppVersion`，批次 61 漏记该面）；README 下载链接 4 处 + 条款节补三种同意方式说明（壳条款页 / `--agree-terms` / `ADR_AGREE_TERMS=1`，未同意 exit 2）
+- **验证**：check_versions 9 项 OK（all faces = 1.2.2）/ check_compliance 7 组 OK / 新增 tests/test_safety.py 20 项（审计 JSONL 与降级 / 条款 mark 与四级 gate / inject_wav_info wave.open 往返 / pack_wav API 面 / profile_create 422 / consent 落 meta 与向后兼容）/ 全量 pytest 462 passed + 1 skipped / cargo check 通过（12.5s）/ test_server_api 非流式 WAV 断言同步新契约（长度放开 + AI 标注断言）
+- **遗留**：v1.2.2 tag 与 Release 后补（用户拍板"tag 后面再发"）；在线部署标识义务提示（③清单 4 附注）随部署文档批次落
 
 ### ④ Autopilot 与 v1.3 范围说明
 

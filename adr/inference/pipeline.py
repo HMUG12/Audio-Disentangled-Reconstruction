@@ -25,7 +25,7 @@ import torch
 
 from adr.core import get_logger
 from adr.data.g2p import G2P, G2PConfig
-from adr.utils.audio import AudioData, load_audio, save_audio
+from adr.utils.audio import AudioData, inject_wav_info, load_audio, save_audio
 
 
 @dataclass
@@ -419,4 +419,15 @@ class InferPipeline:
         sr = sample_rate or self.config.ref_sample_rate
         audio = AudioData(waveform=waveform, sample_rate=sr)
         save_audio(audio, str(path))
+        # 批次62 分发侧声音安全: 合成输出 WAV 标注 AI 生成 (素材链不经此)
+        if str(path).lower().endswith(".wav"):
+            try:
+                with open(path, "rb") as f:
+                    raw = f.read()
+                marked = inject_wav_info(raw)
+                if marked != raw:
+                    with open(path, "wb") as f:
+                        f.write(marked)
+            except OSError:
+                pass
         self.log.info(f"Saved wav: {path} (sr={sr}, duration={len(waveform)/sr:.2f}s)")

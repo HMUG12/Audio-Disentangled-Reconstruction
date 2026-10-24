@@ -143,8 +143,9 @@ def test_v2_post_nonstream_wav(client, engine):
     call = engine.synth_calls[0]
     assert call["text"] == "你好"
     assert call["text_lang"] == "zh"          # GET/POST 均转小写
-    # 3200 样本 * 2 字节 + 44 头
-    assert len(r.content) == 44 + 3200 * 2
+    # 3200 样本 * 2 字节 + 44 头 + 批次62 LIST/INFO (AI 生成标注)
+    assert len(r.content) > 44 + 3200 * 2
+    assert b"AI-generated voice cloning output" in r.content
 
 
 def test_v2_get_nonstream(client, engine):

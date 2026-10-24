@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import struct
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
 
@@ -141,6 +143,45 @@ def save_audio(
         waveform = waveform.T
 
     sf.write(path, waveform, audio.sample_rate, subtype=subtype)
+
+
+def inject_wav_info(wav: bytes) -> bytes:
+    """分发侧声音安全 (批次62): 完整 WAV 尾部追加 LIST/INFO chunk, 标注
+    AI 生成 (ISFT/ICRD/ICMT), 并回写 RIFF size。
+
+    仅对 RIFF/WAVE 头生效; 流式 44B 头 (audio_codec.wave_header_chunk) 与
+    逐帧数据**不做**注入 — N.E.K.O 等客户端可能按偏移切流, 改流式头部有
+    兼容风险。``ADR_WAV_METADATA=0`` 关闭 (settings.wav_metadata_enabled)。
+
+    调用方只有合成输出两条链 (server/audio_codec.pack_wav、inference
+    pipeline.save_wav) — 素材预处理链 (data/slice、data/separate) 不得调用,
+    真人素材不能被标注为 AI 生成。
+    """
+    from adr.core import settings
+    if not settings.wav_metadata_enabled():
+        return wav
+    if len(wav) < 12 or wav[:4] != b"RIFF" or wav[8:12] != b"WAVE":
+        return wav
+
+    def _sub(fourcc: bytes, data: bytes) -> bytes:
+        chunk = fourcc + struct.pack("<I", len(data)) + data
+        return chunk + b"\x00" if len(chunk) % 2 else chunk  # word-align pad
+
+    try:
+        from adr import __version__
+        software = f"ADR {__version__} (AI-generated speech)".encode("ascii")
+    except Exception:
+        software = b"ADR (AI-generated speech)"
+    info = _sub(b"ISFT", software)
+    info += _sub(b"ICRD", datetime.now().strftime("%Y-%m-%d").encode("ascii"))
+    info += _sub(b"ICMT", b"AI-generated voice cloning output, not a real person")
+    body = b"INFO" + info
+    list_chunk = b"LIST" + struct.pack("<I", len(body)) + body
+    if len(list_chunk) % 2:
+        list_chunk += b"\x00"
+    out = wav + list_chunk
+    # 回写 RIFF size (offset 4 = 总长-8)
+    return out[:4] + struct.pack("<I", len(out) - 8) + out[8:]
 
 
 def resample_audio(

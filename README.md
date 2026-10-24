@@ -25,21 +25,23 @@ ADR 具备克隆任意人声的技术能力，使用前请务必确认以下边�
 - **声纹告知** — 您上传或录制的语音样本属于个人敏感信息（含声纹特征），仅在本地数据目录存储与处理，不上传云端；删除样本即删除对应声纹数据
 - **数据采集** — 默认不采集设备标识、不上报使用数据
 
+使用同意方式（任选其一，同意记录仅存本地数据目录）：桌面壳首次启动在条款页点击"同意"；命令行加 `--agree-terms` 参数；服务端形态（Docker 等）设环境变量 `ADR_AGREE_TERMS=1`。未同意时服务进程会拒绝启动（exit 2）。
+
 ## 安装
 
 ### 方式一：Windows 安装包（推荐）
 
 1. 下载安装包（二选一；也可从 [123 云盘分享](https://1860775428.share.123pan.com/123pan/5KDqvd-oPPsv)（提取码 `ADRS`）下载）：
-   - **CPU 版**：[ADR-Studio-1.2.1-x64-setup.exe](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/download/v1.2.1/ADR-Studio-1.2.1-x64-setup.exe)（约 460MB，无独立显卡设备）
-   - **GPU 版**：[ADR-Studio-1.2.1-x64-gpu-setup.exe](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/download/v1.2.1/ADR-Studio-1.2.1-x64-gpu-setup.exe)（约 1.9GB，NVIDIA CUDA 加速）
+   - **CPU 版**：[ADR-Studio-1.2.2-x64-setup.exe](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/download/v1.2.2/ADR-Studio-1.2.2-x64-setup.exe)（约 460MB，无独立显卡设备）
+   - **GPU 版**：[ADR-Studio-1.2.2-x64-gpu-setup.exe](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/download/v1.2.2/ADR-Studio-1.2.2-x64-gpu-setup.exe)（约 1.9GB，NVIDIA CUDA 加速）
 
-   SHA256 校验值见 [Release 页面](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/tag/v1.2.1)；安装包未经充分测试，如遇问题请提 [Issues](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/issues)
+   SHA256 校验值见 [Release 页面](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/tag/v1.2.2)；安装包未经充分测试，如遇问题请提 [Issues](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/issues)
 2. 双击安装，按向导阅读并接受许可协议（per-user 安装，无需管理员权限）；两版共用同一 AppId，可原地升级覆盖旧版，已下载的底模与声音档案均保留
 3. 首次启动会自动进行环境预热：下载预训练底模（约 2GB，预热页实时显示进度，**下载 + 引擎加载完成后才进入启动器**）；完成后此后**完全离线**运行
 
 安装内容：Python 便携运行时 + 全部依赖 + GPT-SoVITS 代码 + ADR 引擎，磁盘占用约 2GB（CPU 版）/ 4GB（GPU 版），不含底模与声音档案数据。
 
-> 批量部署可使用静默安装：`ADR-Studio-1.2.1-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="安装目录"`
+> 批量部署可使用静默安装：`ADR-Studio-1.2.2-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="安装目录"`
 
 ### 方式二：源码安装
 

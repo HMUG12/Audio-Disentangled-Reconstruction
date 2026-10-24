@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""合规门禁断言（批次 61，源自 2026-10-24 会议纪要"立即执行"四项）。
+"""合规门禁断言（批次 61-62，源自 2026-10-24 会议纪要 + 规划重排方案 C）。
 
 门禁清单（docs/m10-plan.md 规划重排 ③，方案 C 定稿）：
   1. LICENSE 为 AGPL-3.0 全文；pyproject / Cargo.toml / package.json 许可证精确为 AGPL-3.0-only
@@ -8,6 +8,7 @@
   4. THIRD_PARTY_LICENSES.md 存在且含核心组件条目
   5. 首启条款流存在：prewarm.html 条款视图 + lib.rs 三命令 + .terms_agreed_v1 标记
   6. CI smoke 已接入本脚本（防门禁被静默移除）
+  7. 声音安全三层（批次 62）：审计设施 / 无 UI 条款 gate / WAV 元数据注入 / 声纹单独同意 / 壳侧开关
 
 用法：python scripts/check_compliance.py
 全部通过返回 0，存在缺失列出明细返回 1（CI smoke 与发布前置均可复用）。
@@ -90,12 +91,38 @@ def main() -> int:
     if "check_compliance.py" not in _read(".github/workflows/smoke.yml"):
         problems.append("smoke.yml: 未接入 check_compliance.py 门禁步骤")
 
+    # 7. 声音安全三层 (批次 62, m10 方案 C): 上传声明/合成审计/分发元数据 + 无 UI 条款 + 壳侧开关
+    audit_py = _read("adr/core/audit.py")
+    for sym in ("def log_event", "def text_fp", "ADR_SAFETY_AUDIT"):
+        if sym not in audit_py:
+            problems.append(f"adr/core/audit.py: 缺少 {sym}")
+    terms_py = _read("adr/core/terms.py")
+    for sym in ("def agreed", "def mark", ".terms_agreed_v1"):
+        if sym not in terms_py:
+            problems.append(f"adr/core/terms.py: 缺少 {sym}")
+    mainpy = _read("adr/server/__main__.py")
+    for sym in ("--agree-terms", "_enforce_terms", "ADR_AGREE_TERMS"):
+        if sym not in mainpy:
+            problems.append(f"adr/server/__main__.py: 缺少无 UI 条款 gate 要素 {sym}")
+    if "def inject_wav_info" not in _read("adr/utils/audio.py"):
+        problems.append("adr/utils/audio.py: 缺少 inject_wav_info (分发侧 WAV 元数据)")
+    if "def _audit_synthesis" not in _read("adr/services/synthesis.py"):
+        problems.append("adr/services/synthesis.py: 缺少合成侧文本审计 _audit_synthesis")
+    console = _read("adr/server/console.py")
+    for sym in ("consent_granted", "source_declaration"):
+        if sym not in console:
+            problems.append(f"adr/server/console.py: 缺少上传侧要素 {sym}")
+    if "ADR_AGREE_TERMS" not in _read("docker/docker-compose.yml"):
+        problems.append("docker/docker-compose.yml: 缺少 ADR_AGREE_TERMS 条款说明")
+    if "ADR_SAFETY_AUDIT" not in _read("desktop/src-tauri/src/lib.rs"):
+        problems.append("desktop/src-tauri/src/lib.rs: 缺少 ADR_SAFETY_AUDIT 壳侧开关")
+
     if problems:
         for p in problems:
             print(f"check_compliance: MISSING {p}", file=sys.stderr)
         print(f"check_compliance: {len(problems)} 项未达标", file=sys.stderr)
         return 1
-    print("check_compliance: all gates OK (6 组检查通过)")
+    print("check_compliance: all gates OK (7 组检查通过)")
     return 0
 
 

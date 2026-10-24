@@ -144,6 +144,11 @@ struct ShellSettings {
     /// 全链指令集限到 AVX2 (oneDNN/MKL/numba), 绕开 AVX-512 电压缺陷路径。
     /// None = 壳自动检测 (Raptor Lake 自动开); Some = 用户手动覆盖
     compat_cpu: Option<bool>,
+    // --- 声音安全 (批次62) ---
+    /// ADR_SAFETY_AUDIT — 审计日志 (JSONL, data_dir/logs/audit.log); 默认开
+    safety_audit: Option<bool>,
+    /// ADR_WAV_METADATA — 分发 WAV 尾部 LIST/INFO 标注 AI 生成; 默认开
+    wav_metadata: Option<bool>,
 }
 
 static SHELL_CFG: std::sync::OnceLock<Mutex<ShellSettings>> = std::sync::OnceLock::new();
@@ -218,6 +223,14 @@ fn env_overrides(c: &ShellSettings, auto_compat: bool) -> Vec<(String, String)> 
         v.push(("ONEDNN_MAX_CPU_ISA".into(), "AVX2".into()));
         v.push(("MKL_ENABLE_INSTRUCTIONS".into(), "AVX2".into()));
         v.push(("NUMBA_CPU_NAME".into(), "generic".into()));
+    }
+    // 批次62 声音安全: 两项默认开, 仅用户显式关闭时注入 =0
+    // (审计日志 / WAV AI 生成标识, 后端 settings.py 单源口径)
+    if !c.safety_audit.unwrap_or(true) {
+        v.push(("ADR_SAFETY_AUDIT".into(), "0".into()));
+    }
+    if !c.wav_metadata.unwrap_or(true) {
+        v.push(("ADR_WAV_METADATA".into(), "0".into()));
     }
     v
 }

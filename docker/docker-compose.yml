@@ -39,6 +39,14 @@ services:
       # 模型权重自引导目录 (named volume, 不遮蔽镜像内 GSV 代码)
       - pretrained_models:/app/third_party/gpt_sovits/pretrained_models
       - g2pw_model:/app/third_party/gpt_sovits/text/G2PWModel
+    environment:
+      # 批次62 无 UI 形态条款 gate: 容器默认**拒绝启动** (exit 2), 需显式
+      # 同意使用条款 — 取消下行注释即视为你已阅读并同意 (要点见 README)。
+      # 同意标记会写入挂载的 /data (.terms_agreed_v1), 仅需同意一次。
+      # ADR_AGREE_TERMS: "1"
+      # 可选: 关闭审计日志 / 分发 WAV AI 生成标识 (默认均开)
+      # ADR_SAFETY_AUDIT: "0"
+      # ADR_WAV_METADATA: "0"
 
 volumes:
   pretrained_models:

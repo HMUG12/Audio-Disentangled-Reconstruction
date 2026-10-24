@@ -30,6 +30,20 @@ from adr.models import voice_library
 MEDIA_TYPES = ("wav", "mp3", "raw", "ogg", "aac")
 
 
+def _audit_synthesis(text, ref_audio_path) -> None:
+    """合成侧文本审计 (批次62, m10 方案 C 三层之二)。
+
+    不记明文 — 文本只记 sha256 前 16 位指纹 + 长度, 参考音频只记文件名
+    不记全路径 (个人敏感信息最小化, 审计日志需可长期留存)。
+    审计写失败已由 audit.log_event 内部降级, 不影响合成。
+    """
+    from pathlib import Path as _Path
+    from adr.core.audit import log_event, text_fp
+    log_event("synthesis",
+              text_fp=text_fp(text), text_len=len(text),
+              ref=_Path(str(ref_audio_path)).name)
+
+
 class SynthesisService:
     """无状态合成编排 (全 staticmethod; engine 显式传参, 便于测试注入)。"""
 
@@ -94,6 +108,7 @@ class SynthesisService:
                       top_k=15, top_p=1.0, temperature=1.0, speed_factor=1.0,
                       fragment_interval=None) -> Iterator:
         """流式合成: 透传引擎 synthesize_stream, yield (chunk, sr)。"""
+        _audit_synthesis(text, ref_audio_path)
         return engine.synthesize_stream(
             text, ref_audio_path,
             prompt_text=prompt_text or "",
@@ -117,6 +132,7 @@ class SynthesisService:
                         top_k=15, top_p=1.0, temperature=1.0, speed_factor=1.0,
                         fragment_interval=None):
         """非流式合成: 透传引擎 synthesize, 返回 (wav, sr)。"""
+        _audit_synthesis(text, ref_audio_path)
         return engine.synthesize(
             text, ref_audio_path,
             prompt_text=prompt_text or "",
