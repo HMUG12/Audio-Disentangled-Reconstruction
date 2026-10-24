@@ -428,6 +428,7 @@ class InferPipeline:
                 if marked != raw:
                     with open(path, "wb") as f:
                         f.write(marked)
-            except OSError:
-                pass
+            except OSError as exc:
+                # 写回失败须留痕: 若已截断原文件, 静默会让损坏文件仍报成功
+                self.log.warning(f"WAV 元数据标注写入失败 (保留原文件): {exc}")
         self.log.info(f"Saved wav: {path} (sr={sr}, duration={len(waveform)/sr:.2f}s)")

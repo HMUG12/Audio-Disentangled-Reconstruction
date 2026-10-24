@@ -44,6 +44,10 @@ def _enforce_terms(args) -> None:
             from adr.core.audit import log_event
             log_event("terms_agreed",
                       source="cli_arg" if args.agree_terms else "env")
+        else:
+            # 写失败仍按显式同意放行, 但须留痕 (数据目录不可写等), 否则静默无感知
+            print("警告: 同意标记写入失败, 本次按显式同意放行; "
+                  "下次启动可能再次要求同意", file=sys.stderr, flush=True)
         return
     print(
         "\n" + "=" * 64,

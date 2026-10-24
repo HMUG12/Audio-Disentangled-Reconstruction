@@ -550,7 +550,10 @@ async def profile_create(body: ProfileCreateReq):
                "at": datetime.now().astimezone().isoformat(timespec="seconds"),
                "statement": decl[:200]}
     from adr.core.audit import log_event, text_fp
-    log_event("voice_enroll", name=name, decl_fp=text_fp(decl) if decl else None)
+    # 审计脱敏: 档案名可能含人名, 只记指纹 (与素材上传"不记文件名"同一边界)
+    log_event("voice_enroll",
+              name_fp=text_fp(name) if name else None,
+              decl_fp=text_fp(decl) if decl else None)
     if name in voice_library.list_voices():
         raise HTTPException(409, f"已存在同名声音「{name}」, 请换一个名字")
     with _profile_lock:

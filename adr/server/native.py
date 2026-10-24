@@ -178,8 +178,10 @@ async def profile_import(package: UploadFile = File(...),
                             content={"message": str(e), "code": "import_failed"})
     finally:
         os.unlink(tmp)
-    from adr.core.audit import log_event
-    log_event("voice_import", name=name or "", overwrite=overwrite)
+    from adr.core.audit import log_event, text_fp
+    # 审计脱敏: 档案名可能含人名, 只记指纹 (与 voice_enroll 同口径)
+    log_event("voice_import",
+              name_fp=text_fp(name) if name else None, overwrite=overwrite)
     return {"imported": r}
 
 
