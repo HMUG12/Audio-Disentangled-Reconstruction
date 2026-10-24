@@ -977,34 +977,54 @@ def prewarm(default_profile: str | None = None) -> None:
 
 
 _PROFILE_IDLE_DELAY = 10.0  # 秒: 预热 ready 后的空闲期, 之后再启动后台采样
+_PROFILE_BUILD_DELAY = 3.0  # 秒: 建档后的短缓冲 (让建档请求的响应先回)
 _PROFILE_LOCK = threading.Lock()
-_PROFILE_SCHEDULED = False
+# idle=可调度 / running=采样中 / done=本进程不再调度 (已有 profile、已测完或失败)
+_PROFILE_STATE = "idle"
+
+
+def _start_profile(delay: float) -> bool:
+    """调度后台 profile + policy; 非 idle 态不重复启动。返回是否启动了线程。"""
+    global _PROFILE_STATE
+    with _PROFILE_LOCK:
+        if _PROFILE_STATE != "idle":
+            return False
+        _PROFILE_STATE = "running"
+    threading.Thread(target=_idle_profile_worker, args=(delay,),
+                     name="adr-idle-profile", daemon=True).start()
+    return True
 
 
 def _schedule_idle_profile() -> None:
-    """预热 ready 后调度一次后台 profile + policy (每进程至多一次)。
+    """预热 ready 后调度后台 profile + policy。
 
-    daemon 线程: 先等空闲期, 再等引擎无排队/无合成。本机已有 profile
-    或档案库为空 (profiler 至少需要一个档案) 时跳过, 建档后下次启动再跑。
+    daemon 线程: 先等空闲期, 再等引擎无排队/无合成。本机已有 profile 则
+    本进程不再调度; 档案库为空 (profiler 至少需要一个档案) 则退回 idle,
+    建档后由 try_schedule_profile 当场补跑, 不必等下次启动。
     采样经引擎调度器排队, 期间到来的用户请求排队等本次测完。
     """
-    global _PROFILE_SCHEDULED
-    with _PROFILE_LOCK:
-        if _PROFILE_SCHEDULED:
-            return
-        _PROFILE_SCHEDULED = True
-    threading.Thread(target=_idle_profile_worker, name="adr-idle-profile",
-                     daemon=True).start()
+    _start_profile(_PROFILE_IDLE_DELAY)
 
 
-def _idle_profile_worker() -> None:
-    import time
-    log = logging.getLogger("adr.models.gsv_engine")
+def try_schedule_profile() -> None:
+    """建档 / 导入档案成功后调用: 本机尚无 profile 则当场调度后台采样。
+
+    调用方 (save_voice_auto / import_voice) 不应因此失败, 故吞掉一切异常。
+    """
     try:
-        time.sleep(_PROFILE_IDLE_DELAY)
-        eng = get_gsv_engine()
-        while eng.queue_depth() > 0 or eng.synth_busy() > 0:
-            time.sleep(1.0)
+        _start_profile(_PROFILE_BUILD_DELAY)
+    except Exception as e:
+        logging.getLogger("adr.models.gsv_engine").warning(
+            "[profile] 建档后调度采样失败 (不影响建档): %s", e)
+
+
+def _idle_profile_worker(delay: float = _PROFILE_IDLE_DELAY) -> None:
+    import time
+    global _PROFILE_STATE
+    log = logging.getLogger("adr.models.gsv_engine")
+    final = "done"
+    try:
+        time.sleep(delay)
         from adr.core import policy, profiler
 
         if profiler.load_profile() is not None:
@@ -1013,8 +1033,12 @@ def _idle_profile_worker() -> None:
         from adr.models.voice_library import list_voices
 
         if not list_voices():
-            log.info("[profile] 档案库为空, 跳过后台采样 (建档后下次启动再跑)")
+            final = "idle"   # 建档后可再调度
+            log.info("[profile] 档案库为空, 跳过后台采样 (建档后自动补跑)")
             return
+        eng = get_gsv_engine()
+        while eng.queue_depth() > 0 or eng.synth_busy() > 0:
+            time.sleep(1.0)
         log.info("[profile] 服务端空闲, 开始后台采样")
         result = profiler.run_profile()
         # 先落盘 profile: 否则下次启动 load_profile 仍为空, 每次都重采
@@ -1025,3 +1049,6 @@ def _idle_profile_worker() -> None:
         log.info("[profile] 采样完成, policy 已生成并应用")
     except Exception as e:
         log.warning("[profile] 后台采样失败 (不影响功能): %s", e)
+    finally:
+        with _PROFILE_LOCK:
+            _PROFILE_STATE = final

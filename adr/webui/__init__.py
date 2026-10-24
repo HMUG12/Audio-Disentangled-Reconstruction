@@ -994,6 +994,9 @@ def _save_voice_cmd(name, ref_path, prompt_text, style_desc=""):
         vdir, info = save_voice_auto(
             name.strip(), ref_path, (prompt_text or "").strip(),
             progress=_progress, style=(style_desc or "").strip())
+        # v1.3.x: 首个档案建好即补跑本机采样, 新用户不必等下次启动
+        from adr.models.gsv_engine import try_schedule_profile
+        try_schedule_profile()
         yield {"saved": name.strip(), "path": str(vdir), **info,
                "sweep_log": logs,
                "hint": "以后在「已存音色」里直接选用"}

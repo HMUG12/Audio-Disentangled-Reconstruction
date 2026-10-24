@@ -47,6 +47,10 @@ def _isolate_runtime(monkeypatch):
     monkeypatch.setattr(runtime, "_applied", {})
     monkeypatch.setattr(runtime, "_known_good", None)
     monkeypatch.setattr(runtime, "_frozen", False)
+    # 建档路径会 try_schedule_profile: 全局置 done, 防测试里起真实后台采样;
+    # test_idle_profile.py 自行重置为 idle
+    from adr.models import gsv_engine
+    monkeypatch.setattr(gsv_engine, "_PROFILE_STATE", "done")
 
 
 @pytest.fixture(scope="session")

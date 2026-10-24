@@ -178,6 +178,9 @@ async def profile_import(package: UploadFile = File(...),
                             content={"message": str(e), "code": "import_failed"})
     finally:
         os.unlink(tmp)
+    # v1.3.x: 导入首个档案即补跑本机采样, 新用户不必等下次启动
+    from adr.models.gsv_engine import try_schedule_profile
+    try_schedule_profile()
     from adr.core.audit import log_event, text_fp
     # 审计脱敏: 档案名可能含人名, 只记指纹 (与 voice_enroll 同口径)
     log_event("voice_import",
