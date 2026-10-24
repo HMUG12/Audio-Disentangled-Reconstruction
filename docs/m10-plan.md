@@ -209,7 +209,7 @@
 |------|------|------|------|
 | 61 | v1.2.1 | 合规速赢：纪要"立即执行"四项（README 风险披露 / 首启禁止性条款 / 源码随包 / AGPL-3.0-only）+ SPDX + CLA/DCO 拍板 + 门禁清单 v1（③清单 1/2/3/6）+ **最小条款流**（prewarm 前置条款页 + data 标记 `.terms_agreed_v1` + 拒绝退出态，按 2 天增量排；条款文案中文版先行，英文版后补不阻塞 61） | **已完成（2026-10-24，落地记录见下）** |
 | 62 | v1.2.2 | 安全模块 MVP：声音安全三层 + WAV 元数据 + 素材授权台账/声纹单独同意 + 无 UI 形态条款（`--agree-terms` / `ADR_AGREE_TERMS` env，**server 形态下默认写日志便于审计**）+ 声音安全设置 + 审计（③清单 4/5） | **已完成（2026-10-24，落地记录见下）** |
-| 63+ | v1.3.0 | **v1.3 "Autopilot"**：内核底座（H2 静态 KV / 分桶 CUDA Graph / 连续批处理）+ 调度层，N=1 硬预算起步（见④） | 待启动 |
+| 63+ | v1.3.0 | **v1.3 "Autopilot"**：内核底座（H2 静态 KV / 分桶 CUDA Graph / 连续批处理）+ 调度层，N=1 硬预算起步（见④） | 首子批已完成（2026-10-24，t2s 静态 KV，记录见下）；分桶 CUDA Graph / 连续批处理 / 调度层待后续子批 |
 | 框架线 | — | 自动更新链：launcher"检查更新"现为直开 Releases 页（launcher.html L564），缺版本比对/下载/安装闭环；建议插 62 后或与 63 并行 | 待排期 |
 
 **稳定里程碑 v2.0（2026.10–2027.6）**：验收 = 合规门禁全绿（③）+ Autopilot 五指标达标（④）+ 平台矩阵（Windows 全形态 / Linux 容器 / macOS 窗口末段可滑出⑤）。
@@ -262,6 +262,16 @@
 - **版本面**：v1.2.2 十一面同法对齐（+installer.iss `#define MyAppVersion`，批次 61 漏记该面）；README 下载链接 4 处 + 条款节补三种同意方式说明（壳条款页 / `--agree-terms` / `ADR_AGREE_TERMS=1`，未同意 exit 2）
 - **验证**：check_versions 9 项 OK（all faces = 1.2.2）/ check_compliance 7 组 OK / 新增 tests/test_safety.py 20 项（审计 JSONL 与降级 / 条款 mark 与四级 gate / inject_wav_info wave.open 往返 / pack_wav API 面 / profile_create 422 / consent 落 meta 与向后兼容）/ 全量 pytest 462 passed + 1 skipped / cargo check 通过（12.5s）/ test_server_api 非流式 WAV 断言同步新契约（长度放开 + AI 标注断言）
 - **遗留**：v1.2.2 tag 与 Release 后补（用户拍板"tag 后面再发"）；在线部署标识义务提示（③清单 4 附注）随部署文档批次落
+
+**批次 63 首子批落地记录（2026-10-24，分支 main，v1.3.0 起版）**：
+
+- **范围**：v1.3 Autopilot 内核底座第一项——t2s（AR 骨干）静态 KV Cache，decode 每步 `cat` 重建 KV（O(L²) 拷贝）换预分配 buffer + 原地写；与原路径逐 token 位等（等价性测试裁决，非近似）
+- **实现（adr/models/adr_t2s_static_kv.py，桥逻辑在 ADR 侧不动 fork）**：`_decode_step` 逐算子对齐 `Text2SemanticDecoder` decode 块（norm/attn/mlp 全内联，KV 直接写 buffer 指定行）；`_make_buffers`（max_seq_len=21+1500 上限预分配）；`_static_kv_batch1`（非流式全等价复刻 batch_infer bs=1 路径：top-k/top-p/temperature/repetition_penalty/EOS 早停同一套 RNG 时序）；`_static_kv_naive`（流式生成器，chunk 切分/mute 帧逻辑逐条对齐 infer_panel_naive）；`install_static_kv_infer_panel` 四路分派（ids/bert 归一 → bs>1 或 prompt None 原路 fallback → streaming 走 naive 桥 → 非 streaming 走 batch1 桥）；模块级 `_last_kv` 保留末次 KV 供调试
+- **开关与挂钩**：env `ADR_T2S_STATIC_KV` 默认 0（gsv_engine.py 与 `ADR_T2S_CUDAGRAPH` 同址 setdefault）；TTS.py 挂钩补丁（apply_compat_patches.py 新条目）排在 cudagraph 挂钩之后安装，同开时本桥 infer_panel 覆盖生效；无 CUDA 限制（CPU 可跑）、无缓存无锁（每请求重绑不变）
+- **等价性测试（tests/test_t2s_static_kv.py，6 项全绿 41s）**：自建 2 层 32 维 Text2SemanticDecoder（config 纪律 embedding==hidden、EOS==vocab-1）；单步 decode 位等（masked/unmasked 双变体）；batch1 端到端 y 位等 + `_last_kv` 三元组断言（kv_len=MAX_LEN+PREFIX+步数、buffer 形状）；install 分派两路（batch_infer / naive_batched）位等；流式逐块位等（chunk_length=8）；mute 分支位等（chunk_length=6 + mute_emb_sim_matrix）
+- **版本面**：v1.3.0 十一面同法对齐（批次 62 口径：pyproject / `__init__.py` / tauri.conf.json / Cargo.toml / package.json / package-lock.json 两处 / installer.iss / launcher.html fallback / README 下载链接）
+- **验证**：check_versions 9 项 OK（all faces = 1.3.0）/ check_compliance 7 组 OK / 等价性测试 6 passed（41s）/ 全量 pytest 467 passed + 1 skipped（256.6s）/ cargo check 通过 12.29s（版本面 JSON/TOML 语法核验，adr-desktop v1.3.0 编译）
+- **遗留**：v1.3.0 tag 与 Release 随 v1.3 收口（首子批不发版）；分桶 CUDA Graph、连续批处理、调度层（Profiler→Policy→Runtime）待后续子批
 
 ### ④ Autopilot 与 v1.3 范围说明
 

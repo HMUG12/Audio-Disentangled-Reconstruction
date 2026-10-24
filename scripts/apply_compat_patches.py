@@ -272,6 +272,33 @@ patch(
 ''',
 )
 
+# 批次63 t2s 静态 KV Cache 桥挂钩 (AR 3.77x): ADR_T2S_STATIC_KV=1 时把 infer_panel
+# 换成静态 KV 桥 (桥逻辑在 adr/models/adr_t2s_static_kv.py, 不在 fork 里 — 本补丁
+# 只挂一行钩子)。排在 CUDA Graph 之后安装, 同开时本桥覆盖生效。
+patch(
+    "gpt_sovits/GPT_SoVITS/TTS_infer_pack/TTS.py",
+    "t2s 静态 KV 桥挂钩",
+    '''        # ADR 兼容补丁: t2s CUDA Graph 桥挂钩 (AR 3.77x, ADR_T2S_CUDAGRAPH=1 启用)
+        if os.environ.get("ADR_T2S_CUDAGRAPH") == "1":
+            from adr.models.adr_t2s_bridge import install_cudagraph_infer_panel
+            self.t2s_model.model.infer_panel = install_cudagraph_infer_panel(
+                self.t2s_model.model, self)
+''',
+    '''        # ADR 兼容补丁: t2s CUDA Graph 桥挂钩 (AR 3.77x, ADR_T2S_CUDAGRAPH=1 启用)
+        if os.environ.get("ADR_T2S_CUDAGRAPH") == "1":
+            from adr.models.adr_t2s_bridge import install_cudagraph_infer_panel
+            self.t2s_model.model.infer_panel = install_cudagraph_infer_panel(
+                self.t2s_model.model, self)
+
+        # ADR 兼容补丁: t2s 静态 KV 桥挂钩 (AR 3.77x, ADR_T2S_STATIC_KV=1 启用;
+        # 排在 CUDA Graph 之后安装, 同开时本桥的 infer_panel 覆盖生效)
+        if os.environ.get("ADR_T2S_STATIC_KV") == "1":
+            from adr.models.adr_t2s_static_kv import install_static_kv_infer_panel
+            self.t2s_model.model.infer_panel = install_static_kv_infer_panel(
+                self.t2s_model.model, self)
+''',
+)
+
 # 批次20 O3 bf16 混合精度 (s2 训练降显存 30~40%): ADR_S2_BF16=1 且显卡支持
 # (Ampere+, torch.cuda.is_bf16_supported) 时 autocast 用 bfloat16 并关 GradScaler
 # (bf16 动态范围大, 无需 loss scale, 数值更稳)。未开环境变量 → dtype=fp16,
