@@ -360,8 +360,15 @@ function showToast(msg, ok) {
   timer = setTimeout(() => (toast.style.display = "none"), ok ? 8000 : 6000);
 }
 
+let launching = false;
+
 async function launch(mode, card) {
   if (!window.__TAURI__) { showToast("请在 ADR Studio 桌面应用内使用"); return; }
+  // 防重入: UIA/双击可双投递 click, 两次并发 enter_console 会 spawn 两个 Gradio
+  // (kill_current 落在首个 pid 写入窗口前会静默通过)。成功后不复位——壳即将
+  // 导航离开本页, JS 状态随页面卸载重置; 失败才复位恢复可点。
+  if (launching) return;
+  launching = true;
   cards.forEach(c => c.classList.remove("busy"));
   card.classList.add("busy");
   const expose = card.querySelector(".exp input")?.checked ?? false;
@@ -370,6 +377,7 @@ async function launch(mode, card) {
     // (pro/easy 服务常驻时走热通道秒进; legacy/冷启动回落完整启动流程)
     await window.__TAURI__.core.invoke("enter_console", { mode, expose });
   } catch (e) {
+    launching = false;
     card.classList.remove("busy");
     showToast(String(e));
   }
