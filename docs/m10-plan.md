@@ -207,7 +207,7 @@
 
 | 批次 | 版本 | 内容 | 状态 |
 |------|------|------|------|
-| 61 | v1.2.1 | 合规速赢：纪要"立即执行"四项（README 风险披露 / 首启禁止性条款 / 源码随包 / AGPL-3.0-only）+ SPDX + CLA/DCO 拍板 + 门禁清单 v1（③清单 1/2/3/6）+ **最小条款流**（prewarm 前置条款页 + data 标记 `.terms_agreed_v1` + 拒绝退出态，按 2 天增量排；条款文案中文版先行，英文版后补不阻塞 61） | 待启动 |
+| 61 | v1.2.1 | 合规速赢：纪要"立即执行"四项（README 风险披露 / 首启禁止性条款 / 源码随包 / AGPL-3.0-only）+ SPDX + CLA/DCO 拍板 + 门禁清单 v1（③清单 1/2/3/6）+ **最小条款流**（prewarm 前置条款页 + data 标记 `.terms_agreed_v1` + 拒绝退出态，按 2 天增量排；条款文案中文版先行，英文版后补不阻塞 61） | **已完成（2026-10-24，落地记录见下）** |
 | 62 | v1.2.2 | 安全模块 MVP：声音安全三层 + WAV 元数据 + 素材授权台账/声纹单独同意 + 无 UI 形态条款（`--agree-terms` / `ADR_AGREE_TERMS` env，**server 形态下默认写日志便于审计**）+ 声音安全设置 + 审计（③清单 4/5） | 待启动 |
 | 63+ | v1.3.0 | **v1.3 "Autopilot"**：内核底座（H2 静态 KV / 分桶 CUDA Graph / 连续批处理）+ 调度层，N=1 硬预算起步（见④） | 待启动 |
 | 框架线 | — | 自动更新链：launcher"检查更新"现为直开 Releases 页（launcher.html L564），缺版本比对/下载/安装闭环；建议插 62 后或与 63 并行 | 待排期 |
@@ -238,6 +238,17 @@
 方案 C 依据：① prewarm.html 现状为纯步骤展示页（4 步骤条 + setStep/setTip），条款页作前置视图低成本插入，desktop/src 三页（launcher/prewarm/loading）零条款代码（Grep terms/consent/同意 零命中），从零加但量小；② 纪要"立即执行"清单点名"首次启动禁止性条款"，入口约束是 ADRstudio 义务重心（纪要提案二）；③ 拒绝退出态兜底合规姿态。风险：条款文案口径（AGPL 义务通俗化 + 声纹告知措辞）需会议/法务把关，61 内出初稿过目。
 
 **已拍板（2026-10-24）：按方案 C 定稿**——61 = 门禁 1/2/3/6 + 条款流，发 v1.2.1；62 = 门禁 4/5 + 无 UI 条款 + 声音安全设置，发 v1.2.2。条款文案中文版先行（英文后补不阻塞 61）；`--agree-terms` 在 server 形态下默认写日志便于审计。
+
+**批次 61 落地记录（2026-10-24，分支 plan-v2-roadmap）**：
+
+- **门禁 1（LICENSE 精确化 + 第三方清单）**：pyproject.toml / Cargo.toml / package.json 三构建面 license 字段精确为 `AGPL-3.0-only`；`adr/__init__.py` 顺手补 `__license__ = "AGPL-3.0-only"`；新增 THIRD_PARTY_LICENSES.md（随包四组件 GSV/BigVGAN/python-build-standalone/Tauri + Python 依赖面许可表，注明底模与声音档案非分发物）
+- **门禁 2（源码随包）**：README License 节重写——源码获取途径（Releases 源码压缩包 + 克隆仓库，AGPL §6）+ 网络服务同许可开放义务 + 附加条款联系方式
+- **门禁 3（风险披露）**：README 新增"风险披露与使用边界"节（授权前提 / 禁止用途 / 责任自负 / 声纹个人信息告知 / 数据采集五条，提及首启条款流）；FAQ 商用答同步 AGPL-3.0-only
+- **门禁 6（check_compliance 进 CI）**：新增 scripts/check_compliance.py 六组检查（LICENSE 全文 + 三面 license 字段 / README 源码获取 / README 风险披露 / 第三方清单条目 / 条款流 invoke 与命令存在性 / smoke.yml 自证接入），smoke.yml 在 check_versions 步骤后接入
+- **最小条款流（方案 C）**：lib.rs 新增 `terms_agreed` / `agree_terms` / `reject_terms` 三命令 + `.terms_agreed_v1` 标记写入 `adr_data_dir()` 根（内容 `agreed_at=<ms>` 便于审计；与 Python 数据目录推导同源，升级/重装不重复弹）；prewarm.html 前置条款视图（`body.terms-mode` 盖住步骤流，中文文案：AGPL 义务通俗化 / 禁止性条款 / 责任边界 / 声纹告知 / 数据采集）；prewarm_flow ready 后导航前插 500ms 轮询 gate（未同意停在预热页，同意后放行导航，预热期间不浪费等待）；skip_prewarm 加 `terms_agreed_flag()` 防御兜底
+- **版本面**：v1.2.1 十面对齐（pyproject / `__init__.py` / tauri.conf.json / Cargo.toml / package.json / package-lock.json 两处 / installer.iss / launcher.html fallback / README 四处下载链接）
+- **验证**：cargo check 通过（19.85s 无错）/ check_versions 9 项 OK（all faces = 1.2.1）/ check_compliance 6 组 OK / pytest 基线不破
+- **遗留**：条款英文版后补（不阻塞）；CLA/DCO 拍板待会议记录确认后补文档；v1.2.1 tag 与 Release 在本批合并 main 后进行
 
 ### ④ Autopilot 与 v1.3 范围说明
 
