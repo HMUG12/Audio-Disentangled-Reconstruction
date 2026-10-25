@@ -327,8 +327,8 @@
 - **CPU 包**（ADR-Studio-1.3.1-x64-setup.exe，459 MB）：首启档案库空 → 跳过采样；建档 `cpufirst` 后当场调度采样，约 3.5 分钟完成 → profile `device=cpu`、default RTF=1.81 → policy overrides STREAM_HEAD=10 / SPLIT_MAX=30 / TORCH_THREADS=19（20 核留 1），日志确认已应用。RTF 与纪要 E5-2667 v3 锚点 ≈1.7 同量级
 - **GPU 包**（ADR-Studio-1.3.1-x64-gpu-setup.exe，1926 MB，torch 2.10.0+cu130）：移走 CPU 轮 profile/policy（备份 `*.cpurun_202610251207`）后首启 → 已有档案，后台自动采样约 1 分钟 → profile `device=cuda`、8.0G、default RTF=1.177、峰值显存 1170MB → overrides STREAM_HEAD=10 / SPLIT_MAX=30，不改线程数；STATIC_KV / CUDAGRAPH / 分桶 default 仅推荐，INT8 保持关。安装目录 runtime 跑 `adr policy --snapshot` 来源均为 policy / default，符合 conservative-v1
 - **构建问题与修复**：① `build_runtime.ps1` 写 requirements 时 PS 5.1 对中文注释 here-string 写入失败，pip 读到旧文件，CPU runtime 漏 4 个 G2P 包 → 加写回校验（83162d2）；② 旧 `build\runtime-gpu` 为修复前产物（缺 pip / PyYAML，服务起不来）→ 用修复后脚本重建；③ GPU 打包参数是 `-Gpu`，误传 `-AllowCuda` 被静默忽略、去检查 runtime-cpu；④ tauri / ISCC 的 stderr Info 被 PowerShell 转成 CLIXML Error、退出码 1，属误报，以产物时间戳为准
-- **下一批首项（逻辑必现，优先于下列环境类遗留）**：profile 按机器指纹存档、key 不含设备类型，同机 CPU 包换 GPU 包会命中旧画像、跳过重采，沿用 CPU 画像（含 TORCH_THREADS=19）。本次实测因手工移走文件未触发。修复：最小改法为 `load_profile` 命中后比对 `device_info.type` 与当前设备，不一致视为缺档重采；更彻底为把 type 并入文件 key（`profile_<mid>_<type>.json`），CPU / GPU 画像并存、来回换包不重采；policy.json 同步按来源 profile 失效重新生成
-- **遗留**：沙箱环境下 GUI 进程随 shell 回收，GPU 轮未在服务进程内做合成 + stats 的 Runtime 观测（第二子批真机验收已覆盖）；旧版 unins000 静默卸载卡住，用新安装器覆盖安装绕过
+- **~~下一批首项~~（已修复 ea049c5，见下节）**：profile 按机器指纹存档、key 不含设备类型，同机 CPU 包换 GPU 包会命中旧画像、跳过重采，沿用 CPU 画像（含 TORCH_THREADS=19）。本次实测因手工移走文件未触发。修复：最小改法为 `load_profile` 命中后比对 `device_info.type` 与当前设备，不一致视为缺档重采；更彻底为把 type 并入文件 key（`profile_<mid>_<type>.json`），CPU / GPU 画像并存、来回换包不重采；policy.json 同步按来源 profile 失效重新生成
+- **遗留**：沙箱环境下 GUI 进程随 shell 回收，GPU 轮未在服务进程内做合成 + stats 的 Runtime 观测（第二子批真机验收已覆盖）；旧版 unins000 静默卸载卡住，用新安装器覆盖安装绕过；会议纪要已 .gitignore（4b48c06）
 
 **画像按设备分档（v1.3.x 下一批首项，已落地，提交 ea049c5）**：
 
@@ -337,6 +337,63 @@
 - **后台 worker**：当前设备画像已在但 policy.json 来自另一设备（换回已采过的设备）时，跳过采样、按本设备画像就地重新生成并应用
 - **测试**：新增画像并存 / 旧文件兼容 / policy 设备不一致不应用 / worker 重新生成 4 项；全量 523 passed, 1 skipped
 - **未实测**：未重打安装包做真机换包验证（逻辑由单测覆盖）
+
+---
+
+## 总体 Review — v1.3.1 实测与画像分档（2026-10-23 ~ 10-25）
+
+**时间线**：批次 63 第四子批（Profiler）→ v1.3.x 首子批（Policy）→ v1.3.x 第二子批（Runtime）→ v1.3.1 版本抬升 + 双包实测 → 画像设备分档修复；v1.3.0 tag（062f475）之后 12 次提交
+
+**落地清单**：
+1. 调度层三级（Profiler → Policy → Runtime）全链路完成，Policy 保守规则集（音质敏感项只推荐不开）
+2. v1.3.1 双包实测：CPU 459 MB（RTF 1.81）/ GPU 1926 MB（RTF 1.177），两条链路验证"首启 → 采样 → Policy 生效"
+3. 构建问题修复：requirements 写回校验（83162d2），防 PS 5.1 隐身漏失
+4. 画像设备分档：文件 key 并入设备类型 `profile_<mid>_<type>.json`，CPU/GPU 换包不串用旧画像（ea049c5）
+
+**质量快照**（提交 fd8e17f）：
+- 测试：523 passed, 1 skipped（v1.3.0 tag 时 489 passed，+34 项）
+- 门禁：check_versions 9 OK（all faces = 1.3.1）/ check_compliance 7 组 OK
+- 调度层模块：profiler.py 224 行、policy.py 212 行、runtime.py 150 行
+- 对应测试：test_profiler.py 135 行、test_policy.py 144 行、test_runtime.py 103 行、test_idle_profile.py 137 行、test_build_profile.py 138 行
+
+**关键设计决策**：
+- **不查设备表**：Policy 只用实测 RTF / 显存 + 物理核数，不记型号不查数据库（设备碎片化 + 驱动影响基准）
+- **音质敏感项只推荐**：STATIC_KV / CUDA Graph / 分桶 / INT8 默认保持关，音质门通过后另出 balanced-v1 规则集才自动开
+- **画像设备分档晚一批**：实测期间读代码发现换包会沿用旧画像（CPU 包的 TORCH_THREADS=19 会带进 GPU 包；本次因手工移走文件未实际触发），补做 ea049c5
+- **首启接线后台化**：预热 ready 后等 10s 空闲期且无排队 / 无合成才采样，采样期间用户请求排队（实测 GPU 约 1 分钟、CPU 约 3.5 分钟）
+- **Runtime 只调分块**：闭环监控只收短 STREAM_HEAD / SPLIT_MAX 这类音质中性项，不碰加速开关（与 Policy 同一音质原则）
+
+**遗留关闭**：
+- 换包沿用旧画像 → ea049c5
+- 会议纪要未跟踪 → 4b48c06
+- 端口对不上 → 不存在（23366 是临时命令写错）
+
+**环境类遗留**（不进下批次）：
+- GPU 轮 Runtime 合成未实测 → 沙箱窗口回收，第二子批真机验收已覆盖
+- 旧版卸载器卡住 → 新安装器覆盖安装绕过
+
+**技术债**（远期观察）：
+- Policy 规则版本递增（v1 → v2 兼容）
+- balanced-v1 规则集（加速开关过音质门后）
+- Runtime 失败回退真机验证（当前只单测）
+- stats 事件 reason PowerShell 5 乱码（服务端 charset）
+- 无档案首启内置测定参考音频（当前跳过）
+
+**验收五指标现状**（纪要只定了指标名，没给量化目标；下表只记现有证据，阈值待定）：
+
+| 指标 | 现有证据 | 缺口 |
+|------|---------|------|
+| 调参遗憾值 | 无 | v1.3.0 只有 N=1、加速全关，暂无可选档位；N≥2 或加速开关过门后才有意义 |
+| 收敛时间 | 首启到 policy 生效：GPU 约 1 分钟、CPU 约 3.5 分钟（单次实测） | 未定目标值，样本仅两台次 |
+| 免调参率 | 两台次实测均零手工介入自动生效 | 样本量不足以给比率 |
+| 自愈成功率 | 回退路径单测覆盖 | 未在真机制造失败 |
+| 流式连续性 | 无专项测量 | Runtime 改分块在请求边界生效（代码层面），未做断流统计 |
+
+**下阶段入口**（按纪要优先级）：
+1. N=2 固定份额（v1.3.x 后续）：双槽并发，显存/核数对半分
+2. 加速开关音质门：CUDA Graph / 静态 KV / 分桶过 MOS 门，解锁 balanced-v1
+3. 动态份额 + 隔离（v1.3.x）：按 RTF 动态分配，长文本不卡短
+4. 准入控制（v1.3.x 最终）：队列长度 / 预算耗尽拒绝新请求
 
 ### ④ Autopilot 与 v1.3 范围说明
 
