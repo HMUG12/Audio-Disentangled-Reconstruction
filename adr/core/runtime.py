@@ -132,12 +132,16 @@ def _evaluate() -> None:
 
 
 def report() -> dict[str, Any]:
-    """导出调度报告 (配合 scheduler.stats / policy.export_snapshot)。"""
+    """导出调度报告 (配合 scheduler.stats / policy.export_snapshot)。
+
+    批次64 第一子批: 附带调度预算 sched_budget (N=2 固定份额时为 2)。
+    """
     from adr.core import settings
     with _lock:
         win = [dict(s) for s in _samples]
         evts = [dict(e) for e in _events]
     return {
+        "sched_budget": settings.scheduler_max_concurrency(),
         "autotune": settings.runtime_autotune(),
         "window_size": len(win),
         "window_ok": sum(1 for s in win if s["ok"]),
