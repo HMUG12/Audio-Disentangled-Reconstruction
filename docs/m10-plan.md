@@ -327,7 +327,8 @@
 - **CPU 包**（ADR-Studio-1.3.1-x64-setup.exe，459 MB）：首启档案库空 → 跳过采样；建档 `cpufirst` 后当场调度采样，约 3.5 分钟完成 → profile `device=cpu`、default RTF=1.81 → policy overrides STREAM_HEAD=10 / SPLIT_MAX=30 / TORCH_THREADS=19（20 核留 1），日志确认已应用。RTF 与纪要 E5-2667 v3 锚点 ≈1.7 同量级
 - **GPU 包**（ADR-Studio-1.3.1-x64-gpu-setup.exe，1926 MB，torch 2.10.0+cu130）：移走 CPU 轮 profile/policy（备份 `*.cpurun_202610251207`）后首启 → 已有档案，后台自动采样约 1 分钟 → profile `device=cuda`、8.0G、default RTF=1.177、峰值显存 1170MB → overrides STREAM_HEAD=10 / SPLIT_MAX=30，不改线程数；STATIC_KV / CUDAGRAPH / 分桶 default 仅推荐，INT8 保持关。安装目录 runtime 跑 `adr policy --snapshot` 来源均为 policy / default，符合 conservative-v1
 - **构建问题与修复**：① `build_runtime.ps1` 写 requirements 时 PS 5.1 对中文注释 here-string 写入失败，pip 读到旧文件，CPU runtime 漏 4 个 G2P 包 → 加写回校验（83162d2）；② 旧 `build\runtime-gpu` 为修复前产物（缺 pip / PyYAML，服务起不来）→ 用修复后脚本重建；③ GPU 打包参数是 `-Gpu`，误传 `-AllowCuda` 被静默忽略、去检查 runtime-cpu；④ tauri / ISCC 的 stderr Info 被 PowerShell 转成 CLIXML Error、退出码 1，属误报，以产物时间戳为准
-- **遗留**：profile 按机器指纹存档、不区分设备，同机 CPU 包换 GPU 包会沿用 CPU 画像（含 TORCH_THREADS=19），需按 `device_info.type` 失效重采；沙箱环境下 GUI 进程随 shell 回收，GPU 轮未在服务进程内做合成 + stats 的 Runtime 观测（第二子批真机验收已覆盖）；旧版 unins000 静默卸载卡住，用新安装器覆盖安装绕过
+- **下一批首项（逻辑必现，优先于下列环境类遗留）**：profile 按机器指纹存档、key 不含设备类型，同机 CPU 包换 GPU 包会命中旧画像、跳过重采，沿用 CPU 画像（含 TORCH_THREADS=19）。本次实测因手工移走文件未触发。修复：最小改法为 `load_profile` 命中后比对 `device_info.type` 与当前设备，不一致视为缺档重采；更彻底为把 type 并入文件 key（`profile_<mid>_<type>.json`），CPU / GPU 画像并存、来回换包不重采；policy.json 同步按来源 profile 失效重新生成
+- **遗留**：沙箱环境下 GUI 进程随 shell 回收，GPU 轮未在服务进程内做合成 + stats 的 Runtime 观测（第二子批真机验收已覆盖）；旧版 unins000 静默卸载卡住，用新安装器覆盖安装绕过
 
 ### ④ Autopilot 与 v1.3 范围说明
 
