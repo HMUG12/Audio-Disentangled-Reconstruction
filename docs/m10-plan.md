@@ -330,7 +330,7 @@
 - **下一批首项（逻辑必现，优先于下列环境类遗留）**：profile 按机器指纹存档、key 不含设备类型，同机 CPU 包换 GPU 包会命中旧画像、跳过重采，沿用 CPU 画像（含 TORCH_THREADS=19）。本次实测因手工移走文件未触发。修复：最小改法为 `load_profile` 命中后比对 `device_info.type` 与当前设备，不一致视为缺档重采；更彻底为把 type 并入文件 key（`profile_<mid>_<type>.json`），CPU / GPU 画像并存、来回换包不重采；policy.json 同步按来源 profile 失效重新生成
 - **遗留**：沙箱环境下 GUI 进程随 shell 回收，GPU 轮未在服务进程内做合成 + stats 的 Runtime 观测（第二子批真机验收已覆盖）；旧版 unins000 静默卸载卡住，用新安装器覆盖安装绕过
 
-**画像按设备分档（v1.3.x 下一批首项，已落地）**：
+**画像按设备分档（v1.3.x 下一批首项，已落地，提交 ea049c5）**：
 
 - **profiler**：文件 key 并入设备类型 `profile_<mid>_<type>.json`，`load_profile` 按 `current_device_type()` 取，CPU / GPU 画像并存、来回换包不重采；兼容 v1.3.1 旧文件 `profile_<mid>.json`，仅当其 `device_info.type` 与当前设备一致时沿用，否则视为缺档触发重采
 - **policy**：`apply` / `export_snapshot` 比对 `basis.device` 与当前设备，不一致则不应用（CPU 包生成的 TORCH_THREADS=19 不会带进 GPU 包）；来源缺失或当前设备 unknown（torch 不可用）时不拦
