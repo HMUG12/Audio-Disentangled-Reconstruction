@@ -434,6 +434,10 @@
 - **滑出规则**：v2.0 发布时点若 macOS 未达成"安装包构建 + 合成冒烟 + 三形态文档"三项，则滑出至 v2.0.x patch 补发，v2.0 按 Windows + Linux 容器双平台发布、不延窗口
 - 纪要平台矩阵另含鸿蒙/国产 OS（L224/237/273）：列 v2.0 后远期观察项，不进窗口承诺
 
+## 待修问题（有空再修）
+
+- [ ] **容器版 GPU 切 CPU 后合成报 400**（2026-10-25 用户报告）：切换后 `/api/adr/v1/health` 返回 200，但 `POST /api/adr/v1/tts` 返回 400 Bad Request。日志中的 onnxruntime `GPU device discovery failed: /sys/class/drm/card0/device/vendor` 是容器内无 DRM 节点导致的告警，大概率与 400 无关。根因未查：400 是请求校验层返回的，需要抓 response body 确认是哪个参数被拒（怀疑方向：设备切换后档案/权重绑定或 device 参数校验）
+
 ## 原则
 
 - 能统一的尽量统一，降低使用门槛（用户定调）
