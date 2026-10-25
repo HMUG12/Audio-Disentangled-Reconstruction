@@ -151,7 +151,13 @@ chardet
 # ASCII on purpose: PowerShell 5.1 reads BOM-less files as ANSI.
 # torch/torchaudio 不在此清单: 按变体单独安装 (见下一步), 避免解析器
 # 从 PyPI 拉回 CPU 轮子覆盖 cu130 本地版本。
+Remove-Item -Force $ReqFile -ErrorAction SilentlyContinue
 Set-Content -Path $ReqFile -Value $requirements -Encoding ASCII
+# Write-back check: v1.3.1 build once ran pip against a stale file missing the G2P pins
+$written = Get-Content -Raw $ReqFile
+foreach ($pin in "pyopenjtalk==", "jamo==", "ToJyutping==", "ko_pron==") {
+    if ($written -notmatch [regex]::Escape($pin)) { throw "requirements file missing $pin (stale write?)" }
+}
 Log ("requirements written: {0}" -f $ReqFile)
 
 Step "4/6 pip install (this downloads ~1 GB, progress bars below)"
