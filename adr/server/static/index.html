@@ -5,33 +5,49 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'">
 <title>ADR Studio · 控制台索引</title>
+<script src="/theme.js"></script>
 <script src="/i18n.js"></script>
 <script src="/i18n-index.js"></script>
 <style>
-  :root { color-scheme: dark; }
+  /* classic: 原暗色配色 (变量取原值) */
+  :root {
+    color-scheme: dark;
+    --bg: #0a0d14; --txt: #e8ecf4; --brand: #2dd4bf; --sub: #7c8aa5;
+    --card: #121724; --line: #1f2740; --hover-line: #2dd4bf66; --hover-shadow: 0 8px 28px #0008;
+    --ic-bg: #1a2337; --dsc: #8391ab; --arrow: #475a7d; --card-shadow: none;
+  }
+  /* default: 浅蓝手绘风 */
+  [data-theme="default"] {
+    color-scheme: light;
+    --bg: #F0F7FF; --txt: #1A202C; --brand: #2B6CB0; --sub: #718096;
+    --card: #FFFFFF; --line: #DCEBFB; --hover-line: #5EAAF7;
+    --hover-shadow: 0 4px 12px rgba(94, 170, 247, 0.3);
+    --ic-bg: #F0F7FF; --dsc: #718096; --arrow: #5EAAF7;
+    --card-shadow: 0 8px 24px rgba(94, 170, 247, 0.15);
+  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
-    background: #0a0d14; color: #e8ecf4; min-height: 100vh;
+    background: var(--bg); color: var(--txt); min-height: 100vh;
     display: grid; place-items: center; user-select: none;
   }
   .wrap { width: min(680px, 92vw); text-align: center; padding: 48px 0; }
   .logo { font-size: 30px; font-weight: 700; letter-spacing: 1px; }
-  .logo em { font-style: normal; color: #2dd4bf; }
-  .sub { color: #7c8aa5; font-size: 14px; margin: 10px 0 36px; }
+  .logo em { font-style: normal; color: var(--brand); }
+  .sub { color: var(--sub); font-size: 14px; margin: 10px 0 36px; }
   .grid { display: grid; gap: 14px; }
   a.card {
     display: flex; align-items: center; gap: 16px; text-decoration: none;
-    background: #121724; border: 1px solid #1f2740; border-radius: 14px;
-    padding: 20px 24px; color: #e8ecf4; transition: .18s;
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 20px 24px; color: var(--txt); transition: .18s; box-shadow: var(--card-shadow);
   }
-  a.card:hover { border-color: #2dd4bf66; transform: translateY(-2px);
-    box-shadow: 0 8px 28px #0008; }
+  a.card:hover { border-color: var(--hover-line); transform: translateY(-2px);
+    box-shadow: var(--hover-shadow); }
   .ic { width: 40px; height: 40px; flex: none; display: grid; place-items: center;
-    background: #1a2337; border-radius: 10px; }
+    background: var(--ic-bg); border-radius: 10px; }
   .ttl { font-size: 16px; font-weight: 600; }
-  .dsc { font-size: 12.5px; color: #8391ab; margin-top: 3px; }
-  .arrow { margin-left: auto; color: #475a7d; font-size: 18px; }
+  .dsc { font-size: 12.5px; color: var(--dsc); margin-top: 3px; }
+  .arrow { margin-left: auto; color: var(--arrow); font-size: 18px; }
 </style>
 </head>
 <body>

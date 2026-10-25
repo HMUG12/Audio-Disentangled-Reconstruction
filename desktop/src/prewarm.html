@@ -3,63 +3,99 @@
 <head>
 <meta charset="utf-8">
 <title>ADR Studio</title>
+<script src="theme.js"></script>
 <style>
-  :root { color-scheme: dark; }
+  /* classic: 原暗色配色 (变量取原值) */
+  :root {
+    color-scheme: dark;
+    --bg: #0a0d14; --txt: #e8ecf4; --glow1: #0e749033; --glow2: #4f46e526; --glow-op: .5;
+    --brand: #2dd4bf; --sub: #7c8aa5;
+    --card-grad: linear-gradient(160deg, #131a2a, #0e1422); --card-line: #202a44; --card-shadow: none;
+    --active-line: #2dd4bf66; --failed-line: #7f1d1d99;
+    --dot-bg: #182136; --dot-line: #223050; --dot-txt: #7f92b5; --dot-active-line: #2dd4bf99;
+    --done-line: #34d39977; --done-bg: #0d3a2b; --ok: #34d399;
+    --fail-dot-line: #f8717177; --fail-dot-bg: #2a1215; --err: #f87171; --err-soft: #fca5a5;
+    --muted: #8391ab; --warn: #fbbf24;
+    --retry-bg: #172a52; --retry-txt: #60a5fa; --retry-line: #2b3f6e; --retry-shadow: none;
+    --foot: #47556e; --tbody: #aeb9cf; --strong: #e8ecf4;
+    --agree-bg: #134e4a; --agree-txt: #5eead4; --agree-line: #2dd4bf66;
+    --spin: #2dd4bf; --agree-shadow: none;
+  }
+  /* default: 浅蓝手绘风 */
+  [data-theme="default"] {
+    color-scheme: light;
+    --bg: #F0F7FF; --txt: #1A202C; --glow1: #5EAAF733; --glow2: #2B6CB01A; --glow-op: .6;
+    --brand: #2B6CB0; --sub: #718096;
+    --card-grad: #FFFFFF; --card-line: #DCEBFB; --card-shadow: 0 8px 24px rgba(94, 170, 247, 0.15);
+    --active-line: #5EAAF7; --failed-line: #F5C2C2;
+    --dot-bg: #F0F7FF; --dot-line: #CFE3FA; --dot-txt: #718096; --dot-active-line: #5EAAF7;
+    --done-line: #9AE6B4; --done-bg: #F0FFF4; --ok: #2F855A;
+    --fail-dot-line: #F5C2C2; --fail-dot-bg: #FFF5F5; --err: #C53030; --err-soft: #C53030;
+    --muted: #718096; --warn: #B7791F;
+    --retry-bg: #5EAAF7; --retry-txt: #FFFFFF; --retry-line: #5EAAF7;
+    --retry-shadow: 0 4px 12px rgba(94, 170, 247, 0.3);
+    --foot: #718096; --tbody: #4A5568; --strong: #1A202C;
+    --agree-bg: #5EAAF7; --agree-txt: #FFFFFF; --agree-line: #5EAAF7;
+    --spin: #5EAAF7; --agree-shadow: 0 4px 12px rgba(94, 170, 247, 0.3);
+  }
+  [data-theme="default"] .tbody::-webkit-scrollbar { width: 8px; }
+  [data-theme="default"] .tbody::-webkit-scrollbar-thumb { background: #CFE3FA; border-radius: 8px; }
+  [data-theme="default"] .tbody::-webkit-scrollbar-track { background: transparent; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
-    background: #0a0d14; color: #e8ecf4; min-height: 100vh;
+    background: var(--bg); color: var(--txt); min-height: 100vh;
     display: flex; flex-direction: column; align-items: center;
     justify-content: center; gap: 8px; overflow: hidden; user-select: none;
   }
   /* 背景光晕 (与 launcher 一致) */
   body::before, body::after {
     content: ""; position: fixed; border-radius: 50%; filter: blur(110px);
-    z-index: -1; opacity: .5;
+    z-index: -1; opacity: var(--glow-op);
   }
   body::before { width: 460px; height: 460px; left: -140px; top: -160px;
-    background: #0e749033; }
+    background: var(--glow1); }
   body::after { width: 420px; height: 420px; right: -120px; bottom: -160px;
-    background: #4f46e526; }
+    background: var(--glow2); }
 
   .logo { font-size: 30px; font-weight: 700; letter-spacing: 1px; }
-  .logo em { font-style: normal; color: #2dd4bf; }
-  .sub { color: #7c8aa5; font-size: 13.5px; margin-bottom: 30px; }
+  .logo em { font-style: normal; color: var(--brand); }
+  .sub { color: var(--sub); font-size: 13.5px; margin-bottom: 30px; }
 
   .panel { width: min(480px, 88vw); display: flex; flex-direction: column; gap: 12px; }
   .step {
     display: flex; gap: 14px; align-items: center; padding: 14px 18px;
-    border-radius: 13px; background: linear-gradient(160deg, #131a2a, #0e1422);
-    border: 1px solid #202a44; transition: border-color .25s, opacity .25s;
+    border-radius: 13px; background: var(--card-grad); box-shadow: var(--card-shadow);
+    border: 1px solid var(--card-line); transition: border-color .25s, opacity .25s;
     opacity: .55;
   }
   .step.active, .step.done, .step.failed { opacity: 1; }
-  .step.active { border-color: #2dd4bf66; }
-  .step.failed { border-color: #7f1d1d99; }
+  .step.active { border-color: var(--active-line); }
+  .step.failed { border-color: var(--failed-line); }
   .dot {
     width: 27px; height: 27px; border-radius: 50%; flex: none;
     display: grid; place-items: center; font-size: 12px; font-weight: 700;
-    background: #182136; border: 1px solid #223050; color: #7f92b5;
+    background: var(--dot-bg); border: 1px solid var(--dot-line); color: var(--dot-txt);
   }
-  .step.active .dot { border-color: #2dd4bf99; color: #2dd4bf; }
+  .step.active .dot { border-color: var(--dot-active-line); color: var(--brand); }
   .step.active .dot span { display: none; }
   .step.active .dot::after {
-    content: ""; width: 13px; height: 13px; border: 2px solid #2dd4bf;
+    content: ""; width: 13px; height: 13px; border: 2px solid var(--spin);
     border-top-color: transparent; border-radius: 50%;
     animation: spin .8s linear infinite;
   }
-  .step.done .dot { border-color: #34d39977; background: #0d3a2b; color: #34d399; }
-  .step.failed .dot { border-color: #f8717177; background: #2a1215; color: #f87171; }
+  .step.done .dot { border-color: var(--done-line); background: var(--done-bg); color: var(--ok); }
+  .step.failed .dot { border-color: var(--fail-dot-line); background: var(--fail-dot-bg); color: var(--err); }
   .step .tx { flex: 1; min-width: 0; }
   .step h3 { font-size: 14px; font-weight: 600; }
-  .step p { font-size: 11.5px; color: #8391ab; margin-top: 3px; line-height: 1.5; }
-  .step.failed p { color: #fca5a5; }
+  .step p { font-size: 11.5px; color: var(--muted); margin-top: 3px; line-height: 1.5; }
+  .step.failed p { color: var(--err-soft); }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  #tip { min-height: 20px; font-size: 12.5px; color: #7c8aa5; text-align: center;
+  #tip { min-height: 20px; font-size: 12.5px; color: var(--sub); text-align: center;
     margin-top: 8px; }
-  #tip.ok { color: #34d399; }
-  #tip.warn { color: #fbbf24; }
+  #tip.ok { color: var(--ok); }
+  #tip.warn { color: var(--warn); }
 
   #acts { display: none; gap: 12px; justify-content: center; margin-top: 6px; }
   #acts button {
@@ -67,9 +103,9 @@
     border-radius: 10px; padding: 9px 22px; transition: transform .15s, opacity .15s;
   }
   #acts button:hover { transform: translateY(-2px); }
-  #btnRetry { background: #172a52; color: #60a5fa; border: 1px solid #2b3f6e; }
-  #btnSkip { background: transparent; color: #7f92b5; border: 1px solid #223050; }
-  .foot { color: #47556e; font-size: 11.5px; margin-top: 26px; }
+  #btnRetry { background: var(--retry-bg); color: var(--retry-txt); border: 1px solid var(--retry-line); box-shadow: var(--retry-shadow); }
+  #btnSkip { background: transparent; color: var(--dot-txt); border: 1px solid var(--dot-line); }
+  .foot { color: var(--foot); font-size: 11.5px; margin-top: 26px; }
 
   /* 批次61: 首启条款视图 — 盖住预热流程 (引擎后台照常预热), 同意后切回 */
   body.terms-mode .sub, body.terms-mode .panel,
@@ -78,18 +114,18 @@
   body.terms-mode #terms { display: flex; flex-direction: column; align-items: center; gap: 10px; }
   .tcard {
     width: min(560px, 92vw); border-radius: 13px; padding: 20px 26px 16px;
-    background: linear-gradient(160deg, #131a2a, #0e1422); border: 1px solid #202a44;
+    background: var(--card-grad); border: 1px solid var(--card-line); box-shadow: var(--card-shadow);
     display: flex; flex-direction: column; gap: 12px;
   }
   .tcard h2 { font-size: 16.5px; font-weight: 700; }
-  .tcard h2 em { font-style: normal; color: #2dd4bf; }
+  .tcard h2 em { font-style: normal; color: var(--brand); }
   .tbody {
     max-height: 44vh; overflow-y: auto; font-size: 12.5px; line-height: 1.85;
-    color: #aeb9cf; padding-right: 8px; user-select: text;
+    color: var(--tbody); padding-right: 8px; user-select: text;
   }
   .tbody p { margin: 0 0 9px; }
-  .tbody b { color: #e8ecf4; }
-  .tbody .tno { color: #fbbf24; }
+  .tbody b { color: var(--strong); }
+  .tbody .tno { color: var(--warn); }
   .tacts { display: flex; gap: 12px; justify-content: center; margin-top: 2px; }
   .tacts button {
     font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
@@ -97,9 +133,9 @@
   }
   .tacts button:hover { transform: translateY(-2px); }
   .tacts button:disabled { opacity: .55; cursor: default; transform: none; }
-  #btnAgree { background: #134e4a; color: #5eead4; border: 1px solid #2dd4bf66; }
-  #btnReject { background: transparent; color: #7f92b5; border: 1px solid #223050; }
-  .tfoot { color: #47556e; font-size: 11px; text-align: center; }
+  #btnAgree { background: var(--agree-bg); color: var(--agree-txt); border: 1px solid var(--agree-line); box-shadow: var(--agree-shadow); }
+  #btnReject { background: transparent; color: var(--dot-txt); border: 1px solid var(--dot-line); }
+  .tfoot { color: var(--foot); font-size: 11px; text-align: center; }
 </style>
 </head>
 <body>
@@ -237,6 +273,8 @@ document.getElementById("btnReject").addEventListener("click", async () => {
   setTip("您已拒绝使用条款, 应用即将退出…", "warn");
   try { await window.__TAURI__.core.invoke("reject_terms"); } catch (_) { /* 退出失败仅提示, 不做强制手段 */ }
 });
+// 主题切换控件: 右上角 (预热页无页头)
+if (window.adrTheme) window.adrTheme.mountSwitch();
 </script>
 </body>
 </html>

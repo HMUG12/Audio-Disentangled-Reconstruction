@@ -19,6 +19,12 @@
  * 先 apply() 静态节点, 再跑页面 onSwitch 重渲染动态内容, 最后再 apply()
  * 补扫动态生成的 data-i18n 节点。 */
 "use strict";
+/* 跨页公共键 (common.*): 主题切换按钮文案 — 与 theme.js LABELS 同键同文案 */
+const I18N_COMMON = {
+  "common.theme_default": ["主题：默认", "Theme: Default"],
+  "common.theme_classic": ["主题：经典", "Theme: Classic"],
+  "common.theme_title": ["切换配色主题（默认 / 经典）", "Switch color theme (Default / Classic)"],
+};
 const I = (() => {
   let lang = "zh", page = "", dict = {};
   const changeCbs = [];
@@ -62,13 +68,22 @@ const I = (() => {
     b.type = "button";
     b.textContent = lang === "zh" ? "EN" : "中文";
     b.onclick = () => setLang(lang === "zh" ? "en" : "zh");
-    b.style.cssText = "background:#fff;color:#6b7280;border:1.5px solid #e5e9f2;border-radius:999px;"
-      + "padding:8px 16px;font-size:13px;cursor:pointer;font-family:inherit;font-weight:600;"
-      + "margin-left:10px;flex:none;transition:.15s";
-    b.onmouseenter = () => { b.style.borderColor = "#10b981"; b.style.color = "#1f2937"; };
-    b.onmouseleave = () => { b.style.borderColor = "#e5e9f2"; b.style.color = "#6b7280"; };
+    const T = window.adrTheme;
+    if (T) T.pill(b); // 主题变量胶囊 (classic 下 var() 兜底 = 下方原值)
+    else {
+      b.style.cssText = "background:#fff;color:#6b7280;border:1.5px solid #e5e9f2;border-radius:999px;"
+        + "padding:8px 16px;font-size:13px;cursor:pointer;font-family:inherit;font-weight:600;"
+        + "margin-left:10px;flex:none;transition:.15s";
+      b.onmouseenter = () => { b.style.borderColor = "#10b981"; b.style.color = "#1f2937"; };
+      b.onmouseleave = () => { b.style.borderColor = "#e5e9f2"; b.style.color = "#6b7280"; };
+    }
     const header = document.querySelector("header");
-    if (header) { header.appendChild(b); return; }
+    if (header) {
+      header.appendChild(b);
+      if (T) T.mountSwitch(header); // 主题按钮紧随语言按钮
+      return;
+    }
+    if (T) { const h = T.fixedHost(); h.appendChild(b); T.mountSwitch(h); return; }
     b.style.cssText += ";position:fixed;top:16px;right:18px;z-index:98";
     document.body.appendChild(b);
   }
@@ -77,13 +92,14 @@ const I = (() => {
     try { localStorage.setItem("adr_lang", l); } catch {}
     const b = document.getElementById("langBtn");
     if (b) b.textContent = l === "zh" ? "EN" : "中文";
+    if (window.adrTheme) window.adrTheme.relabel();
     apply();
     changeCbs.forEach(f => { try { f(); } catch {} });
     apply(); // 补扫: onSwitch 重建的动态节点
   }
   function init(pg, opts) {
     page = pg;
-    dict = typeof I18N_DICT === "object" ? I18N_DICT : {};
+    dict = Object.assign({}, I18N_COMMON, typeof I18N_DICT === "object" ? I18N_DICT : {});
     lang = detect();
     injectSwitch();
     apply();

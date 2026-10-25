@@ -3,31 +3,47 @@
 <head>
 <meta charset="utf-8">
 <title>ADR Studio</title>
+<script src="theme.js"></script>
 <style>
-  :root { color-scheme: dark; }
+  /* classic: 原暗色配色 (变量取原值) */
+  :root {
+    color-scheme: dark;
+    --bg: #0b1120; --txt: #e2e8f0; --ring: #1e293b; --ring-top: #2dd4bf;
+    --status: #94a3b8; --hint: #475569;
+    --back-bg: #16202f; --back-txt: #aebad0; --back-line: #2b3a55;
+    --back-hover: #2dd4bf66; --back-hover-txt: #e8ecf4; --h1: #e2e8f0;
+  }
+  /* default: 浅蓝手绘风 */
+  [data-theme="default"] {
+    color-scheme: light;
+    --bg: #F0F7FF; --txt: #1A202C; --ring: #D6E9FD; --ring-top: #5EAAF7;
+    --status: #718096; --hint: #718096;
+    --back-bg: #FFFFFF; --back-txt: #2B6CB0; --back-line: #A9D0FA;
+    --back-hover: #2B6CB0; --back-hover-txt: #2B6CB0; --h1: #2B6CB0;
+  }
   html, body { height: 100%; margin: 0; }
   body {
     display: grid; place-items: center;
-    background: #0b1120; color: #e2e8f0;
+    background: var(--bg); color: var(--txt);
     font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
     user-select: none;
   }
   .box { text-align: center; }
   .ring {
     width: 56px; height: 56px; margin: 0 auto 24px;
-    border: 4px solid #1e293b; border-top-color: #2dd4bf;
+    border: 4px solid var(--ring); border-top-color: var(--ring-top);
     border-radius: 50%;
     animation: spin 0.9s linear infinite;
   }
-  h1 { font-size: 20px; font-weight: 600; margin: 0 0 8px; letter-spacing: .5px; }
-  #status { font-size: 13px; color: #94a3b8; min-height: 18px; }
-  .hint { font-size: 12px; color: #475569; margin-top: 28px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 8px; letter-spacing: .5px; color: var(--h1); }
+  #status { font-size: 13px; color: var(--status); min-height: 18px; }
+  .hint { font-size: 12px; color: var(--hint); margin-top: 28px; }
   #back {
-    display: none; margin: 22px auto 0; background: #16202f; color: #aebad0;
-    border: 1px solid #2b3a55; border-radius: 8px; padding: 8px 18px;
+    display: none; margin: 22px auto 0; background: var(--back-bg); color: var(--back-txt);
+    border: 1px solid var(--back-line); border-radius: 8px; padding: 8px 18px;
     font-size: 13px; cursor: pointer;
   }
-  #back:hover { border-color: #2dd4bf66; color: #e8ecf4; }
+  #back:hover { border-color: var(--back-hover); color: var(--back-hover-txt); }
   @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
@@ -52,6 +68,8 @@
       window.__TAURI__.core.invoke("back_to_launcher").catch(() => location.replace("launcher.html"));
     } else location.replace("launcher.html");
   }
+  // 主题切换控件: 右上角 (过渡页, 无页头)
+  if (window.adrTheme) window.adrTheme.mountSwitch();
 </script>
 </body>
 </html>
