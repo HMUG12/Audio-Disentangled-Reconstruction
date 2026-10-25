@@ -321,6 +321,14 @@
 - **真机验收（本机 GPU，RTF≈1.1）**：① 移走 profile/policy 首启 → 后台采样写出两文件，再启跳过；② 有 policy（10/30 已生效）→ 不重复调；③ 无 policy + `AUTOTUNE=0`，6 条 → 只记样本；④ 无 policy + autotune，8 条 → 中位 RTF 1.11 触发 `tune`，分块收至 10/30，记已知良好快照，后续请求正常
 - **遗留**：`adr policy --snapshot` 为独立进程，看不到服务进程内 Runtime 改动（以 stats 接口为准）；失败回退路径仅单测覆盖，未在真机制造失败；stats 事件 reason 在 PowerShell 5 显示乱码（客户端解码问题，待确认服务端 charset）
 
+**v1.3.1 安装包实测记录（2026-10-25，分支 main，v1.3.1）**：
+
+- **范围**：CPU / GPU 两个安装包各走一遍"静默安装 → 首启 → 建档触发采样 → Policy 生效"。本机 Xeon E5-2650 v3（20 物理核）+ RTX A2000 Laptop 8G（cc 8.6），数据目录走 legacy `F:\ADR_data`，服务端口 9881
+- **CPU 包**（ADR-Studio-1.3.1-x64-setup.exe，459 MB）：首启档案库空 → 跳过采样；建档 `cpufirst` 后当场调度采样，约 3.5 分钟完成 → profile `device=cpu`、default RTF=1.81 → policy overrides STREAM_HEAD=10 / SPLIT_MAX=30 / TORCH_THREADS=19（20 核留 1），日志确认已应用。RTF 与纪要 E5-2667 v3 锚点 ≈1.7 同量级
+- **GPU 包**（ADR-Studio-1.3.1-x64-gpu-setup.exe，1926 MB，torch 2.10.0+cu130）：移走 CPU 轮 profile/policy（备份 `*.cpurun_202610251207`）后首启 → 已有档案，后台自动采样约 1 分钟 → profile `device=cuda`、8.0G、default RTF=1.177、峰值显存 1170MB → overrides STREAM_HEAD=10 / SPLIT_MAX=30，不改线程数；STATIC_KV / CUDAGRAPH / 分桶 default 仅推荐，INT8 保持关。安装目录 runtime 跑 `adr policy --snapshot` 来源均为 policy / default，符合 conservative-v1
+- **构建问题与修复**：① `build_runtime.ps1` 写 requirements 时 PS 5.1 对中文注释 here-string 写入失败，pip 读到旧文件，CPU runtime 漏 4 个 G2P 包 → 加写回校验（83162d2）；② 旧 `build\runtime-gpu` 为修复前产物（缺 pip / PyYAML，服务起不来）→ 用修复后脚本重建；③ GPU 打包参数是 `-Gpu`，误传 `-AllowCuda` 被静默忽略、去检查 runtime-cpu；④ tauri / ISCC 的 stderr Info 被 PowerShell 转成 CLIXML Error、退出码 1，属误报，以产物时间戳为准
+- **遗留**：profile 按机器指纹存档、不区分设备，同机 CPU 包换 GPU 包会沿用 CPU 画像（含 TORCH_THREADS=19），需按 `device_info.type` 失效重采；沙箱环境下 GUI 进程随 shell 回收，GPU 轮未在服务进程内做合成 + stats 的 Runtime 观测（第二子批真机验收已覆盖）；旧版 unins000 静默卸载卡住，用新安装器覆盖安装绕过
+
 ### ④ Autopilot 与 v1.3 范围说明
 
 - **命名**：v1.3 "Autopilot"——纪要 Autopilot 技术线与原 H2 推理加速线合并为一条
