@@ -143,6 +143,42 @@ def test_engine_stream_request_level_admission(eng):
     assert eng.synth_busy() == 0 and eng.queue_depth() == 0
 
 
+def test_engine_n2_admits_two_but_serializes(monkeypatch, eng):
+    """N=2 固定份额 (批次64 第一子批): 两请求同时准入 (busy=2),
+    引擎 _lock 仍串行 — 合成区间不重叠, 无排队。"""
+    monkeypatch.setenv("ADR_SCHED_MAX_CONCURRENCY", "2")
+    eng._sched = SynthesisScheduler(2)
+    gate = threading.Event()
+    active, overlap, peak_busy = [0], [False], [0]
+    guard = threading.Lock()
+
+    class SlowTTS(FakeTTS):
+        def run(self, inputs):
+            with guard:
+                active[0] += 1
+                overlap[0] |= active[0] > 1
+            peak_busy[0] = max(peak_busy[0], eng.synth_busy())
+            gate.wait(timeout=2)
+            yield self.sr, np.full(160, 0.1, dtype=np.float32)
+            with guard:
+                active[0] -= 1
+
+    eng._tts = SlowTTS()
+    ths = [threading.Thread(target=eng.synthesize, args=("你好", "ref.wav"))
+           for _ in range(2)]
+    for t in ths:
+        t.start()
+    assert _wait_until(lambda: eng.synth_busy() == 2)
+    assert eng.queue_depth() == 0          # 两槽都准入, 不排队
+    gate.set()
+    for t in ths:
+        t.join(timeout=3)
+    assert not overlap[0]                  # 引擎锁串行, 合成不重叠
+    st = eng.sched_stats()
+    assert st["admitted_total"] == 2 and st["busy"] == 0
+    assert st["runtime"]["sched_budget"] == 2
+
+
 def test_engine_env_budget(monkeypatch):
     """ADR_SCHED_MAX_CONCURRENCY 贯通到引擎调度器。"""
     monkeypatch.setenv("ADR_SCHED_MAX_CONCURRENCY", "2")

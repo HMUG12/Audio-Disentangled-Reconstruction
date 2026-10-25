@@ -216,8 +216,9 @@ def wav_metadata_enabled() -> bool:
 def scheduler_max_concurrency() -> int:
     """调度层并发预算 (ADR_SCHED_MAX_CONCURRENCY, 批次63 第三子批 m10 ④)。
 
-    v1.3.0 交付 N=1 硬预算 (默认); >=2 为 N=2 固定份额 (1.3.x) 预留 —
-    真并行需等引擎内连续批处理内核, 当前 >1 仅放宽准入, 合成仍被引擎锁串行。
+    v1.3.0 交付 N=1 硬预算 (默认); >=2 为 N=2 固定份额 (v1.3.x 批次64 第一子批)。
+    真并行需 t2s 连续批处理内核 (bs>1 动态批, per-seq RNG + 音质门, 第二子批);
+    当前引擎 _lock 仍串行化, N=2 只放宽调度准入验证并发报告, 不减 RTF。
     非数字 / 小于 1 一律回落 1。
     """
     try:

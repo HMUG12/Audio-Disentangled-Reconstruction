@@ -364,7 +364,9 @@ class GSVEngine:
         self._lock = threading.Lock()
         self._loaded = {"t2s": None, "vits": None}   # 已热换权重路径 (批次9幂等跳过)
         # 批次63 第三子批 (m10 ④): N=1 硬预算调度 — 排队/预算/调度报告收口到
-        # SynthesisScheduler; _lock 仍是引擎态硬闸 (旁路调度者也被串行化)
+        # SynthesisScheduler; _lock 仍是引擎态硬闸 (旁路调度者也被串行化)。
+        # 批次64 第一子批: N=2 固定份额调度层, 放宽准入到 2 槽; _lock 仍串行化,
+        # 真并行需第二子批 t2s 连续批处理内核 (bs>1, per-seq RNG, 音质门)
         self._sched = SynthesisScheduler(settings.scheduler_max_concurrency())
         # v1.3.x Policy (conservative-v1): 只应用不影响音质的 overrides
         # (线程数 / 流式分块), 显式 env 优先; 构造时应用, 首个请求的切分即生效
