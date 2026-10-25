@@ -70,7 +70,7 @@ def test_empty_library_then_build_samples(env, caplog):
         gsv_engine.try_schedule_profile()
     assert "采样完成, policy 已生成并应用" in caplog.text
     mock_apply.assert_called_once()
-    assert (env / "profile_build_mock.json").exists()
+    assert (env / "profile_build_mock_cpu.json").exists()
     assert (env / "policy.json").exists()
     assert gsv_engine._PROFILE_STATE == "done"      # 测完不再调度
 
@@ -82,7 +82,9 @@ def test_existing_profile_marks_done(env, caplog):
 
     profiler.save_profile({"profile_id": profiler._machine_id(), "timestamp": 1.0,
                            "device_info": {"type": "cpu"}, "profiles": []})
-    gsv_engine._schedule_idle_profile()
+    with patch.object(profiler, "current_device_type", return_value="cpu"), \
+         patch("adr.core.policy.apply"):
+        gsv_engine._schedule_idle_profile()
     assert "本机已有 profile" in caplog.text
     assert gsv_engine._PROFILE_STATE == "done"
     assert gsv_engine._start_profile(0.0) is False
