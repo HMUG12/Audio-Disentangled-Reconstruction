@@ -714,3 +714,8 @@ def register_pages(app) -> None:
         if not f.is_file():
             raise HTTPException(status_code=404)
         return FileResponse(f, media_type="application/javascript")
+
+    # UI 主题层运行时 (default/classic 双主题, 缺省 default; 页面 <head> 同步引用防闪烁)
+    @app.get("/theme.js", include_in_schema=False)
+    async def _theme_js():
+        return FileResponse(STATIC_DIR / "theme.js", media_type="application/javascript")

@@ -502,6 +502,25 @@ def test_auth_static_pages_exempt(auth_client):
         assert r.status_code == 200, path
 
 
+def test_theme_js_served_and_pages_reference_it(client):
+    """主题层: /theme.js 同源提供; 四个控制台页在 <head> 引用; 桌面壳副本与服务端一致。"""
+    from pathlib import Path
+    r = client.get("/theme.js")
+    assert r.status_code == 200
+    assert "javascript" in r.headers["content-type"]
+    assert "adrTheme" in r.text and "adr.theme" in r.text
+    for path in ("/", "/pro", "/easy", "/call"):
+        html = client.get(path).text
+        head = html.split("</head>", 1)[0]
+        assert '<script src="/theme.js"></script>' in head, path
+    root = Path(__file__).resolve().parents[1]
+    srv = (root / "adr/server/static/theme.js").read_bytes()
+    assert (root / "desktop/src/theme.js").read_bytes() == srv
+    i18n = (root / "adr/server/static/i18n.js").read_text(encoding="utf-8")
+    for key in ("common.theme_default", "common.theme_classic", "common.theme_title"):
+        assert key in i18n, key
+
+
 def test_auth_wrong_key_401(auth_client):
     r = auth_client.get("/api/v2/tts",
                         params={"text": "hi", "ref_audio_path": "a.wav"},

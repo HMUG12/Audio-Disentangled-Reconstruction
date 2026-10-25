@@ -5,22 +5,54 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'">
 <title>ADR · 我的语音小助手</title>
+<script src="/theme.js"></script>
 <script src="/i18n.js"></script>
 <script src="/i18n-easy.js"></script>
 <style>
+  /* classic: 原绿色系浅色 (变量取原值) */
   :root {
     color-scheme: light;
     --bg: #f6f7fb; --card: #ffffff; --line: #e5e9f2;
     --txt: #1f2937; --sub: #6b7280; --dim: #9ca3af;
     --green: #10b981; --green-d: #059669; --blue: #3b82f6;
     --red: #ef4444; --amber: #f59e0b;
+    --glow1: #d1fae5aa; --glow2: #dbeafeaa;
+    --surface: #fff; --on-accent: #fff; --field: #fbfcfe;
+    --ring: #10b98118; --card-shadow: 0 8px 30px #1f293710;
+    --btn-g: linear-gradient(135deg, #10b981, #059669); --btn-g-shadow: 0 6px 18px #10b98140;
+    --tint: #ecfdf5; --tint2: #d1fae5; --soft: #eef2f7; --hover-line: #a7f3d0;
+    --sel-shadow: 0 4px 16px #10b98126; --up-line: #c7d2e0;
+    --sel-line: #d8dce8; --sel-txt: #2a2f3e;
+    --pbar: linear-gradient(90deg, #34d399, #10b981);
+    --rball: radial-gradient(circle at 34% 30%, #6ee7b7, #10b981 58%, #047857);
+    --rball-shadow: 0 10px 30px #10b98145;
+    --toast-bg: #1f2937; --toast-txt: #fff;
+  }
+  /* default: 浅蓝手绘风 (与新图标一致) */
+  [data-theme="default"] {
+    color-scheme: light;
+    --bg: #F0F7FF; --card: #FFFFFF; --line: #DCEBFB;
+    --txt: #1A202C; --sub: #718096; --dim: #7A8AA0;
+    --green: #5EAAF7; --green-d: #2B6CB0; --blue: #2B6CB0;
+    --red: #DC2626; --amber: #B7791F;
+    --glow1: rgba(94, 170, 247, 0.18); --glow2: rgba(43, 108, 176, 0.10);
+    --surface: #FFFFFF; --on-accent: #FFFFFF; --field: #FAFCFF;
+    --ring: rgba(94, 170, 247, 0.18); --card-shadow: 0 8px 24px rgba(94, 170, 247, 0.15);
+    --btn-g: linear-gradient(135deg, #5EAAF7, #3B8FE8); --btn-g-shadow: 0 4px 12px rgba(94, 170, 247, 0.3);
+    --tint: #EAF4FF; --tint2: #D6E9FD; --soft: #F0F7FF; --hover-line: #A9D0FA;
+    --sel-shadow: 0 4px 12px rgba(94, 170, 247, 0.3); --up-line: #B9D7F7;
+    --sel-line: #DCEBFB; --sel-txt: #1A202C;
+    --pbar: linear-gradient(90deg, #8EC3FA, #5EAAF7);
+    --rball: radial-gradient(circle at 34% 30%, #9CCBFA, #5EAAF7 58%, #2B6CB0);
+    --rball-shadow: 0 4px 12px rgba(94, 170, 247, 0.3);
+    --toast-bg: #1A202C; --toast-txt: #FFFFFF;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
     background:
-      radial-gradient(700px 400px at 90% -5%, #d1fae5aa, transparent 60%),
-      radial-gradient(600px 380px at -5% 105%, #dbeafeaa, transparent 60%),
+      radial-gradient(700px 400px at 90% -5%, var(--glow1), transparent 60%),
+      radial-gradient(600px 380px at -5% 105%, var(--glow2), transparent 60%),
       var(--bg);
     color: var(--txt); min-height: 100vh; font-size: 16px;
   }
@@ -28,7 +60,7 @@
   .logo { font-size: 20px; font-weight: 800; color: var(--green-d); letter-spacing: .3px; }
   .logo small { font-weight: 500; color: var(--sub); font-size: 13px; margin-left: 8px; }
   #back {
-    margin-left: auto; background: #fff; color: var(--sub); border: 1.5px solid var(--line);
+    margin-left: auto; background: var(--surface); color: var(--sub); border: 1.5px solid var(--line);
     border-radius: 999px; padding: 8px 18px; font-size: 13.5px; cursor: pointer;
     font-family: inherit; transition: .15s;
   }
@@ -42,13 +74,13 @@
   .stp .dot {
     width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center;
     justify-content: center; font-size: 18px; font-weight: 700;
-    background: #fff; color: var(--dim); border: 2.5px solid var(--line); transition: .25s;
+    background: var(--surface); color: var(--dim); border: 2.5px solid var(--line); transition: .25s;
   }
   .stp .lb { font-size: 13px; color: var(--dim); font-weight: 600; }
   .stp.on .dot { border-color: var(--green); color: var(--green-d);
-    box-shadow: 0 0 0 6px #10b98118; }
+    box-shadow: 0 0 0 6px var(--ring); }
   .stp.on .lb { color: var(--green-d); }
-  .stp.ok .dot { background: var(--green); border-color: var(--green); color: #fff; }
+  .stp.ok .dot { background: var(--green); border-color: var(--green); color: var(--on-accent); }
   .stp.ok .lb { color: var(--sub); }
   .ln { width: 54px; height: 3px; border-radius: 2px; background: var(--line);
     margin-bottom: 24px; transition: .3s; }
@@ -56,7 +88,7 @@
 
   .card {
     background: var(--card); border: 1.5px solid var(--line); border-radius: 22px;
-    padding: 30px 30px 34px; box-shadow: 0 8px 30px #1f293710;
+    padding: 30px 30px 34px; box-shadow: var(--card-shadow);
     animation: pop .28s ease;
   }
   @keyframes pop { from { opacity: 0; transform: translateY(10px) scale(.99); } to { opacity: 1; } }
@@ -69,10 +101,12 @@
     font-size: 17.5px; font-weight: 700; padding: 15px 30px; transition: .18s;
   }
   .btn.big { width: 100%; font-size: 19px; padding: 17px; }
-  .btn.g { background: linear-gradient(135deg, #10b981, #059669); color: #fff;
-    box-shadow: 0 6px 18px #10b98140; }
+  .btn.g { background: var(--btn-g); color: var(--on-accent);
+    box-shadow: var(--btn-g-shadow); }
   .btn.g:hover:not(:disabled) { filter: brightness(1.07); transform: translateY(-1px); }
-  .btn.w { background: #fff; color: var(--txt); border: 2px solid var(--line); font-weight: 600; }
+  .btn.w { background: var(--surface); color: var(--txt); border: 2px solid var(--line); font-weight: 600; }
+  [data-theme="default"] .btn.w { color: #2B6CB0; border-color: #A9D0FA; }
+  [data-theme="default"] .btn.w:hover:not(:disabled) { border-color: #2B6CB0; }
   .btn.w:hover:not(:disabled) { border-color: var(--green); }
   .btn.sm { font-size: 14px; padding: 9px 18px; border-radius: 12px; }
   .btn:disabled { opacity: .45; cursor: not-allowed; }
@@ -82,15 +116,15 @@
   @media (max-width: 480px) { .voices { grid-template-columns: 1fr; } }
   .vc {
     border: 2.5px solid var(--line); border-radius: 18px; padding: 20px 16px;
-    text-align: center; cursor: pointer; transition: .15s; background: #fbfcfe;
+    text-align: center; cursor: pointer; transition: .15s; background: var(--field);
   }
-  .vc:hover { border-color: #a7f3d0; transform: translateY(-2px); }
-  .vc.sel { border-color: var(--green); background: #ecfdf5;
-    box-shadow: 0 4px 16px #10b98126; }
+  .vc:hover { border-color: var(--hover-line); transform: translateY(-2px); }
+  .vc.sel { border-color: var(--green); background: var(--tint);
+    box-shadow: var(--sel-shadow); }
   .vc .ic { width: 52px; height: 52px; border-radius: 50%; margin: 0 auto 10px;
     display: flex; align-items: center; justify-content: center;
-    background: #eef2f7; }
-  .vc.sel .ic { background: #d1fae5; }
+    background: var(--soft); }
+  .vc.sel .ic { background: var(--tint2); }
   .vc .nm { font-weight: 700; font-size: 16.5px; }
   .vc .tag { font-size: 12px; color: var(--sub); margin-top: 4px; }
   .vc.add { border-style: dashed; color: var(--sub); display: flex; flex-direction: column;
@@ -100,25 +134,25 @@
 
   /* 上传区 */
   .up {
-    border: 2.5px dashed #c7d2e0; border-radius: 18px; padding: 34px 20px;
+    border: 2.5px dashed var(--up-line); border-radius: 18px; padding: 34px 20px;
     text-align: center; color: var(--sub); cursor: pointer; transition: .15s;
     position: relative; font-size: 15px; line-height: 1.7;
   }
-  .up:hover, .up.drag { border-color: var(--green); background: #ecfdf5; }
+  .up:hover, .up.drag { border-color: var(--green); background: var(--tint); }
   .up input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
   .up .big { font-size: 17px; font-weight: 700; color: var(--txt); }
-  .up.done { border-style: solid; border-color: var(--green); background: #ecfdf5; }
+  .up.done { border-style: solid; border-color: var(--green); background: var(--tint); }
 
   input[type=text] {
     width: 100%; border: 2px solid var(--line); border-radius: 14px;
     padding: 14px 16px; font-size: 17px; font-family: inherit; outline: none;
-    transition: border-color .15s; background: #fbfcfe;
+    transition: border-color .15s; background: var(--field); color: var(--txt);
   }
   input[type=text]:focus { border-color: var(--green); }
   textarea {
     width: 100%; border: 2px solid var(--line); border-radius: 16px;
     padding: 16px 18px; font-size: 17.5px; line-height: 1.75; font-family: inherit;
-    outline: none; resize: vertical; min-height: 150px; background: #fbfcfe;
+    outline: none; resize: vertical; min-height: 150px; background: var(--field); color: var(--txt);
     transition: border-color .15s;
   }
   textarea:focus { border-color: var(--green); }
@@ -126,15 +160,15 @@
 
   .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
   .chip {
-    background: #eef2f7; border: none; border-radius: 999px; padding: 8px 15px;
+    background: var(--soft); border: none; border-radius: 999px; padding: 8px 15px;
     font-size: 13.5px; color: var(--sub); cursor: pointer; font-family: inherit;
     transition: .15s;
   }
-  .chip:hover { background: #d1fae5; color: var(--green-d); }
+  .chip:hover { background: var(--tint2); color: var(--green-d); }
 
   .voicebar {
-    display: flex; align-items: center; gap: 10px; background: #ecfdf5;
-    border: 1.5px solid #a7f3d0; border-radius: 14px; padding: 11px 16px;
+    display: flex; align-items: center; gap: 10px; background: var(--tint);
+    border: 1.5px solid var(--hover-line); border-radius: 14px; padding: 11px 16px;
     margin-bottom: 18px; font-weight: 700;
   }
   .voicebar button {
@@ -146,34 +180,34 @@
   .loading { text-align: center; padding: 30px 0 10px; }
   .spin {
     width: 58px; height: 58px; border-radius: 50%; margin: 0 auto 18px;
-    border: 5px solid #d1fae5; border-top-color: var(--green);
+    border: 5px solid var(--tint2); border-top-color: var(--green);
     animation: rot 1s linear infinite;
   }
   @keyframes rot { to { transform: rotate(360deg); } }
   .loading .t1 { font-size: 19px; font-weight: 800; }
   .loading .t2 { color: var(--sub); font-size: 14px; margin-top: 8px; min-height: 40px;
     line-height: 1.6; }
-  .pbar { height: 12px; background: #eef2f7; border-radius: 7px; overflow: hidden; margin: 20px 0 8px; }
+  .pbar { height: 12px; background: var(--soft); border-radius: 7px; overflow: hidden; margin: 20px 0 8px; }
   .pbar > i { display: block; height: 100%; width: 0; border-radius: 7px;
-    background: linear-gradient(90deg, #34d399, #10b981); transition: width .6s ease; }
+    background: var(--pbar); transition: width .6s ease; }
   .ptxt { font-size: 13.5px; color: var(--sub); }
 
   .result { text-align: center; }
   .rball {
     width: 110px; height: 110px; border-radius: 50%; margin: 6px auto 18px;
-    background: radial-gradient(circle at 34% 30%, #6ee7b7, #10b981 58%, #047857);
-    box-shadow: 0 10px 30px #10b98145; display: flex; align-items: center;
+    background: var(--rball);
+    box-shadow: var(--rball-shadow); display: flex; align-items: center;
     justify-content: center; cursor: pointer; transition: .18s; border: none;
   }
   .rball:hover { transform: scale(1.05); }
-  .rball svg { width: 44px; height: 44px; fill: #fff; margin-left: 5px; }
+  .rball svg { width: 44px; height: 44px; fill: var(--on-accent); margin-left: 5px; }
   audio { width: 100%; margin: 18px 0 6px; }
   .brow { display: flex; gap: 12px; margin-top: 20px; flex-wrap: wrap; }
   .brow .btn { flex: 1; min-width: 140px; }
 
   .toast {
     position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%) translateY(16px);
-    background: #1f2937; color: #fff; padding: 12px 22px; border-radius: 14px;
+    background: var(--toast-bg); color: var(--toast-txt); padding: 12px 22px; border-radius: 14px;
     font-size: 14.5px; opacity: 0; pointer-events: none; transition: .25s; z-index: 99;
     max-width: 80vw;
   }
@@ -222,14 +256,14 @@
         <div data-i18n="easy.up_drag">也可以把文件拖进来 · 支持 wav / mp3 / flac / m4a / ogg</div>
       </div>
       <label class="lbl" id="wImproveRow" style="display:none;cursor:pointer">
-        <input type="checkbox" id="wImprove" checked style="accent-color:#10b981">
+        <input type="checkbox" id="wImprove" checked style="accent-color:var(--green)">
         <span data-i18n="easy.improve_a">🔁 改进已有声音「</span><span id="wImproveName"></span><span data-i18n="easy.improve_b">」— 用新录音继续训练，让它更像（旧版本自动保留，变差可回滚）</span>
       </label>
       <div class="lbl" id="vNameRow" data-i18n="easy.name_label">给这个声音起个名字</div>
       <input type="text" id="vName" value="我的声音" maxlength="20" data-i18n-value="easy.name_default">
       <!-- 批次53: 录音语种 — 决定档案标记, 影响后续合成默认语言 -->
       <div class="lbl" data-i18n="easy.rec_lang_label">这段录音说的是什么语言</div>
-      <select id="vLang" style="width:100%;padding:11px 12px;border:1px solid #d8dce8;border-radius:10px;background:#fff;font-size:14px;color:#2a2f3e">
+      <select id="vLang" style="width:100%;padding:11px 12px;border:1px solid var(--sel-line);border-radius:10px;background:var(--surface);font-size:14px;color:var(--sel-txt)">
         <option value="zh" selected data-i18n="easy.lang_zh">中文</option>
         <option value="en" data-i18n="easy.lang_en">English</option>
         <option value="ja" data-i18n="easy.lang_ja">日本語</option>
@@ -273,7 +307,7 @@
     <!-- 批次53: 合成语言选择 — auto 为引擎自动识别 (中英混说友好) -->
     <div style="margin-top:16px;display:flex;align-items:center;gap:10px">
       <span class="mini" style="flex:none" data-i18n="easy.t_lang_label">说什么语言</span>
-      <select id="tLang" style="flex:1;padding:9px 12px;border:1px solid #d8dce8;border-radius:10px;background:#fff;font-size:14px;color:#2a2f3e">
+      <select id="tLang" style="flex:1;padding:9px 12px;border:1px solid var(--sel-line);border-radius:10px;background:var(--surface);font-size:14px;color:var(--sel-txt)">
         <option value="auto" selected data-i18n="easy.tlang_auto">自动识别（中英混合也没问题）</option>
         <option value="zh" data-i18n="easy.lang_zh">中文</option>
         <option value="en" data-i18n="easy.lang_en">English</option>
@@ -388,7 +422,7 @@ function renderVoices() {
   g.innerHTML = voices.map(p => `
     <div class="vc${p.name === selected ? " sel" : ""}" data-n="${encodeURIComponent(p.name)}">
       <div class="ic">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="#10b981">
+        <svg width="24" height="24" viewBox="0 0 24 24" style="fill:var(--green)">
           <path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/>
         </svg>
       </div>

@@ -5,31 +5,57 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'">
 <title>ADR Studio · 调用控制台</title>
+<script src="/theme.js"></script>
 <script src="/i18n.js"></script>
 <script src="/i18n-call.js"></script>
 <style>
-  :root { color-scheme: dark; }
+  /* classic: 原暗色配色 (变量取原值) */
+  :root {
+    color-scheme: dark;
+    --bg: #0a0d14; --txt: #e8ecf4; --head-bg: #0d1119; --line: #1f2740;
+    --brand: #2dd4bf; --sub: #7c8aa5; --panel: #121724; --muted: #8391ab;
+    --ok-line: #2dd4bf55; --warn: #fbbf24; --warn-line: #fbbf2455;
+    --err: #f87171; --err-line: #f8717155;
+    --h2: #aab6cf; --field: #0d1119; --focus: #2dd4bf66; --seg-on: #1a2337;
+    --caret: #475a7d; --go-bg: #2dd4bf; --go-txt: #06281f; --go-shadow: none;
+    --hint: #5d6b87; --code-bg: #0a0e16; --code-txt: #c3cee3;
+    --copy-bg: #1a2337; --copy-line: #2a3a5f; --row-line: #161d2e; --panel-shadow: none;
+  }
+  /* default: 浅蓝手绘风 — 暗色页整体转浅色 */
+  [data-theme="default"] {
+    color-scheme: light;
+    --bg: #F0F7FF; --txt: #1A202C; --head-bg: #FFFFFF; --line: #DCEBFB;
+    --brand: #2B6CB0; --sub: #718096; --panel: #FFFFFF; --muted: #4A5568;
+    --ok-line: #A9D0FA; --warn: #B7791F; --warn-line: #F3D9A4;
+    --err: #C53030; --err-line: #F5C2C2;
+    --h2: #2B6CB0; --field: #FFFFFF; --focus: #5EAAF7; --seg-on: #EAF4FF;
+    --caret: #5EAAF7; --go-bg: #5EAAF7; --go-txt: #FFFFFF;
+    --go-shadow: 0 4px 12px rgba(94, 170, 247, 0.3);
+    --hint: #718096; --code-bg: #F7FBFF; --code-txt: #2D3748;
+    --copy-bg: #FFFFFF; --copy-line: #A9D0FA; --row-line: #EDF4FC;
+    --panel-shadow: 0 8px 24px rgba(94, 170, 247, 0.15);
+  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
-    background: #0a0d14; color: #e8ecf4; min-height: 100vh;
+    background: var(--bg); color: var(--txt); min-height: 100vh;
     display: flex; flex-direction: column; user-select: none;
   }
   header {
     display: flex; align-items: center; gap: 14px;
-    padding: 14px 18px; border-bottom: 1px solid #1f2740; background: #0d1119;
+    padding: 14px 18px; border-bottom: 1px solid var(--line); background: var(--head-bg);
   }
   .brand { font-size: 17px; font-weight: 700; letter-spacing: .5px; }
-  .brand em { font-style: normal; color: #2dd4bf; }
+  .brand em { font-style: normal; color: var(--brand); }
   .engstat {
-    margin-left: auto; font-size: 12.5px; color: #7c8aa5;
-    padding: 5px 12px; border: 1px solid #1f2740; border-radius: 99px; background: #121724;
+    margin-left: auto; font-size: 12.5px; color: var(--sub);
+    padding: 5px 12px; border: 1px solid var(--line); border-radius: 99px; background: var(--panel);
   }
-  .engstat.ok { color: #2dd4bf; border-color: #2dd4bf55; }
-  .engstat.busy { color: #fbbf24; border-color: #fbbf2455; }
-  .engstat.bad { color: #f87171; border-color: #f8717155; }
-  header a { color: #8391ab; font-size: 13px; text-decoration: none; }
-  header a:hover { color: #2dd4bf; }
+  .engstat.ok { color: var(--brand); border-color: var(--ok-line); }
+  .engstat.busy { color: var(--warn); border-color: var(--warn-line); }
+  .engstat.bad { color: var(--err); border-color: var(--err-line); }
+  header a { color: var(--muted); font-size: 13px; text-decoration: none; }
+  header a:hover { color: var(--brand); }
 
   main.cols {
     flex: 1; display: grid; grid-template-columns: minmax(340px, 5fr) minmax(360px, 6fr);
@@ -37,65 +63,65 @@
   }
   @media (max-width: 980px) { main.cols { grid-template-columns: 1fr; } }
   .panel {
-    background: #121724; border: 1px solid #1f2740; border-radius: 12px;
-    padding: 16px; margin-bottom: 14px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px; margin-bottom: 14px; box-shadow: var(--panel-shadow);
   }
   .panel h2 {
-    font-size: 13.5px; font-weight: 600; color: #aab6cf;
+    font-size: 13.5px; font-weight: 600; color: var(--h2);
     letter-spacing: .5px; margin-bottom: 12px; display: flex; align-items: center; gap: 10px;
   }
-  label { display: block; font-size: 12px; color: #7c8aa5; margin: 10px 0 4px; }
-  label b { color: #f87171; font-weight: 400; }
+  label { display: block; font-size: 12px; color: var(--sub); margin: 10px 0 4px; }
+  label b { color: var(--err); font-weight: 400; }
   input, select, textarea {
-    width: 100%; background: #0d1119; border: 1px solid #1f2740; border-radius: 8px;
-    color: #e8ecf4; font-size: 13px; padding: 8px 10px; font-family: inherit; outline: none;
+    width: 100%; background: var(--field); border: 1px solid var(--line); border-radius: 8px;
+    color: var(--txt); font-size: 13px; padding: 8px 10px; font-family: inherit; outline: none;
   }
-  input:focus, select:focus, textarea:focus { border-color: #2dd4bf66; }
+  input:focus, select:focus, textarea:focus { border-color: var(--focus); }
   textarea { resize: vertical; min-height: 84px; line-height: 1.5; }
   input[type=number] { appearance: textfield; }
   .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .four { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
-  .seg { display: flex; border: 1px solid #1f2740; border-radius: 8px; overflow: hidden; }
+  .seg { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
   .seg button {
-    flex: 1; background: #0d1119; border: none; color: #7c8aa5; font-size: 12.5px;
+    flex: 1; background: var(--field); border: none; color: var(--sub); font-size: 12.5px;
     padding: 8px 6px; cursor: pointer; font-family: inherit;
   }
-  .seg button.on { background: #1a2337; color: #2dd4bf; font-weight: 600; }
-  details { margin-top: 10px; border: 1px solid #1f2740; border-radius: 8px; padding: 0 12px; }
-  summary { cursor: pointer; font-size: 12.5px; color: #8391ab; padding: 9px 0; list-style: none; }
-  summary::before { content: "▸ "; color: #475a7d; }
+  .seg button.on { background: var(--seg-on); color: var(--brand); font-weight: 600; }
+  details { margin-top: 10px; border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; }
+  summary { cursor: pointer; font-size: 12.5px; color: var(--muted); padding: 9px 0; list-style: none; }
+  summary::before { content: "▸ "; color: var(--caret); }
   details[open] summary::before { content: "▾ "; }
   details .inner { padding: 2px 0 12px; }
   .go {
     width: 100%; margin-top: 14px; padding: 11px; border: none; border-radius: 9px;
-    background: #2dd4bf; color: #06281f; font-size: 14px; font-weight: 700;
-    cursor: pointer; font-family: inherit;
+    background: var(--go-bg); color: var(--go-txt); font-size: 14px; font-weight: 700;
+    cursor: pointer; font-family: inherit; box-shadow: var(--go-shadow);
   }
   .go:hover { filter: brightness(1.1); }
   .go:disabled { opacity: .55; cursor: wait; }
-  .hint { font-size: 11.5px; color: #5d6b87; margin-top: 9px; line-height: 1.6; }
+  .hint { font-size: 11.5px; color: var(--hint); margin-top: 9px; line-height: 1.6; }
   .tabs { margin-left: auto; display: flex; gap: 4px; }
   .tabs button {
-    background: #0d1119; border: 1px solid #1f2740; border-radius: 6px; color: #7c8aa5;
+    background: var(--field); border: 1px solid var(--line); border-radius: 6px; color: var(--sub);
     font-size: 11.5px; padding: 3px 10px; cursor: pointer; font-family: inherit;
   }
-  .tabs button.on { color: #2dd4bf; border-color: #2dd4bf55; }
+  .tabs button.on { color: var(--brand); border-color: var(--ok-line); }
   pre#code {
-    background: #0a0e16; border: 1px solid #1f2740; border-radius: 8px;
+    background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
     padding: 12px; font-size: 12px; line-height: 1.65; overflow: auto;
     max-height: 380px; white-space: pre-wrap; word-break: break-all;
-    user-select: text; color: #c3cee3;
+    user-select: text; color: var(--code-txt);
   }
-  .copy { margin-top: 8px; background: #1a2337; border: 1px solid #2a3a5f; color: #aab6cf;
+  .copy { margin-top: 8px; background: var(--copy-bg); border: 1px solid var(--copy-line); color: var(--h2);
     border-radius: 6px; font-size: 12px; padding: 5px 14px; cursor: pointer; font-family: inherit; }
-  .copy:hover { border-color: #2dd4bf66; color: #2dd4bf; }
+  .copy:hover { border-color: var(--focus); color: var(--brand); }
   audio { width: 100%; margin: 4px 0 8px; }
-  #meta { font-size: 12px; color: #8391ab; line-height: 1.7; }
-  #meta b { color: #2dd4bf; font-weight: 600; }
+  #meta { font-size: 12px; color: var(--muted); line-height: 1.7; }
+  #meta b { color: var(--brand); font-weight: 600; }
   table { width: 100%; border-collapse: collapse; font-size: 11.5px; margin-top: 8px; }
-  th { color: #5d6b87; font-weight: 500; text-align: left; padding: 4px 6px; border-bottom: 1px solid #1f2740; }
-  td { color: #8391ab; padding: 4px 6px; border-bottom: 1px solid #161d2e; }
-  td.ok { color: #2dd4bf; } td.err { color: #f87171; }
+  th { color: var(--hint); font-weight: 500; text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+  td { color: var(--muted); padding: 4px 6px; border-bottom: 1px solid var(--row-line); }
+  td.ok { color: var(--brand); } td.err { color: var(--err); }
 </style>
 </head>
 <body>
@@ -116,7 +142,7 @@
         <button data-ep="openai">OpenAI /v1/audio/speech</button>
       </div>
 
-      <label><span data-i18n="call.l_profile">音色档案 profile</span> <span id="profReq" style="color:#f87171">*</span></label>
+      <label><span data-i18n="call.l_profile">音色档案 profile</span> <span id="profReq" style="color:var(--err)">*</span></label>
       <select id="prof"><option value="" data-i18n="call.loading">加载中…</option></select>
 
       <div id="refRow" style="display:none">
@@ -219,9 +245,9 @@
         <thead><tr><th style="width:32%" data-i18n="call.th_neko_item">N.E.KO 设置项</th><th data-i18n="call.th_fill">填写内容</th><th style="width:56px"></th></tr></thead>
         <tbody>
           <tr><td data-i18n="call.td_provider">服务商类型</td><td colspan="2" data-i18n="call.td_openai_compat">OpenAI 兼容</td></tr>
-          <tr><td>API URL</td><td id="nekoUrl" style="word-break:break-all;color:#2dd4bf">—</td>
+          <tr><td>API URL</td><td id="nekoUrl" style="word-break:break-all;color:var(--brand)">—</td>
               <td><button class="copy" data-copy="nekoUrl" style="margin:0" data-i18n="call.copy_short">复制</button></td></tr>
-          <tr><td data-i18n="call.td_modelid">模型 ID</td><td id="nekoModel" style="word-break:break-all;color:#2dd4bf">—</td>
+          <tr><td data-i18n="call.td_modelid">模型 ID</td><td id="nekoModel" style="word-break:break-all;color:var(--brand)">—</td>
               <td><button class="copy" data-copy="nekoModel" style="margin:0" data-i18n="call.copy_short">复制</button></td></tr>
           <tr><td>API Key</td><td colspan="2" data-i18n="call.td_apikey_val">留空 (未设置 ADR_TTS_API_KEY 时本地免鉴权)</td></tr>
           <tr><td>Voice ID</td><td colspan="2" data-i18n="call.td_voiceid_val">留空 (模型 ID 已指定音色档案)</td></tr>
@@ -229,7 +255,7 @@
       </table>
       <div class="hint"><span data-i18n="call.neko_hint_a">模型 ID = ADR 音色档案名 (data/voices\ 下的目录名，左侧下拉选中的即会同步到这里)。
         API URL 推荐填完整端点地址 (左表所示)；若 N.E.KO 保存/连通时报 404，改填服务器根地址</span>
-        <b id="nekoBase" style="color:#2dd4bf">—</b><span data-i18n="call.neko_hint_b"> 再试——两种填法以能连通为准。</span></div>
+        <b id="nekoBase" style="color:var(--brand)">—</b><span data-i18n="call.neko_hint_b"> 再试——两种填法以能连通为准。</span></div>
     </div>
 
     <div class="panel">
