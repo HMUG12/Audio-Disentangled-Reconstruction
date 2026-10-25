@@ -87,13 +87,40 @@ def test_save_load_roundtrip(fake_engine, tmp_path, monkeypatch):
     monkeypatch.setenv("ADR_DATA_DIR", str(tmp_path))
     data = profiler.run_profile(text="你好", ref_audio="ref.wav", n_runs=1)
     path = profiler.save_profile(data)
-    assert path == tmp_path / f"profile_{data['profile_id']}.json"
+    assert path == tmp_path / f"profile_{data['profile_id']}_cpu.json"
     assert json.loads(path.read_text(encoding="utf-8")) == data
     assert profiler.load_profile() == data
 
 
 def test_load_missing_returns_none(tmp_path, monkeypatch):
     monkeypatch.setenv("ADR_DATA_DIR", str(tmp_path))
+    assert profiler.load_profile() is None
+
+
+def test_cpu_gpu_profiles_coexist(tmp_path, monkeypatch):
+    """同机 CPU / GPU 画像分文件并存, 按当前设备取, 换包不串用。"""
+    monkeypatch.setenv("ADR_DATA_DIR", str(tmp_path))
+    mid = profiler._machine_id()
+    cpu = {"profile_id": mid, "device_info": {"type": "cpu"}, "profiles": []}
+    gpu = {"profile_id": mid, "device_info": {"type": "cuda"}, "profiles": []}
+    profiler.save_profile(cpu)
+    monkeypatch.setattr(profiler, "current_device_type", lambda: "cuda")
+    assert profiler.load_profile() is None           # 只有 CPU 画像 → GPU 包须重采
+    profiler.save_profile(gpu)
+    assert profiler.load_profile() == gpu
+    monkeypatch.setattr(profiler, "current_device_type", lambda: "cpu")
+    assert profiler.load_profile() == cpu            # 换回 CPU 包不重采
+
+
+def test_legacy_profile_device_check(tmp_path, monkeypatch):
+    """v1.3.1 旧文件名 profile_<mid>.json: 设备一致沿用, 不一致视为无画像。"""
+    monkeypatch.setenv("ADR_DATA_DIR", str(tmp_path))
+    mid = profiler._machine_id()
+    old = {"profile_id": mid, "device_info": {"type": "cpu"}, "profiles": []}
+    (tmp_path / f"profile_{mid}.json").write_text(json.dumps(old), encoding="utf-8")
+    monkeypatch.setattr(profiler, "current_device_type", lambda: "cpu")
+    assert profiler.load_profile() == old
+    monkeypatch.setattr(profiler, "current_device_type", lambda: "cuda")
     assert profiler.load_profile() is None
 
 

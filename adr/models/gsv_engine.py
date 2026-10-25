@@ -1027,8 +1027,15 @@ def _idle_profile_worker(delay: float = _PROFILE_IDLE_DELAY) -> None:
         time.sleep(delay)
         from adr.core import policy, profiler
 
-        if profiler.load_profile() is not None:
+        existing = profiler.load_profile()
+        if existing is not None:
             log.info("[profile] 本机已有 profile, 跳过后台采样")
+            # 换包后当前设备画像已在, 但 policy.json 是另一设备生成的: 就地重新生成
+            pol = policy.load()
+            if pol is None or not policy._device_matches(pol):
+                policy.generate(existing)
+                policy.apply()
+                log.info("[profile] policy 与当前设备不一致, 已按本设备画像重新生成")
             return
         from adr.models.voice_library import list_voices
 

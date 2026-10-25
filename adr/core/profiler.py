@@ -4,7 +4,7 @@ v1.3.0 Autopilot 第一级: Profiler 采样 → Policy 配置档 (后者待 N≥
 RTF = 耗时/音频时长 (<1 快于实时)。
 纪要标定锚点: E5-2667 v3 RTF≈1.7 (CPU) / 4060Ti ≈2G (低配 GPU)。
 
-输出: <data_dir>/profile_<id>.json = {profile_id, timestamp, device_info, profiles[]}
+输出: <data_dir>/profile_<id>_<type>.json = {profile_id, timestamp, device_info, profiles[]}
 """
 from __future__ import annotations
 
@@ -172,11 +172,22 @@ def run_profile(
     }
 
 
+def current_device_type() -> str:
+    """当前推理设备类型 (cpu / cuda / unknown), 与 profile.device_info.type 同口径."""
+    return _get_device_info().get("type", "unknown")
+
+
+def _profile_file(profile_id: str, device_type: str) -> Path:
+    # key 含设备类型: 同机 CPU 包 / GPU 包画像并存, 换包不会命中对方的画像
+    from adr.core.config import adr_data_dir
+    return adr_data_dir() / f"profile_{profile_id}_{device_type}.json"
+
+
 def save_profile(data: dict, output_path: Path | None = None) -> Path:
-    """保存 profile JSON."""
+    """保存 profile JSON (默认 <data_dir>/profile_<id>_<type>.json)."""
     if output_path is None:
-        from adr.core.config import adr_data_dir
-        output_path = adr_data_dir() / f"profile_{data['profile_id']}.json"
+        dev = (data.get("device_info") or {}).get("type", "unknown")
+        output_path = _profile_file(data["profile_id"], dev)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
@@ -185,12 +196,29 @@ def save_profile(data: dict, output_path: Path | None = None) -> Path:
 
 
 def load_profile(path: Path | None = None) -> dict | None:
-    """读取本机 profile (默认取 <data_dir>/profile_<mid>.json)."""
-    if path is None:
-        from adr.core.config import adr_data_dir
-        mid = _machine_id()
-        path = adr_data_dir() / f"profile_{mid}.json"
-    if not path.exists():
+    """读取本机当前设备的 profile (默认 <data_dir>/profile_<mid>_<type>.json).
+
+    兼容 v1.3.1 及以前的 profile_<mid>.json (不带设备类型): 仅当其
+    device_info.type 与当前设备一致时采用, 否则视为无画像 (触发重采)。
+    """
+    if path is not None:
+        if not path.exists():
+            return None
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    mid, dev = _machine_id(), current_device_type()
+    path = _profile_file(mid, dev)
+    if path.exists():
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    from adr.core.config import adr_data_dir
+    legacy = adr_data_dir() / f"profile_{mid}.json"
+    if not legacy.exists():
         return None
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    with open(legacy, encoding="utf-8") as f:
+        data = json.load(f)
+    if (data.get("device_info") or {}).get("type") != dev:
+        log.info("[Profiler] 旧画像设备为 %s, 当前为 %s, 不沿用",
+                 (data.get("device_info") or {}).get("type"), dev)
+        return None
+    return data

@@ -59,8 +59,33 @@ def test_idle_profile_skip_when_profile_exists(isolated_env, caplog):
     }
     profiler.save_profile(fake_prof)
 
-    gsv_engine._idle_profile_worker()
+    with patch.object(profiler, "current_device_type", return_value="cpu"), \
+         patch("adr.core.policy.apply"):
+        gsv_engine._idle_profile_worker()
     assert "本机已有 profile, 跳过后台采样" in caplog.text
+
+
+def test_existing_profile_regenerates_stale_policy(isolated_env, caplog):
+    """换回已采过的设备: 画像命中跳过采样, 但另一设备的 policy.json 就地重新生成。"""
+    from adr.core import policy, profiler
+    from adr.models import gsv_engine
+
+    mid = profiler._machine_id()
+    gpu = {"profile_id": mid, "device_info": {"type": "cuda", "total_mem_gb": 8.0},
+           "profiles": [{"name": "default", "rtf": 0.5, "mem_mb": 1000}]}
+    profiler.save_profile(gpu)
+    policy.save(policy.infer({"profile_id": mid, "device_info": {"type": "cpu"},
+                              "profiles": [{"name": "default", "rtf": 1.8}]},
+                             physical_cores=8))
+    with patch.object(profiler, "current_device_type", return_value="cuda"), \
+         patch.object(profiler, "run_profile") as mock_run, \
+         patch.object(policy, "apply"):
+        gsv_engine._idle_profile_worker()
+    mock_run.assert_not_called()
+    assert "已按本设备画像重新生成" in caplog.text
+    new = policy.load()
+    assert new["basis"]["device"] == "cuda"
+    assert "ADR_TORCH_THREADS" not in new["overrides"]
 
 
 def test_idle_profile_skip_when_no_voices(isolated_env, caplog):
@@ -109,4 +134,4 @@ def test_idle_profile_samples_and_applies(isolated_env, tmp_path, caplog):
     policy_path = tmp_path / "policy.json"
     assert policy_path.exists()
     # profile 必须落盘, 否则下次启动会重复采样
-    assert (tmp_path / "profile_test_mock.json").exists()
+    assert (tmp_path / "profile_test_mock_cpu.json").exists()

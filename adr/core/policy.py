@@ -129,6 +129,20 @@ def generate(profile: dict | None, path: Path | None = None) -> dict:
     return pol
 
 
+def _device_matches(pol: dict) -> bool:
+    """policy 来源设备与当前设备一致 (同机换 CPU / GPU 包时旧 policy 作废)。
+    来源设备缺失 (手写 / 旧版) 时不拦。"""
+    src = (pol.get("basis") or {}).get("device")
+    if not src:
+        return True
+    try:
+        from adr.core import profiler
+        cur = profiler.current_device_type()
+        return cur == "unknown" or src == cur
+    except Exception:
+        return True
+
+
 # 本进程由 policy 写入的 env 键 (区分来源用; 显式 env 不在此表)
 _applied: dict[str, str] = {}
 
@@ -145,6 +159,10 @@ def apply(policy: dict | None = None) -> dict[str, str]:
     ver = pol.get("policy_version")
     if not isinstance(ver, int) or ver > POLICY_VERSION:
         log.warning("[Policy] policy_version=%r 不受支持 (当前 %d), 忽略", ver, POLICY_VERSION)
+        return {}
+    if not _device_matches(pol):
+        log.info("[Policy] policy 来源设备 %s 与当前设备不一致, 不应用 (待重采后重新生成)",
+                 (pol.get("basis") or {}).get("device"))
         return {}
     done: dict[str, str] = {}
     for k, v in (pol.get("overrides") or {}).items():
@@ -165,7 +183,8 @@ def export_snapshot() -> dict[str, Any]:
     """诊断导出: 全部调度相关键的当前生效值 + 来源 (env / policy / default)。"""
     pol = load()
     ver = (pol or {}).get("policy_version")
-    pending = ((pol or {}).get("overrides") or {}) if isinstance(ver, int) and ver <= POLICY_VERSION else {}
+    usable = isinstance(ver, int) and ver <= POLICY_VERSION and _device_matches(pol or {})
+    pending = ((pol or {}).get("overrides") or {}) if usable else {}
     keys = (*AUTO_KEYS, *GATED_KEYS, "ADR_SCHED_MAX_CONCURRENCY")
     eff = {}
     for k in keys:

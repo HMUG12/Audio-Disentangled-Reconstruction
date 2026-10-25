@@ -17,6 +17,8 @@ def _clean(monkeypatch, tmp_path):
     for k in _KEYS:
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setattr(policy, "_applied", {})
+    from adr.core import profiler                  # 不随测试机真实设备变化
+    monkeypatch.setattr(profiler, "current_device_type", lambda: "cpu")
 
 
 def _prof(dev: dict, rtf: float) -> dict:
@@ -119,6 +121,19 @@ def test_snapshot_without_apply_shows_pending(monkeypatch):
     monkeypatch.setenv("ADR_TTS_SPLIT_MAX", "50")
     eff = policy.export_snapshot()["effective"]
     assert eff["ADR_TTS_SPLIT_MAX"] == {"value": "50", "source": "env"}
+
+
+def test_device_mismatch_not_applied(monkeypatch):
+    """CPU 包生成的 policy (含 TORCH_THREADS) 在 GPU 包下不应用, 快照也不显示。"""
+    from adr.core import profiler
+    policy.save(policy.infer(CPU_SLOW, physical_cores=8))
+    monkeypatch.setattr(profiler, "current_device_type", lambda: "cuda")
+    assert policy.apply() == {}
+    assert "ADR_TORCH_THREADS" not in os.environ
+    eff = policy.export_snapshot()["effective"]
+    assert eff["ADR_TORCH_THREADS"]["source"] == "default"
+    monkeypatch.setattr(profiler, "current_device_type", lambda: "cpu")
+    assert policy.apply()["ADR_TORCH_THREADS"] == "7"
 
 
 def test_settings_chunk_defaults(monkeypatch):
