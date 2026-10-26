@@ -71,6 +71,16 @@ def test_is_safe_name_rejects_absolute_paths():
         assert not is_safe_name(bad), bad
 
 
+def test_is_safe_name_rejects_drive_relative():
+    """批次62: 盘符相对名 (无分隔符) 如 "D:evil" 必须拒绝。
+
+    pathlib 把 base/"D:evil" 解析为盘符相对路径, 丢掉 base 换到 D: 当前目录,
+    使 ref.wav/meta 落到档案库之外。":" 在合法档案名中无意义, 一律拦截。
+    """
+    for bad in ("D:evil", "d:rel", "C:data"):
+        assert not is_safe_name(bad), bad
+
+
 # ─── 批次41a: 鉴权常量时间比较 ───
 
 def test_auth_uses_compare_digest(monkeypatch):
@@ -417,3 +427,120 @@ def test_validate_weights_reject_garbage_file(tmp_path):
     p.write_text("this is not a weights file")
     with pytest.raises(ValueError, match="garbage.pth"):
         validate_weights_file(str(p))
+
+
+# ─── S2: CORS 白名单 + 来源/Host 守卫 (防跨站调用与 DNS 重绑定) ───
+
+PROFILES = "/api/adr/v1/profiles"
+
+
+@pytest.fixture
+def open_client(engine, monkeypatch):
+    """默认部署: 无 key、无额外白名单。"""
+    for k in ("ADR_TTS_API_KEY", "ADR_CORS_ORIGINS", "ADR_ALLOWED_HOSTS"):
+        monkeypatch.delenv(k, raising=False)
+    return TestClient(create_app(engine=engine))
+
+
+def test_s2_no_origin_client_allowed(open_client):
+    """N.E.K.O 后端 / curl 不带 Origin → 放行 (零改造兼容红线)。"""
+    assert open_client.get(PROFILES).status_code == 200
+
+
+def test_s2_cross_site_origin_blocked(open_client):
+    """恶意网页跨站请求 (CORS 拦不住简单 POST) → 守卫 403, 且无 ACAO 头。"""
+    r = open_client.get(PROFILES, headers={"Origin": "https://evil.example"})
+    assert r.status_code == 403
+    assert "access-control-allow-origin" not in r.headers
+    # 真实路由 (同源时无训练 → 409); 跨站在路由前即被拦 → 403
+    r = open_client.post("/api/adr/v1/train/stop",
+                         headers={"Origin": "https://evil.example"})
+    assert r.status_code == 403
+    assert open_client.post("/api/adr/v1/train/stop").status_code == 409
+
+
+def test_s2_null_origin_blocked(open_client):
+    r = open_client.get(PROFILES, headers={"Origin": "null"})
+    assert r.status_code == 403
+
+
+@pytest.mark.parametrize("origin", [
+    "http://testserver",            # 控制台同源 (Host=testserver)
+    "http://tauri.localhost",       # Windows 壳 launcher
+    "tauri://localhost",            # macOS/Linux 壳
+    "http://localhost:48911",       # 本机其他软件页面
+    "http://127.0.0.1:5173",
+])
+def test_s2_trusted_origins_allowed(open_client, origin):
+    r = open_client.get(PROFILES, headers={"Origin": origin})
+    assert r.status_code == 200
+
+
+def test_s2_cors_echoes_whitelisted_only(open_client):
+    ok = open_client.options(PROFILES, headers={
+        "Origin": "http://tauri.localhost",
+        "Access-Control-Request-Method": "GET"})
+    assert ok.headers.get("access-control-allow-origin") == "http://tauri.localhost"
+    bad = open_client.options(PROFILES, headers={
+        "Origin": "https://evil.example",
+        "Access-Control-Request-Method": "GET"})
+    assert bad.headers.get("access-control-allow-origin") is None
+
+
+@pytest.mark.parametrize("host", [
+    "127.0.0.1:9881", "localhost:9881", "[::1]:9881",
+    "192.168.1.20:9881", "adr", "mypc:9881",
+])
+def test_s2_host_literals_allowed(open_client, host):
+    assert open_client.get(PROFILES, headers={"Host": host}).status_code == 200
+
+
+def test_s2_dns_rebinding_host_blocked(open_client):
+    """DNS 重绑定: 浏览器同源, 但 Host 是攻击者域名 → 403。"""
+    r = open_client.get(PROFILES, headers={"Host": "rebind.evil.example:9881"})
+    assert r.status_code == 403
+
+
+def test_s2_ws_cross_site_rejected(open_client):
+    """WS 握手不受 CORS 约束, 由守卫在 accept 前拒绝 (4403)。"""
+    with pytest.raises(WebSocketDisconnect) as ei:
+        with open_client.websocket_connect(
+                WS_PATH, headers={"Origin": "https://evil.example"}):
+            pass
+    assert ei.value.code == 4403
+
+
+def test_s2_ws_same_origin_allowed(open_client):
+    with open_client.websocket_connect(
+            WS_PATH, headers={"Origin": "http://testserver"}):
+        pass
+
+
+def test_s2_env_whitelists(engine, monkeypatch):
+    monkeypatch.delenv("ADR_TTS_API_KEY", raising=False)
+    monkeypatch.setenv("ADR_CORS_ORIGINS", "https://app.example")
+    monkeypatch.setenv("ADR_ALLOWED_HOSTS", "mypc.local")
+    c = TestClient(create_app(engine=engine))
+    assert c.get(PROFILES, headers={"Origin": "https://app.example"}).status_code == 200
+    assert c.get(PROFILES, headers={"Host": "mypc.local:9881"}).status_code == 200
+    assert c.get(PROFILES, headers={"Origin": "https://evil.example"}).status_code == 403
+
+
+def test_s2_star_escape_hatch(engine, monkeypatch):
+    """ADR_CORS_ORIGINS=* / ADR_ALLOWED_HOSTS=* 恢复旧行为。"""
+    monkeypatch.delenv("ADR_TTS_API_KEY", raising=False)
+    monkeypatch.setenv("ADR_CORS_ORIGINS", "*")
+    monkeypatch.setenv("ADR_ALLOWED_HOSTS", "*")
+    c = TestClient(create_app(engine=engine))
+    r = c.get(PROFILES, headers={"Origin": "https://any.example",
+                                 "Host": "any.example"})
+    assert r.status_code == 200
+    assert r.headers.get("access-control-allow-origin") == "*"
+
+
+def test_s2_guard_off_when_api_key_set(auth_client):
+    """设了 key 由鉴权兜底: 守卫不介入 (反代/自定义域名部署), 鉴权照常生效。"""
+    h = {"Origin": "https://evil.example", "Host": "tts.example.com"}
+    assert auth_client.get(PROFILES, headers=h).status_code == 401
+    h["Authorization"] = "Bearer k1"
+    assert auth_client.get(PROFILES, headers=h).status_code == 200
