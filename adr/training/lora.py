@@ -291,26 +291,6 @@ def apply_lora(
     )
     return model
 
-
-def freeze_non_lora(model: nn.Module) -> int:
-    """冻结所有非 LoRA 参数 (只 LoRA 可训练)。
-
-    Returns:
-        可训练参数数量
-    """
-    n_train = 0
-    n_total = 0
-    for p in model.parameters():
-        n_total += p.numel()
-        p.requires_grad = False
-    for m in model.modules():
-        if isinstance(m, LoRALinear):
-            m.lora_A.requires_grad = True
-            m.lora_B.requires_grad = True
-            n_train += m.lora_A.numel() + m.lora_B.numel()
-    return n_train
-
-
 def get_lora_state_dict(model: nn.Module) -> Dict[str, torch.Tensor]:
     """提取 model 中所有 LoRA 参数 (state_dict 格式)。"""
     state = {}

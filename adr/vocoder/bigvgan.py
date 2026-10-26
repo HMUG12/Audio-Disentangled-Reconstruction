@@ -43,11 +43,24 @@ def _find_bigvgan_dir() -> Optional[Path]:
     return None
 
 
+# 批次66 #6: BigVGAN 官方源码用裸顶层名互相 import, 这些名字只在导入期间借用 sys.modules
+_BIGVGAN_TOPLEVEL = ("env", "activations", "utils", "bigvgan")
+_ATTRDICT = None  # env.AttrDict (导入后 env 不再留在 sys.modules, _load_model 用它)
+
+
 def _import_bigvgan_module(bigvgan_dir: Path) -> Optional[object]:
-    """动态 import BigVGAN 源码 (含 env / activations / alias_free_activation)。"""
+    """动态 import BigVGAN 源码 (含 env / activations / alias_free_activation)。
+
+    批次66 #6: 导入期间临时插入 sys.path 并让出同名模块, 结束后还原 sys.path 与原有
+    env/utils/activations/bigvgan 条目, 不再永久污染全局模块命名空间。
+    """
+    global _ATTRDICT
     bigvgan_dir = Path(bigvgan_dir).resolve()
-    if str(bigvgan_dir) not in sys.path:
+    inserted = str(bigvgan_dir) not in sys.path
+    if inserted:
         sys.path.insert(0, str(bigvgan_dir))
+    # 让出已存在的同名模块, 保证 BigVGAN 拿到自己的 utils/env
+    saved = {n: sys.modules.pop(n) for n in _BIGVGAN_TOPLEVEL if n in sys.modules}
 
     try:
         # 先 import env / activations / alias_free_activation (因为 bigvgan.py 依赖它们)
@@ -58,12 +71,22 @@ def _import_bigvgan_module(bigvgan_dir: Path) -> Optional[object]:
 
         # 再 import BigVGAN 主类
         from bigvgan import BigVGAN
+        _ATTRDICT = env.AttrDict
         return BigVGAN
     except Exception as e:
         get_logger("adr.vocoder.BigVGANVocoder").error(
             f"Failed to import BigVGAN from {bigvgan_dir}: {e}"
         )
         return None
+    finally:
+        for n in _BIGVGAN_TOPLEVEL:
+            sys.modules.pop(n, None)
+        sys.modules.update(saved)
+        if inserted:
+            try:
+                sys.path.remove(str(bigvgan_dir))
+            except ValueError:
+                pass
 
 
 @register("vocoder", "bigvgan")
@@ -160,15 +183,17 @@ class BigVGANVocoder(BaseVocoder):
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        from env import AttrDict
-        h = AttrDict(cfg_dict)
+        # 批次66 #6: 用导入时捕获的 AttrDict, env 已不在 sys.modules
+        h = _ATTRDICT(cfg_dict)
         h["use_cuda_kernel"] = False  # 默认 torch 版本,无需 CUDA 编译
 
         self._h = h
         self._model = self._BigVGAN(h, use_cuda_kernel=False).to(device)
 
         # 加载权重 — 处理 3 种 ckpt 格式
-        ckpt = torch.load(pt_file, map_location=device, weights_only=False)
+        # 批次65 显存双重加载: 先 map CPU,load_state_dict 再复制到已在 device 上的模型;
+        # 完整训练 ckpt 的判别器/优化器状态也不会被搬上 GPU
+        ckpt = torch.load(pt_file, map_location="cpu", weights_only=False)
         if isinstance(ckpt, dict) and "generator" in ckpt and isinstance(ckpt["generator"], dict):
             # 格式 1: {"generator": OrderedDict}
             state_dict = ckpt["generator"]

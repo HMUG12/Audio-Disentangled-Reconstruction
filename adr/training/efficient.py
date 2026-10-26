@@ -1,12 +1,11 @@
-"""M2 Training Stack 工具集 (高效训练 + 量化 + FlashAttn)。
+"""M2 Training Stack 工具集 (高效训练 + 量化)。
 
 组件:
-1. enable_flash_attention: 强制 nn.MultiheadAttention 用 SDPA (PyTorch 2.0+ FlashAttn)
-2. quantize_4bit: bitsandbytes NF4 量化 (QLoRA 基座)
-3. quantize_8bit: bitsandbytes 8-bit 量化
-4. get_memory_stats: GPU 显存统计
-5. estimate_model_memory: 估算模型所需显存
-6. print_trainable_parameters: 打印可训练参数统计
+1. quantize_4bit / dequantize_4bit: bitsandbytes NF4 量化 (QLoRA 基座)
+2. get_memory_stats: GPU 显存统计
+3. print_trainable_parameters: 打印可训练参数统计
+
+批次66: 删除无调用方的 enable_flash_attention / quantize_8bit / 显存估算函数
 
 所有函数都做 safe-fallback: 依赖缺失时不报错,只警告。
 """
@@ -24,56 +23,7 @@ _log = get_logger("adr.training.efficient")
 
 
 # ============================================================
-# Flash Attention (SDPA)
-# ============================================================
-def is_sdpa_available() -> bool:
-    """SDPA 是否可用 (PyTorch 2.0+)。"""
-    return hasattr(torch.nn.functional, "scaled_dot_product_attention")
-
-
-def get_sdpa_backends() -> dict:
-    """获取当前 SDPA 后端状态。"""
-    if not is_sdpa_available():
-        return {"available": False}
-    return {
-        "available": True,
-        "flash": torch.backends.cuda.flash_sdp_enabled() if torch.cuda.is_available() else None,
-        "mem_efficient": torch.backends.cuda.mem_efficient_sdp_enabled() if torch.cuda.is_available() else None,
-        "math": torch.backends.cuda.math_sdp_enabled() if torch.cuda.is_available() else None,
-    }
-
-
-def enable_flash_attention(model: nn.Module) -> int:
-    """强制 nn.MultiheadAttention 用 SDPA FlashAttn 后端。
-
-    返回启用的 attention 层数。
-    """
-    if not is_sdpa_available():
-        _log.warning("SDPA 不可用 (需要 PyTorch 2.0+)")
-        return 0
-
-    n = 0
-    for m in model.modules():
-        # nn.MultiheadAttention 在 batch_first=True 时,内部 forward 用 _native_sdp 或 _native_flash
-        # PyTorch 2.0+ 默认走 SDPA,这里只确保 backends 开启
-        if isinstance(m, nn.MultiheadAttention):
-            n += 1
-
-    if torch.cuda.is_available():
-        # 确保 flash 和 mem_efficient 开启
-        try:
-            torch.backends.cuda.enable_flash_sdp(True)
-            torch.backends.cuda.enable_mem_efficient_sdp(True)
-        except Exception as e:
-            _log.warning(f"启用 SDPA 后端失败: {e}")
-
-    _log.info(f"Flash Attention (SDPA): {n} 个 MHA 层, "
-              f"后端: {get_sdpa_backends()}")
-    return n
-
-
-# ============================================================
-# 4-bit / 8-bit 量化 (QLoRA)
+# 4-bit 量化 (QLoRA)
 # ============================================================
 def is_bnb_available() -> bool:
     """bitsandbytes 是否可用。"""
@@ -90,7 +40,7 @@ class _QuantizedSelfAttention(nn.Module):
     nn.MultiheadAttention 的 q/k/v 投影是裸 ``in_proj_weight`` Parameter,
     ``quantize_4bit`` 无法按 nn.Linear 处理, 因此单独用一个 4bit Linear 表示融合投影。
 
-    仅覆盖 SoVITS decoder 使用场景: batch_first=True, q=k=v, 无 mask。
+    仅覆盖 SoVITS decoder 使用场景: batch_first=True, q=k=v (mask 按 MHA 约定转换)。
     """
 
     def __init__(
@@ -151,10 +101,20 @@ class _QuantizedSelfAttention(nn.Module):
         k = k.view(B, L, self.num_heads, self.head_dim).transpose(1, 2)
         v = v.view(B, L, self.num_heads, self.head_dim).transpose(1, 2)
 
-        # SDPA 只接受 attn_mask; 把 key_padding_mask 并进去 (SoVITS 实际不传 mask)
+        # 批次66: 入参沿用 nn.MultiheadAttention 约定 (bool True=屏蔽, float=加性),
+        # 而 SDPA 的 bool True=参与; 统一转成加性 float mask 再合并, 避免语义反转与 bool|float 崩溃
+        def _additive(m: torch.Tensor) -> torch.Tensor:
+            if m.dtype == torch.bool:
+                return torch.zeros(m.shape, dtype=q.dtype, device=q.device).masked_fill(m, float("-inf"))
+            return m.to(dtype=q.dtype)
+
+        if attn_mask is not None:
+            attn_mask = _additive(attn_mask)
+            if attn_mask.dim() == 3:  # MHA 的 (B*H, L, S) 形式
+                attn_mask = attn_mask.view(B, self.num_heads, L, -1)
         if key_padding_mask is not None:
-            kpm = key_padding_mask.unsqueeze(1).unsqueeze(2)  # (B, 1, 1, L)
-            attn_mask = kpm if attn_mask is None else (attn_mask | kpm)
+            kpm = _additive(key_padding_mask).view(B, 1, 1, L)
+            attn_mask = kpm if attn_mask is None else attn_mask + kpm
 
         attn = torch.nn.functional.scaled_dot_product_attention(
             q, k, v,
@@ -278,44 +238,6 @@ def quantize_4bit(
         return model
 
 
-def quantize_8bit(model: nn.Module) -> nn.Module:
-    """用 bitsandbytes 8-bit 量化 nn.Linear (节省 ~2x 权重显存)。"""
-    if not is_bnb_available():
-        _log.warning("bitsandbytes 未装,跳过 8-bit 量化")
-        return model
-
-    try:
-        from bitsandbytes.nn import Linear8bitLt
-
-        n_replaced = 0
-        for name, module in list(model.named_modules()):
-            if isinstance(module, nn.Linear) and not isinstance(module, Linear8bitLt):
-                if hasattr(module, "is_lora") and module.is_lora:
-                    continue
-
-                new_layer = Linear8bitLt(
-                    module.in_features,
-                    module.out_features,
-                    bias=module.bias is not None,
-                    has_fp16_weights=False,
-                )
-                with torch.no_grad():
-                    new_layer.weight = module.weight
-                    if module.bias is not None:
-                        new_layer.bias = module.bias
-
-                parent_name, _, child_name = name.rpartition(".")
-                parent = model.get_submodule(parent_name) if parent_name else model
-                setattr(parent, child_name, new_layer)
-                n_replaced += 1
-
-        _log.info(f"8-bit 量化: 替换 {n_replaced} 个 Linear")
-        return model
-    except Exception as e:
-        _log.warning(f"8-bit 量化失败: {e}")
-        return model
-
-
 def has_quantized_modules(model: nn.Module) -> bool:
     """判断模型是否含 4bit 量化层 (Linear4bit / 量化 LoRA 基座 / 量化 attention)。"""
     for m in model.modules():
@@ -404,66 +326,6 @@ def get_memory_stats(device: Optional[torch.device] = None) -> dict:
     stats["free_MB"] = total - stats["reserved_MB"]
     stats["utilization_pct"] = (stats["reserved_MB"] / total) * 100
     return stats
-
-
-def print_memory_stats(prefix: str = "", device: Optional[torch.device] = None):
-    """打印显存统计。"""
-    stats = get_memory_stats(device)
-    if not stats.get("cuda_available"):
-        print(f"{prefix}[memory] CUDA 不可用")
-        return
-    print(
-        f"{prefix}[memory] "
-        f"allocated={stats['allocated_MB']:.1f}MB, "
-        f"reserved={stats['reserved_MB']:.1f}MB, "
-        f"max={stats['max_allocated_MB']:.1f}MB, "
-        f"total={stats['total_MB']:.0f}MB, "
-        f"util={stats['utilization_pct']:.1f}%"
-    )
-
-
-def estimate_model_memory(
-    n_params: int,
-    dtype_bytes: int = 4,  # fp32=4, fp16/bf16=2, int8=1
-    optimizer_factor: float = 8.0,  # Adam: 8 bytes/param (m, v in fp32)
-    grad_factor: float = 4.0,  # gradient (同 dtype)
-) -> dict:
-    """估算训练一个模型需要的显存。
-
-    Args:
-        n_params: 模型参数量
-        dtype_bytes: 参数 dtype 字节
-        optimizer_factor: 优化器状态倍率 (Adam 8x, SGD 0x, 8-bit AdamW ~2x)
-        grad_factor: 梯度倍率
-
-    Returns:
-        {param_MB, grad_MB, optim_MB, total_MB}
-    """
-    param_MB = n_params * dtype_bytes / 1024**2
-    grad_MB = n_params * grad_factor / 1024**2
-    optim_MB = n_params * optimizer_factor / 1024**2
-    return {
-        "n_params": n_params,
-        "param_MB": param_MB,
-        "grad_MB": grad_MB,
-        "optim_MB": optim_MB,
-        "total_MB": param_MB + grad_MB + optim_MB,
-    }
-
-
-def estimate_inference_memory(
-    n_params: int,
-    dtype_bytes: int = 2,  # fp16/bf16
-    activation_MB: float = 500,  # 激活 (粗略)
-) -> dict:
-    """估算推理所需显存。"""
-    param_MB = n_params * dtype_bytes / 1024**2
-    return {
-        "n_params": n_params,
-        "param_MB": param_MB,
-        "activation_MB": activation_MB,
-        "total_MB": param_MB + activation_MB,
-    }
 
 
 # ============================================================
