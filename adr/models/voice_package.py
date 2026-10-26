@@ -20,9 +20,11 @@
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
+import threading
 import time
 import zipfile
 from pathlib import Path
@@ -42,6 +44,15 @@ _META = "meta.json"
 _REF = "ref.wav"
 _WPREFIX = "weights/"
 _CHUNK = 1 << 20
+
+# 批次66: zip-bomb 防护 — 按 ZipInfo.file_size (解压后声明大小) 在解压前拦截。
+# zipfile 读成员时不会吐出超过 file_size 的字节 (超出即 CRC/长度报错), 声明值可作上界。
+# 正常包: 权重合计 < 1GB, manifest/meta 仅 KB 级; 默认值远高于正常用量。
+_MAX_TOTAL_BYTES = int(os.getenv("ADR_IMPORT_MAX_TOTAL_MB", "4096")) << 20
+# manifest/meta 会整块读进内存, 单独限小
+_MAX_INMEM_BYTES = int(os.getenv("ADR_IMPORT_MAX_INMEM_MB", "16")) << 20
+
+_IMPORT_LOCK = threading.Lock()   # 批次66: 进程内串行导入 (见 import_voice)
 
 Progress = Optional[Callable[[str], None]]
 
@@ -183,14 +194,33 @@ def import_voice(pkg_path: str, name: Optional[str] = None,
     pkg = Path(pkg_path)
     if not pkg.exists():
         raise ValueError(f"包不存在: {pkg}")
-    created: list[Path] = []   # 本 次 新建文件 (失败回滚用)
+    # 批次66: 锁包住整个导入含失败回滚, 修冲突检查与落位间的 TOCTOU。
+    # _IMPORT_LOCK 串行全部导入 (权重目录/暂存名跨档案共享, 同名权重会互相覆盖);
+    # held 内再挂 profile_lock(目标名), 与 save/bind/rollback 等同名写者互斥。
+    with _IMPORT_LOCK, contextlib.ExitStack() as held:
+        return _import_voice(pkg, name, overwrite, progress, held)
 
+
+def _import_voice(pkg: Path, name: Optional[str], overwrite: bool,
+                  progress: Progress, held: contextlib.ExitStack) -> dict:
+    created: list[Path] = []   # 本次暂存的临时文件 (失败回滚只删这些, 不碰既有档案)
     try:
         with zipfile.ZipFile(pkg) as zf:
             names = set(zf.namelist())
             for must in (_MANIFEST, _META, _REF):
                 if must not in names:
                     raise ValueError(f"包缺少 {must}, 不是有效的音色档案包")
+            # 批次66: 解压前按声明大小拦 zip-bomb (任何 read/解压之前)
+            total = sum(i.file_size for i in zf.infolist())
+            if total > _MAX_TOTAL_BYTES:
+                raise ValueError(
+                    f"包解压后总大小 {total >> 20}MB 超上限 "
+                    f"{_MAX_TOTAL_BYTES >> 20}MB (ADR_IMPORT_MAX_TOTAL_MB 可调)")
+            for must in (_MANIFEST, _META):
+                if zf.getinfo(must).file_size > _MAX_INMEM_BYTES:
+                    raise ValueError(
+                        f"包内 {must} 解压后超上限 {_MAX_INMEM_BYTES >> 20}MB "
+                        f"(ADR_IMPORT_MAX_INMEM_MB 可调)")
             manifest = json.loads(zf.read(_MANIFEST))
             if manifest.get("format") != FORMAT:
                 raise ValueError("manifest.format 不符, 不是 ADR 音色档案包")
@@ -206,6 +236,7 @@ def import_voice(pkg_path: str, name: Optional[str] = None,
             target = (name or manifest.get("name") or "").strip()
             if not is_safe_name(target):
                 raise ValueError(f"音色名非法: {target!r}")
+            held.enter_context(voice_library.profile_lock(target))   # 批次66
             vdir = voice_library.VOICES_DIR / target
             # 冲突判据 = 已有真实档案 (meta.json); 残留半截目录 (仅 ref) 放行续用
             if (vdir / "meta.json").exists() and not overwrite:
@@ -233,29 +264,34 @@ def import_voice(pkg_path: str, name: Optional[str] = None,
                     _log(progress, f"{kind}: 本机已存在同 hash 权重, 复用 {dst.name}")
                 placements[kind] = dst
 
-            # 落权重 → 校验 → 落 ref/meta (失败回滚本次新建)
+            # 两段式提交 (批次62): 先把权重/ref/meta 全部写成临时文件并校验,
+            # meta 解析也在替换之前完成; 全部通过后才一次性 os.replace 落位。
+            # 任何中途失败只删临时文件 (created), 既有档案的 ref.wav/权重不受损;
+            # overwrite 走临时文件替换, 修复旧实现 "overwrite 不覆盖旧权重字节"。
+            commits: list[tuple[str, Path, Path]] = []   # (kind, tmp, final)
             for kind, rel in plan.items():
                 dst = placements[kind]
-                if not dst.exists():
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    _copy_member(zf, rel, dst)
-                    created.append(dst)
-                    _log(progress, f"{kind} → {dst}")
-            try:
-                from adr.models.gsv_engine import validate_weights_file
-                for kind in ("t2s", "vits"):
-                    if kind in placements:
-                        _log(progress, f"校验 {kind} 权重...")
-                        validate_weights_file(str(placements[kind]))
-            except Exception:
-                for f in created:
-                    f.unlink(missing_ok=True)
-                raise
+                if dst.exists() and not overwrite:
+                    continue   # 同 hash 复用 (前置预检已保证字节一致)
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                tmp = dst.with_name(dst.name + ".adrimport.tmp")
+                _copy_member(zf, rel, tmp)
+                created.append(tmp)
+                commits.append((kind, tmp, dst))
+                _log(progress, f"{kind} → {dst} (暂存)")
+
+            from adr.models.gsv_engine import validate_weights_file
+            for kind, tmp, _dst in commits:
+                if kind in ("t2s", "vits"):
+                    _log(progress, f"校验 {kind} 权重...")
+                    validate_weights_file(str(tmp))
 
             vdir.mkdir(parents=True, exist_ok=True)
-            (vdir / _REF).write_bytes(zf.read(_REF))
-            created.append(vdir / _REF)
-            pmeta = json.loads(zf.read(_META))
+            ref_tmp = vdir / (_REF + ".adrimport.tmp")
+            created.append(ref_tmp)
+            _copy_member(zf, _REF, ref_tmp)   # 批次66: 流式落盘, 不整块读进内存
+
+            pmeta = json.loads(zf.read(_META))   # 损坏包在此抛错, 既有档案此刻完好
             pmeta["name"] = target
             for kind, field in _FIELDS.items():
                 if kind not in placements:
@@ -264,10 +300,16 @@ def import_voice(pkg_path: str, name: Optional[str] = None,
                     pmeta[field] = placements[kind].name   # weight_root 下纯文件名
                 else:
                     pmeta[field] = str(placements[kind])   # 本机绝对路径
-            tmp = vdir / "meta.json.tmp"
-            tmp.write_text(json.dumps(pmeta, ensure_ascii=False, indent=2),
-                           encoding="utf-8")
-            os.replace(str(tmp), str(vdir / "meta.json"))
+            meta_tmp = vdir / "meta.json.tmp"
+            meta_tmp.write_text(json.dumps(pmeta, ensure_ascii=False, indent=2),
+                                encoding="utf-8")
+            created.append(meta_tmp)
+
+            # ---- 提交: 全部校验/解析通过后才做破坏性替换 ----
+            for _kind, tmp, dst in commits:
+                os.replace(str(tmp), str(dst))
+            os.replace(str(ref_tmp), str(vdir / _REF))
+            os.replace(str(meta_tmp), str(vdir / "meta.json"))
     except Exception:
         for f in created:
             f.unlink(missing_ok=True)

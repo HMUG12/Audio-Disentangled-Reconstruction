@@ -12,7 +12,9 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -31,7 +33,9 @@ def is_safe_name(name: str) -> bool:
     """
     if not name:
         return False
-    if any(ch in name for ch in ("/", "\\", "\x00")):
+    # ":" 拦 Windows 盘符相对名 (如 "D:evil"): pathlib join 会丢基路径换盘符,
+    # 把 ref/meta 写出档案库外 (批次62); 冒号在合法档案名中本就无意义。
+    if any(ch in name for ch in ("/", "\\", "\x00", ":")):
         return False
     if ".." in name:
         return False
@@ -93,12 +97,36 @@ def _materialize_ref(src: str, dst: Path) -> dict:
             "orig_s": round(dur, 2)}
 
 
+# 批次66: 档案级进程内锁 — meta 读-改-写 (save/bind/finalize/rollback/import)
+# 同名档案串行, 防并发丢更新。仅进程内; 跨进程并发写同名档案不在保护范围。
+_LOCKS: dict[str, threading.RLock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def profile_lock(name: str) -> threading.RLock:
+    """同名档案共用一把可重入锁 (批次66)。"""
+    with _LOCKS_GUARD:
+        return _LOCKS.setdefault(name, threading.RLock())
+
+
 def _write_meta(vdir: Path, meta: dict) -> None:
     """meta 原子写 (.tmp 中转 + os.replace) — 断电/并发读不会见到半截 JSON。"""
-    tmp_path = vdir / "meta.json.tmp"
-    tmp_path.write_text(
-        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(str(tmp_path), str(vdir / "meta.json"))
+    # 批次66: tmp 名唯一 (旧固定 meta.json.tmp 并发会互相截断);
+    # Windows 下目标被读者短暂占用时 os.replace 抛 PermissionError, 短重试。
+    tmp_path = vdir / f"meta.json.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    try:
+        tmp_path.write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        for attempt in range(10):
+            try:
+                os.replace(str(tmp_path), str(vdir / "meta.json"))
+                return
+            except PermissionError:
+                if attempt == 9:
+                    raise
+                time.sleep(0.02 * (attempt + 1))
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def save_voice(
@@ -128,6 +156,15 @@ def save_voice(
         vdir.resolve().relative_to(VOICES_DIR.resolve())
     except (ValueError, OSError):
         raise ValueError(f"音色名解析后越出档案库目录: {name!r}") from None
+    with profile_lock(name):   # 批次66: ref + meta 整体与同名其他写者串行
+        return _save_voice_locked(vdir, name, ref_audio, prompt_text, t2s_weights,
+                                  vits_weights, rvc_weights, rvc_index, style,
+                                  language, source, consent)
+
+
+def _save_voice_locked(vdir, name, ref_audio, prompt_text, t2s_weights,
+                       vits_weights, rvc_weights, rvc_index, style, language,
+                       source, consent) -> Path:
     vdir.mkdir(parents=True, exist_ok=True)
     dst = vdir / "ref.wav"
     _materialize_ref(ref_audio, dst)
@@ -152,7 +189,6 @@ def save_voice(
         "sampling": prev_sampling,
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
-    meta_path = vdir / "meta.json"
     _write_meta(vdir, meta)
     return vdir
 
@@ -173,6 +209,11 @@ def bind_weights(
     """
     if not is_safe_name(name):
         raise ValueError(f"音色档案名非法: {name!r}")
+    with profile_lock(name):   # 批次66: 读-改-写整体加锁防丢更新
+        return _bind_weights_locked(name, vits_weights, t2s_weights, sim, note)
+
+
+def _bind_weights_locked(name, vits_weights, t2s_weights, sim, note) -> dict:
     vdir = VOICES_DIR / name
     meta_path = vdir / "meta.json"
     if not meta_path.exists():
@@ -209,6 +250,11 @@ def finalize_bind_sim(name: str, sim: float) -> Optional[dict]:
     """
     if not is_safe_name(name):
         raise ValueError(f"音色档案名非法: {name!r}")
+    with profile_lock(name):   # 批次66
+        return _finalize_bind_sim_locked(name, sim)
+
+
+def _finalize_bind_sim_locked(name: str, sim: float) -> Optional[dict]:
     meta_path = VOICES_DIR / name / "meta.json"
     if not meta_path.exists():
         return None
@@ -252,6 +298,11 @@ def rollback_voice(name: str) -> dict:
     """
     if not is_safe_name(name):
         raise ValueError(f"音色档案名非法: {name!r}")
+    with profile_lock(name):   # 批次66
+        return _rollback_voice_locked(name)
+
+
+def _rollback_voice_locked(name: str) -> dict:
     vdir = VOICES_DIR / name
     meta_path = vdir / "meta.json"
     if not meta_path.exists():
