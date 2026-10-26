@@ -86,7 +86,13 @@ class RVCEngine:
                 index_path or "", index_rate, 0, rms_mix_rate, protect,
             )
         import numpy as np
+        # 批次66: vc_single 失败路径返回 (info, (sr|None, None)); 旧代码
+        # asarray(None) → array(nan) 静默写出坏音频, 改为显式报错
+        if audio is None or sr is None:
+            raise RuntimeError(f"RVC 转换失败: {info}")
         audio = np.asarray(audio, dtype=np.float32)
+        if audio.size == 0 or not np.isfinite(audio).all():
+            raise RuntimeError(f"RVC 转换输出无效音频 (空或含 NaN/Inf): {info}")
         if np.abs(audio).max() > 1.5:
             audio = audio / 32768.0
         return audio, int(sr)
