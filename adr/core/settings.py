@@ -50,8 +50,40 @@ def api_keys() -> list[str]:
 
 
 def has_api_key() -> bool:
-    """ADR_TTS_API_KEY 是否设置 (strip 非空) — __main__ 启动警告判据。"""
-    return bool(os.environ.get("ADR_TTS_API_KEY", "").strip())
+    """是否有可用 key — __main__ 启动警告判据。
+
+    批次66: 与 api_keys() 同口径 (原只看整串 strip, " , " 判为有 key 但鉴权实际关闭)。"""
+    return bool(api_keys())
+
+
+# Tauri 壳 webview 来源 (macOS/Linux: tauri://localhost; Windows WebView2:
+# http(s)://tauri.localhost) — launcher.html 跨源 fetch 档案列表要用
+TAURI_ORIGINS = (
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+)
+
+
+def _csv_env(name: str) -> list[str]:
+    raw = os.environ.get(name, "")
+    return [v.strip() for v in raw.split(",") if v.strip()]
+
+
+def cors_origins() -> list[str]:
+    """ADR_CORS_ORIGINS — 逗号分隔的额外允许来源 (S2)。
+
+    默认只允许 Tauri 壳 + 本机 localhost 页面 + 控制台同源;
+    设为 ``*`` 恢复旧的 CORS 全开 (并关闭来源守卫)。"""
+    return _csv_env("ADR_CORS_ORIGINS")
+
+
+def allowed_hosts() -> list[str]:
+    """ADR_ALLOWED_HOSTS — 逗号分隔的额外允许 Host 主机名 (S2, 防 DNS 重绑定)。
+
+    IP 字面量与 localhost 恒允许; 用局域网主机名 (如 mypc.local) 访问时
+    需加到这里; ``*`` 关闭 Host 检查。"""
+    return _csv_env("ADR_ALLOWED_HOSTS")
 
 
 def default_profile() -> str | None:

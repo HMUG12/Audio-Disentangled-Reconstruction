@@ -130,6 +130,8 @@ python -m adr.server --addr 0.0.0.0
 
 客户端凭据三选一：`Authorization: Bearer <key>` / `X-API-Key: <key>` 头 / `?api_key=<key>` 查询参数。监听 `0.0.0.0` 且未设置 key 时，局域网内任何设备均可**无鉴权**调用（启动横幅会打安全警告）。
 
+未设置 key 时，服务会拦截浏览器跨站请求，防止你访问的网页偷调本机服务：只接受控制台同源、桌面壳、本机 `localhost` 页面这几类来源，并拒绝非 IP、带点的 Host（防 DNS 重绑定）。N.E.K.O 后端、curl、Python 客户端不带 `Origin` 头，不受影响。需要放行时：`ADR_CORS_ORIGINS=https://你的前端` 增加允许来源，`ADR_ALLOWED_HOSTS=mypc.local` 增加允许主机名；两者设为 `*` 恢复旧的全开行为。
+
 ## N.E.K.O 对接
 
 1. 启动 ADR Studio 桌面端（或 `python -m adr.server`），确认横幅显示监听端口（默认 9881）
