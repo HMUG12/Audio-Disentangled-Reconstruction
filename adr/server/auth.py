@@ -28,6 +28,30 @@ from urllib.parse import unquote
 EXEMPT_PATHS = {"/api/adr/v1/health", "/", "/pro", "/easy", "/call"}
 
 
+def _is_exempt(path) -> bool:
+    """鉴权豁免判定: 固定豁免路径 + i18n/theme 运行时脚本。
+
+    i18n 脚本 (/i18n.js, /i18n-<page>.js) 是纯静态语言包 (console.py 以
+    FileResponse 提供), 本身无数据。各控制台页面用 ``<script src="/i18n.js">``
+    加载它们, 而浏览器对 <script src> 不会附带 Authorization/X-API-Key 头,
+    页面 URL 上的 ?api_key 也不会带进脚本子请求。故启用 API key 后若不豁免,
+    这些脚本一律 401 → 全局 ``I`` 未定义 → 页面主脚本 ``I.init`` 抛错 →
+    四个控制台整体瘫痪。放行它们不泄露任何业务数据。
+
+    批次66: /theme.js 同理 — 控制台页面 (call/easy/index/pro.html) 均以
+    ``<script src="/theme.js">`` 加载它 (console.py 以 FileResponse 提供),
+    纯静态、无业务数据。启用 API key 后若不豁免, 脚本 401 → ``window.adrTheme``
+    未定义 → 主题开关消失、data-theme 不生效, 页面退回默认配色。放行无数据风险。
+    """
+    if path in EXEMPT_PATHS:
+        return True
+    if path == "/i18n.js" or (path.startswith("/i18n-") and path.endswith(".js")):
+        return True
+    if path == "/theme.js":
+        return True
+    return False
+
+
 class APIKeyMiddleware:
     def __init__(self, app, api_keys=None):
         self.app = app
@@ -51,7 +75,7 @@ class APIKeyMiddleware:
         if scope["type"] == "websocket":
             # Track B 收口: WS 连接此前完全绕过鉴权。未配置 key 时维持
             # 完全放行 (本地开放语义 / NEKO 零改造兼容红线)。
-            if (not self.api_keys or scope.get("path") in EXEMPT_PATHS):
+            if (not self.api_keys or _is_exempt(scope.get("path"))):
                 await self.app(scope, receive, send)
                 return
             message = await receive()  # 取 websocket.connect 再裁决
@@ -75,7 +99,7 @@ class APIKeyMiddleware:
             return
 
         if (scope["type"] != "http" or not self.api_keys
-                or scope.get("path") in EXEMPT_PATHS):
+                or _is_exempt(scope.get("path"))):
             await self.app(scope, receive, send)
             return
 
