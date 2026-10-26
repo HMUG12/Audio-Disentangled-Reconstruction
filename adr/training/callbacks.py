@@ -16,6 +16,18 @@ from pathlib import Path
 from typing import Any, Optional
 
 
+def _release_cuda_cache() -> None:
+    """批次66: 回收 torch 缓存分配器中已释放的显存 (无 CUDA 时为空操作)。"""
+    import gc
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
 class Callback(ABC):
     """回调基类。"""
 
@@ -324,6 +336,11 @@ class WavQualityCallback(Callback):
                 result["naturalness"] = round(wav_quality * f0_score, 4)
 
         return result
+
+    def on_train_end(self, trainer: "Trainer", **kwargs) -> None:
+        # 批次66 显存常驻: 训练结束释放懒加载的 BigVGAN (下次 fit 会重新懒加载)
+        self._vocoder_cache = None
+        _release_cuda_cache()
 
     def _get_vocoder(self):
         """Lazy load + 缓存真实 vocoder (避免每 epoch 重新加载)。"""
@@ -662,6 +679,14 @@ class ASRCallback(Callback):
         self._asr_failed: set = set()
         self._asr_cpu_fallback_set: set = set()
 
+    def on_train_end(self, trainer: "Trainer", **kwargs) -> None:
+        # 批次66 显存常驻: 释放 BigVGAN 与各尺寸 Whisper 缓存;
+        # CTranslate2 显存不归 torch 管, 只能靠丢弃模型对象回收
+        self._vocoder_cache = None
+        self._asr_caches.clear()
+        self._asr_cache = None
+        _release_cuda_cache()
+
     def _get_vocoder(self):
         """懒加载 vocoder (复用 WavQualityCallback 模式)。"""
         if self._vocoder_cache is not None or self._vocoder_load_failed:
@@ -768,10 +793,13 @@ class ASRCallback(Callback):
             else:
                 wav_16k = wav
             # 写临时文件
+            # 批次65 临时文件泄漏: sf.write 在 NamedTemporaryFile 句柄打开期间写同一路径,
+            # Windows 可能失败; 且 sf.write 抛异常时外层 except 会吞掉它并跳过 unlink
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                 tmp_path = f.name
-                sf.write(tmp_path, wav_16k.astype("float32"), target_sr)
+            # 先关闭句柄再写, 并把 sf.write 纳入 try/finally 保护
             try:
+                sf.write(tmp_path, wav_16k.astype("float32"), target_sr)
                 text = self._run_transcribe(asr, tmp_path, size=size)
             finally:
                 import os

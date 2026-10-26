@@ -62,13 +62,3 @@ def is_gradient_checkpointing_enabled(model: nn.Module) -> bool:
     """检查模型是否启用了 gradient checkpointing。"""
     return getattr(model, "_gradient_checkpointing_enabled", False)
 
-
-def estimate_memory_saved(model: nn.Module) -> str:
-    """粗略估算 gradient checkpointing 能省多少显存 (MB)。
-
-    基于参数量和层数,简化公式: ~ activation_size * n_layers。
-    """
-    n_params = sum(p.numel() for p in model.parameters())
-    # 简化估算: 假设每参数 4 字节, 8GB 显存
-    param_mb = n_params * 4 / 1024 / 1024
-    return f"~{param_mb * 0.4:.0f} MB (≈ 40% of {param_mb:.0f} MB params)"
