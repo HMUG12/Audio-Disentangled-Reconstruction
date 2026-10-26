@@ -15,7 +15,7 @@ import contextlib
 import os
 import sys
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -206,9 +206,13 @@ class DiffSingerEngine:
                 from adr.models.rvc_engine import get_rvc_engine
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                     tmp_in = f.name
-                sf.write(tmp_in, wav, sr)
-                wav, sr = get_rvc_engine().convert(
-                    tmp_in, rvc_w, index_path=prof.get("rvc_index"))
+                try:   # 批次66: 转换成功/失败都删临时 wav, 防长期运行堆积
+                    sf.write(tmp_in, wav, sr)
+                    wav, sr = get_rvc_engine().convert(
+                        tmp_in, rvc_w, index_path=prof.get("rvc_index"))
+                finally:
+                    with contextlib.suppress(OSError):
+                        os.unlink(tmp_in)
         return wav, sr
     @staticmethod
     def load_opencpop_annotation(utt_id: str,

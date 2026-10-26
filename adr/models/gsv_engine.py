@@ -246,50 +246,84 @@ class _OnnxBertFeat:
     惰性: 首次调用建 ORT 会话; onnx 模型不存在时自动导出并缓存。
     """
 
-    def __init__(self, bert_dir: str, cache_path: Path):
+    def __init__(self, bert_dir: str, cache_path: Path, fallback=None):
         self.bert_dir = str(bert_dir)
         self.cache_path = Path(cache_path)
         self._sess = None
+        # 批次66: ORT 不可用时的 torch BERT 回退; 传入 GSV 已加载的原模型免重复占内存
+        self._fallback = fallback
+        self._torch = None
+        self._init_lock = threading.Lock()
 
     def _ensure_session(self):
-        if self._sess is not None:
+        if self._sess is not None or self._torch is not None:
             return
+        with self._init_lock:   # 批次66: 惰性建会话串行化, 防并发重复导出写坏缓存
+            if self._sess is not None or self._torch is not None:
+                return
+            from transformers import AutoModel
+            created = not self.cache_path.exists()
+            m = None
+            try:
+                if created:
+                    self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+                    m = AutoModel.from_pretrained(self.bert_dir).eval()
+                    self._export(m)
+                from onnxruntime import (GraphOptimizationLevel, InferenceSession,
+                                         SessionOptions)
+                opts = SessionOptions()
+                opts.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_ALL
+                self._sess = InferenceSession(str(self.cache_path), opts,
+                                              providers=["CPUExecutionProvider"])
+                self._fallback = None   # 批次66: ORT 就绪即释放 torch BERT 内存
+            except Exception:
+                # 批次66: 导出需 onnx/onnxscript (all/m1 extra 未声明)、ORT 缺失或
+                # 缓存损坏 → 回退 torch BERT, 不让首次合成崩溃
+                logging.getLogger("adr").warning(
+                    "[gsv] ONNX BERT 不可用, 回退 torch 版", exc_info=True)
+                if created:   # 半截导出文件会让后续每次都失败
+                    self.cache_path.unlink(missing_ok=True)
+                self._torch = (self._fallback if self._fallback is not None
+                               else m if m is not None
+                               else AutoModel.from_pretrained(self.bert_dir).eval())
+
+    def _export(self, m) -> None:
         import torch
-        from transformers import AutoModel
-        if not self.cache_path.exists():
-            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-            m = AutoModel.from_pretrained(self.bert_dir).eval()
 
-            class _Feat(torch.nn.Module):
-                def __init__(self, mm):
-                    super().__init__()
-                    self.m = mm
+        class _Feat(torch.nn.Module):
+            def __init__(self, mm):
+                super().__init__()
+                self.m = mm
 
-                def forward(self, input_ids, attention_mask, token_type_ids):
-                    out = self.m(input_ids, attention_mask=attention_mask,
-                                 token_type_ids=token_type_ids,
-                                 output_hidden_states=True)
-                    return out.hidden_states[-3]
+            def forward(self, input_ids, attention_mask, token_type_ids):
+                out = self.m(input_ids, attention_mask=attention_mask,
+                             token_type_ids=token_type_ids,
+                             output_hidden_states=True)
+                return out.hidden_states[-3]
 
-            dummy = torch.ones(1, 8, dtype=torch.long)
-            torch.onnx.export(
-                _Feat(m), (dummy, dummy, dummy), str(self.cache_path),
-                input_names=["input_ids", "attention_mask", "token_type_ids"],
-                output_names=["feat"],
-                dynamic_axes={n: {0: "b", 1: "s"} for n in
-                              ["input_ids", "attention_mask", "token_type_ids",
-                               "feat"]},
-                opset_version=17, do_constant_folding=True)
-        from onnxruntime import InferenceSession, SessionOptions, GraphOptimizationLevel
-        opts = SessionOptions()
-        opts.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_ALL
-        self._sess = InferenceSession(str(self.cache_path), opts,
-                                      providers=["CPUExecutionProvider"])
+        dummy = torch.ones(1, 8, dtype=torch.long)
+        torch.onnx.export(
+            _Feat(m), (dummy, dummy, dummy), str(self.cache_path),
+            input_names=["input_ids", "attention_mask", "token_type_ids"],
+            output_names=["feat"],
+            dynamic_axes={n: {0: "b", 1: "s"} for n in
+                          ["input_ids", "attention_mask", "token_type_ids",
+                           "feat"]},
+            opset_version=17, do_constant_folding=True)
 
     def __call__(self, *, input_ids=None, attention_mask=None,
                  token_type_ids=None, **_kw):
         import torch
         self._ensure_session()
+        if self._sess is None:
+            # 批次66: torch 回退, 输入已由 GSV 放到原模型设备上, 不搬运;
+            # 输出面与 ORT 版一致 (只取倒数第 3 层)
+            with torch.no_grad():
+                out = self._torch(input_ids=input_ids,
+                                  attention_mask=attention_mask,
+                                  token_type_ids=token_type_ids,
+                                  output_hidden_states=True)
+            return {"hidden_states": [out.hidden_states[-3], None, None]}
         feed = {"input_ids": input_ids.cpu().numpy(),
                 "attention_mask": attention_mask.cpu().numpy(),
                 "token_type_ids": token_type_ids.cpu().numpy()}
@@ -558,8 +592,9 @@ class GSVEngine:
                 try:
                     self._tts.bert_model = _OnnxBertFeat(
                         self._tts.bert_model.config._name_or_path,
-                        self.config.gsv_dir / "TEMP" / "bert_feat_cpu.onnx")
-                except Exception:  # onnxruntime/onnx 缺失等 → 保持 torch 版
+                        self.config.gsv_dir / "TEMP" / "bert_feat_cpu.onnx",
+                        fallback=self._tts.bert_model)
+                except Exception:  # 批次66: 导出/ORT 失败在首调时回退, 此处只兜构造
                     pass
 
             # 兼容补丁: 新版 torchaudio.load 依赖 torchcodec (无 Windows 轮子),
@@ -697,6 +732,7 @@ class GSVEngine:
               消除句间停顿 (Track E)
         """
         import numpy as np
+        import queue as _queue
 
         text = self._sanitize_text(text)
         ref_audio = str(Path(ref_audio).resolve())
@@ -705,67 +741,114 @@ class GSVEngine:
         head, rest = self._stream_head_split(text, settings.stream_head_chars())
         segments = ([head, *self._split_long(rest, settings.split_max_chars())]
                     if rest else [text])
-        # 批次63 第三子批: 调度准入 (N=1 硬预算) — 排队/忙闲计数由调度器
-        # 持有 (批次23 观测语义不变); 生成器被客户端断连关闭时 CM finally 兜住
-        with self._admit(), _RuntimeProbe(stream=True) as probe:
-            with self._lock:
-                self._lazy_init()
-                probe.start()   # 计时从模型就绪起: 首次懒加载不计入 RTF
-                inputs = {
-                    "text": head,
-                    "text_lang": text_lang,
-                    "ref_audio_path": ref_audio,
-                    "prompt_text": prompt_text,
-                    "prompt_lang": prompt_lang,
-                    "top_k": top_k,
-                    "top_p": top_p,
-                    "temperature": temperature,
-                    "text_split_method": split_method,
-                    "streaming_mode": True,
-                    "parallel_infer": True,
-                }
-                if speed_factor != 1.0:
-                    inputs["speed_factor"] = speed_factor
-                # 批次33: 句末静音秒数 — 一直传 (None→env 解析), 0 可消除句间停顿
-                fi = _resolve_fragment_interval(fragment_interval)
-                inputs["fragment_interval"] = fi
-                with self._gsv_context():
-                    self._ensure_weights(vits_weights, t2s_weights)
-                    for i, seg in enumerate(segments):
-                        inputs["text"] = seg
-                        inputs["seed"] = head_seed if (i == 0 and head_seed >= 0) else -1
-                        # 批次23: 句级缓存 — 命中直接回放 int16, 跳过 GPU 前向
-                        ckey = None
-                        if _seg_cache_enabled():
-                            ckey = _seg_cache_key(
-                                seg, ref_audio, prompt_text, text_lang,
-                                prompt_lang, split_method, top_k, top_p,
-                                temperature, speed_factor, fi, t2s_weights,
-                                vits_weights)
-                            hit = _seg_cache_get(ckey)
-                            if hit is not None:
-                                pcm, hit_sr = hit
-                                buf = np.frombuffer(pcm, dtype=np.int16)
-                                probe.chunk(len(buf), int(hit_sr))
-                                yield buf.astype(np.float32) / 32767.0, int(hit_sr)
-                                continue
-                        seg_chunks: list = []
-                        seg_sr = 32000
-                        for sr, chunk in self._tts.run(inputs):
-                            chunk = np.asarray(chunk, dtype=np.float32)
-                            if np.abs(chunk).max() > 1.5:
-                                chunk = chunk / 32768.0
-                            seg_chunks.append(chunk)
-                            seg_sr = int(sr)
-                            probe.chunk(len(chunk), seg_sr)
-                            yield chunk, int(sr)
-                        if ckey is not None and seg_chunks:
-                            full = (seg_chunks[0] if len(seg_chunks) == 1
-                                    else np.concatenate(seg_chunks))
-                            _seg_cache_put(
-                                ckey,
-                                (np.clip(full, -1.0, 1.0) * 32767).astype(np.int16).tobytes(),
-                                seg_sr)
+
+        # 批次65 死锁修复: StreamingResponse 在 anyio 线程池逐 next() 迭代本
+        # 生成器, 每次 next 可能换线程。旧实现持 _CHDIR_LOCK(RLock)跨 yield,
+        # 恢复线程 != 加锁线程 → release 抛 "cannot release un-acquired lock",
+        # _CHDIR_LOCK 永久卡死 (批次64 放宽到 N=2 并发后必现)。改法: 持锁的
+        # 合成体全程跑在单一 worker 线程 (chdir 窗口仍串行化, RLock 同线程
+        # acquire/release), 音频块入队; 本生成器只在锁外取队列并 yield。
+        # _admit/_RuntimeProbe/seg 缓存语义不变, 只是归属 worker 线程。
+        q: "_queue.Queue" = _queue.Queue(maxsize=8)
+        cancel = threading.Event()
+        _DONE = object()
+
+        def _produce():
+            try:
+                with self._admit(), _RuntimeProbe(stream=True) as probe:
+                    with self._lock:
+                        self._lazy_init()
+                        probe.start()   # 计时从模型就绪起: 懒加载不计入 RTF
+                        inputs = {
+                            "text": head,
+                            "text_lang": text_lang,
+                            "ref_audio_path": ref_audio,
+                            "prompt_text": prompt_text,
+                            "prompt_lang": prompt_lang,
+                            "top_k": top_k,
+                            "top_p": top_p,
+                            "temperature": temperature,
+                            "text_split_method": split_method,
+                            "streaming_mode": True,
+                            "parallel_infer": True,
+                        }
+                        if speed_factor != 1.0:
+                            inputs["speed_factor"] = speed_factor
+                        fi = _resolve_fragment_interval(fragment_interval)
+                        inputs["fragment_interval"] = fi
+                        with self._gsv_context():
+                            self._ensure_weights(vits_weights, t2s_weights)
+                            for i, seg in enumerate(segments):
+                                if cancel.is_set():   # 断连: 与旧语义一致, 探针不计样本
+                                    raise GeneratorExit
+                                inputs["text"] = seg
+                                inputs["seed"] = (head_seed
+                                                  if (i == 0 and head_seed >= 0)
+                                                  else -1)
+                                ckey = None
+                                if _seg_cache_enabled():
+                                    ckey = _seg_cache_key(
+                                        seg, ref_audio, prompt_text, text_lang,
+                                        prompt_lang, split_method, top_k, top_p,
+                                        temperature, speed_factor, fi,
+                                        t2s_weights, vits_weights)
+                                    hit = _seg_cache_get(ckey)
+                                    if hit is not None:
+                                        pcm, hit_sr = hit
+                                        buf = np.frombuffer(pcm, dtype=np.int16)
+                                        probe.chunk(len(buf), int(hit_sr))
+                                        q.put((buf.astype(np.float32) / 32767.0,
+                                               int(hit_sr)))
+                                        continue
+                                seg_chunks: list = []
+                                seg_sr = 32000
+                                for sr, chunk in self._tts.run(inputs):
+                                    if cancel.is_set():
+                                        raise GeneratorExit
+                                    chunk = np.asarray(chunk, dtype=np.float32)
+                                    if np.abs(chunk).max() > 1.5:
+                                        chunk = chunk / 32768.0
+                                    seg_chunks.append(chunk)
+                                    seg_sr = int(sr)
+                                    probe.chunk(len(chunk), seg_sr)
+                                    q.put((chunk, int(sr)))
+                                if ckey is not None and seg_chunks:
+                                    full = (seg_chunks[0] if len(seg_chunks) == 1
+                                            else np.concatenate(seg_chunks))
+                                    _seg_cache_put(
+                                        ckey,
+                                        (np.clip(full, -1.0, 1.0) * 32767)
+                                        .astype(np.int16).tobytes(),
+                                        seg_sr)
+            except GeneratorExit:
+                pass   # 消费端已断连, 无人读错误
+            except BaseException as e:   # noqa: BLE001 — 转发到消费线程重抛
+                q.put(("__error__", e))
+            finally:
+                q.put(_DONE)
+
+        worker = threading.Thread(target=_produce, name="adr-gsv-stream",
+                                  daemon=True)
+        worker.start()
+        done_seen = False
+        try:
+            while True:
+                item = q.get()
+                if item is _DONE:
+                    done_seen = True
+                    break
+                if isinstance(item[0], str) and item[0] == "__error__":
+                    raise item[1]
+                yield item[0], item[1]
+        finally:
+            # 断连/异常退出: 通知 producer 停, 并持续排空队列解除其 put 阻塞,
+            # 直到它在 finally 发出 _DONE, 再 join — 不泄漏 worker 线程。
+            # 正常结束时 _DONE 已被取走, 不能再等 (否则永久阻塞)。
+            cancel.set()
+            while not done_seen:
+                if q.get() is _DONE:
+                    done_seen = True
+            worker.join(timeout=30)
 
     def synthesize(
         self,
