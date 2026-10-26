@@ -520,7 +520,8 @@ async fn enter_console(app: AppHandle, mode: String, expose: Option<bool>) -> Re
                 _ => format!("{base}/call?desktop=1"),
             };
             let window = app.get_webview_window("main");
-            navigate(&window, &target);
+            // 批次66: 导航带 api_key (返回值/托盘提示仍用不含 key 的 target)
+            navigate(&window, &format!("{target}{}", console_key_query()));
             return Ok(target);
         }
     }
@@ -924,8 +925,43 @@ fn start_and_wait(
     if let Some(t) = app.tray_by_id("adr-tray") {
         let _ = t.set_tooltip(Some(format!("ADR Studio — {target}{expose_tip}")));
     }
-    navigate(window, &target);
+    // 批次66: pro/easy/call 导航带 api_key (legacy 是 Gradio, 不走 ADR 鉴权)
+    let key = if mode == "legacy" {
+        String::new()
+    } else {
+        console_key_query()
+    };
+    navigate(window, &format!("{target}{key}"));
     Some((child, target, started))
+}
+
+/// 批次66: 控制台页 api_key 透传 — 启用鉴权后页面从 ?api_key= 读 key, 壳不带则全部 401。
+/// 口径同 sidecar 注入: shell.json api_key 优先, 否则继承壳进程 ADR_TTS_API_KEY;
+/// 取首个非空逗号项, URL 编码; 无 key 返回空串。
+/// shortcut: 读当前设置而非 sidecar 启动时快照, 改 key 未重启引擎时热通道会带新 key; 需要时改为启动时记录。
+fn console_key_query() -> String {
+    let raw = shell_config()
+        .api_key
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| std::env::var("ADR_TTS_API_KEY").ok())
+        .unwrap_or_default();
+    key_query(&raw)
+}
+
+/// 纯函数 (单测覆盖): 逗号分隔 key 串 → "&api_key=<首个非空项, 百分号编码>" 或空串。
+fn key_query(raw: &str) -> String {
+    let Some(k) = raw.split(',').map(str::trim).find(|k| !k.is_empty()) else {
+        return String::new();
+    };
+    let mut enc = String::new();
+    for b in k.bytes() {
+        if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+            enc.push(b as char);
+        } else {
+            enc.push_str(&format!("%{b:02X}"));
+        }
+    }
+    format!("&api_key={enc}")
 }
 
 /// 启动 sidecar 并探活 (不导航, 预热流程与 launch_console 共用)。
@@ -1082,7 +1118,10 @@ fn eval_prewarm(window: &Option<WebviewWindow>, stage: &str, text: &str) {
 
 /// 从 stats 拉引擎预热阶段 + 实时进度文案 (批次44: 下载进度透传, 不触发加载)。
 fn fetch_engine_stage_info(base: &str) -> Option<(String, String)> {
-    let url = format!("{base}/api/adr/v1/system/stats");
+    // 读 /health 而非 /system/stats: 两者都含 engine_stage/engine_stage_text,
+    // 但启用 ADR_TTS_API_KEY 后 /system/stats 要鉴权, 壳轮询不带 key → 401 →
+    // 预热永久卡住; /health 在 auth 豁免名单内, 永远可达。
+    let url = format!("{base}/api/adr/v1/health");
     let body = ureq::get(&url)
         .timeout(Duration::from_secs(2))
         .call()
@@ -1597,6 +1636,15 @@ mod tests {
         assert_eq!(legacy.service_port, None);
         // 坏 JSON → 默认 (reload_shell_config 同口径)
         assert!(serde_json::from_str::<ShellSettings>("{oops").is_err());
+    }
+
+    #[test]
+    fn key_query_first_nonempty_encoded() {
+        // 批次66: 控制台导航 api_key 透传
+        assert_eq!(key_query(""), "");
+        assert_eq!(key_query(" , "), "");
+        assert_eq!(key_query(" ,k1, k2"), "&api_key=k1");
+        assert_eq!(key_query("a b&c=d/é"), "&api_key=a%20b%26c%3Dd%2F%C3%A9");
     }
 
     #[test]
