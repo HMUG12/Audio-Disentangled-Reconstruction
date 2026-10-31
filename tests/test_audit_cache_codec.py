@@ -25,6 +25,11 @@ def _names(tc):
     return sorted(p.name for p in tc._dir().iterdir() if p.is_file())
 
 
+def _disk(tc, key, ext="wav"):
+    """批次69: 盘上文件名带版本前缀, 断言一律走 _fname 生成, 不硬编码。"""
+    return tc._fname(key, ext)
+
+
 def _restart(tc):
     with tc._lock:
         tc._cache.clear()
@@ -37,7 +42,7 @@ def test_put_at_capacity_keeps_live_disk_files(tc):
     tc.put("A", b"AAAA", "wav")
     tc.put("B", b"BBBB", "wav")
     tc.put("C", b"CCCC", "wav")  # 逐出 A
-    assert _names(tc) == ["B.wav", "C.wav"]
+    assert _names(tc) == [_disk(tc, "B"), _disk(tc, "C")]
     _restart(tc)
     assert tc.get("B") == b"BBBB"
     assert tc.get("C") == b"CCCC"
@@ -49,7 +54,7 @@ def test_get_at_capacity_does_not_delete(tc):
     tc.put("k2", b"two", "bin")
     for _ in range(3):
         assert tc.get("k1") == b"one"
-    assert _names(tc) == ["k1.bin", "k2.bin"]
+    assert _names(tc) == [_disk(tc, "k1", "bin"), _disk(tc, "k2", "bin")]
     assert tc._total_bytes == 6
 
 
@@ -61,7 +66,20 @@ def test_rescan_after_restart_counts_once(tc):
     assert tc.get("k1") == b"one"
     assert tc.get("k2") == b"two"
     assert tc._total_bytes == 6
-    assert _names(tc) == ["k1.bin", "k2.bin"]
+    assert _names(tc) == [_disk(tc, "k1", "bin"), _disk(tc, "k2", "bin")]
+
+
+def test_scan_discards_legacy_and_old_version_files(tc):
+    """批次69 (Q5): 无前缀旧格式 / 旧缓存版本文件扫描时丢弃, 不再命中。"""
+    d = tc._dir()
+    d.mkdir(parents=True)
+    (d / "v0-deadbeef.wav").write_bytes(b"old")          # 旧缓存版本
+    (d / ("a" * 40 + ".wav")).write_bytes(b"legacy")     # 版本前缀引入前的格式
+    (d / _disk(tc, "fresh")).write_bytes(b"new")
+    assert tc.get("deadbeef") is None
+    assert tc.get("a" * 40) is None
+    assert tc.get("fresh") == b"new"
+    assert _names(tc) == [_disk(tc, "fresh")]
 
 
 def test_evict_unlink_permission_error_is_tolerated(tc, monkeypatch):
@@ -71,7 +89,7 @@ def test_evict_unlink_permission_error_is_tolerated(tc, monkeypatch):
     real_unlink = Path.unlink
 
     def locked_unlink(self, missing_ok=False):
-        if self.name == "A.wav":
+        if self.name == _disk(tc, "A"):
             raise PermissionError(32, "file in use")
         return real_unlink(self, missing_ok=missing_ok)
 
@@ -87,13 +105,13 @@ def test_scan_unlink_permission_error_is_tolerated(tc, monkeypatch):
     d = tc._dir()
     d.mkdir(parents=True)
     for i, name in enumerate(["old", "mid", "new"]):
-        f = d / f"{name}.wav"
+        f = d / _disk(tc, name)
         f.write_bytes(b"xx")
         os.utime(f, (1000 + i, 1000 + i))
     real_unlink = Path.unlink
 
     def locked_unlink(self, missing_ok=False):
-        if self.name == "old.wav":
+        if self.name == _disk(tc, "old"):
             raise PermissionError(32, "file in use")
         return real_unlink(self, missing_ok=missing_ok)
 
@@ -119,9 +137,9 @@ def test_scan_cleans_leftover_tmp(tc):
     d = tc._dir()
     d.mkdir(parents=True)
     (d / "stale.tmp").write_bytes(b"half")
-    (d / "ok.wav").write_bytes(b"full")
+    (d / _disk(tc, "ok")).write_bytes(b"full")
     assert tc.get("ok") == b"full"
-    assert _names(tc) == ["ok.wav"]
+    assert _names(tc) == [_disk(tc, "ok")]
 
 
 class _FakeProc:

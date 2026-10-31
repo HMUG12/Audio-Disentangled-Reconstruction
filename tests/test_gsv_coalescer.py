@@ -478,6 +478,27 @@ def test_e_preprocess_exception_isolation(tmp_path):
     assert np.array_equal(audio_a, audio_solo)
 
 
+def test_e_unsupported_lang_isolated(tmp_path):
+    """非法语种 → 该请求显式 ValueError (非 assert), 同组其余请求照常。
+
+    入口 (v2/v3) 已做白名单拦截, 此处是合批层的兜底防线: -O 下 assert
+    会被剥离, 且原断言无法定位是哪个语种字段。"""
+    ref = _make_ref(tmp_path)
+    in_a = _inputs("s13|s9", seed=11, ref=ref)          # 正常
+    in_b = _inputs("s10", seed=33, ref=ref)             # 正常
+    in_bad = _inputs("s14|s16", seed=22, ref=ref, text_lang="klingon")
+
+    tts = _make_fake_tts()
+    _, jobs = _run_round(tts, [in_a, in_b, in_bad])
+
+    with pytest.raises(ValueError, match="unsupported text_lang"):
+        jobs[2].future.result(timeout=30)
+    for j in jobs[:2]:                                  # 2 条合法请求照常出音频
+        sr, audio = j.future.result(timeout=30)
+        assert sr == SR and len(audio) > 0
+    assert len(tts.vits_model.calls) == 2               # 仅合法请求走到 vits
+
+
 def test_e_synthesis_exception_group_semantics(tmp_path):
     """合成中途异常 → 组内全部未决请求报错 + init_*_weights 重载
     (stock L1551-1562 语义, 隔离第 3 级)。"""

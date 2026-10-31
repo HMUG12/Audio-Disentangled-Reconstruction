@@ -29,7 +29,7 @@ services:
         TORCH_VARIANT: cpu
         # 网络受限时取消注释 (deb.debian.org HTTP/80 部分代理不覆盖):
         # APT_MIRROR: mirrors.tuna.tsinghua.edu.cn
-    image: adr-server:1.2.0-cpu
+    image: adr-server:1.3.1-cpu
     restart: unless-stopped
     shm_size: "2g"
     ports:

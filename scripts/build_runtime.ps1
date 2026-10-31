@@ -45,22 +45,33 @@ New-Item -ItemType Directory -Force -Path $OutDir, $DlDir, $PipCache | Out-Null
 
 Step "1/6 fetch python-build-standalone (CPython 3.13 win64)"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$tarball = Get-ChildItem $DlDir -Filter "cpython-3.13*install_only.tar.gz" -ErrorAction SilentlyContinue |
-    Select-Object -First 1
-if ($tarball) {
-    # 缓存命中直接用: 免 API 调用 (GitHub 匿名限流 60/h, 曾因此构建中断)
-    Log ("PBS archive cached: {0} — skip API resolve" -f $tarball.Name)
-    $tarball = $tarball.FullName   # FileInfo → 绝对路径 (ToString 只有文件名, tar 会找不到)
-} else {
-    $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest"
-    $asset = $rel.assets |
-        Where-Object { $_.name -match "^cpython-3\.13\.[0-9]+\+[0-9]{8}-x86_64-pc-windows-msvc-install_only\.tar\.gz$" } |
-        Select-Object -First 1
-    if (-not $asset) { throw "no matching PBS asset in latest release" }
-    Log ("latest PBS asset: {0} ({1:N0} MB)" -f $asset.name, ($asset.size / 1MB))
-    $tarball = Join-Path $DlDir $asset.name
-    Log "downloading (progress bar below) ..."
-    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tarball
+# 批次69 (Q1): 钉死发布标签 + 资产名 + SHA256。原先查 releases/latest 每次
+# 解析结果都可能不同 (构建不可复现), 且 GitHub 匿名 API 限流 60/h 会让构建
+# 中断。缓存命中同样校验哈希, 损坏/换了文件即重下。
+$PbsTag    = "20261009"
+$PbsAsset  = "cpython-3.13.16+20261009-x86_64-pc-windows-msvc-install_only.tar.gz"
+$PbsSha256 = "286285F159BC711E4F0D89BD3D01993D3A321B84BD6593BD66DC816C23609388"
+$PbsUrl    = "https://github.com/astral-sh/python-build-standalone/releases/download/$PbsTag/$PbsAsset"
+$tarball   = Join-Path $DlDir $PbsAsset
+$needDownload = $true
+if (Test-Path $tarball) {
+    $hash = (Get-FileHash $tarball -Algorithm SHA256).Hash
+    if ($hash -eq $PbsSha256) {
+        Log ("PBS archive cached+verified: {0} — skip download" -f $PbsAsset)
+        $needDownload = $false
+    } else {
+        Log ("PBS cache SHA256 mismatch ({0}) — re-download" -f $hash)
+        Remove-Item -Force $tarball
+    }
+}
+if ($needDownload) {
+    Log ("downloading {0} (progress bar below) ..." -f $PbsAsset)
+    Invoke-WebRequest -Uri $PbsUrl -OutFile $tarball
+    $hash = (Get-FileHash $tarball -Algorithm SHA256).Hash
+    if ($hash -ne $PbsSha256) {
+        throw "PBS archive SHA256 mismatch: $hash (expected $PbsSha256)"
+    }
+    Log "download verified (SHA256 ok)"
 }
 $pyDir = Join-Path $OutDir "python"
 if (Test-Path $pyDir) { Remove-Item -Recurse -Force $pyDir }
@@ -146,7 +157,7 @@ tensorboard==2.21.0
 tensorboardX==2.6.5
 x-transformers==2.25.5
 sentencepiece==0.2.2
-chardet
+chardet==7.7.0
 "@
 # ASCII on purpose: PowerShell 5.1 reads BOM-less files as ANSI.
 # torch/torchaudio 不在此清单: 按变体单独安装 (见下一步), 避免解析器

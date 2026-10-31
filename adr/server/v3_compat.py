@@ -34,7 +34,12 @@ from adr.core.exceptions import (
 )
 from adr.models import voice_library
 from adr.models.gsv_engine import handle_cuda_oom, is_cuda_oom
-from adr.server.v2_compat import engine_busy, max_text_chars
+from adr.server.v2_compat import (
+    SUPPORTED_LANGS,
+    _bad_number,
+    engine_busy,
+    max_text_chars,
+)
 from adr.services import SynthesisService
 
 logger = logging.getLogger(__name__)
@@ -105,6 +110,40 @@ def _resolve_voice(voice_id: str, app) -> Optional[dict]:
     return SynthesisService.load_profile(name)
 
 
+_OVERRIDE_FIELDS = (
+    "text_lang", "prompt_lang", "speed_factor", "temperature",
+    "top_k", "top_p", "seed", "batch_size",
+    "text_split_method", "media_type", "fragment_interval",
+)
+
+
+def _normalize_overrides(data: dict) -> tuple[dict, Optional[str]]:
+    """批次69: overrides 收口 — 类型归一 + 区间/有限性/语言校验。
+
+    返回 (overrides, 错误文案|None); 错误由 init 分支回 invalid_params 错误帧,
+    不再静默忽略 (审计 Q6/Q8)。
+    """
+    ov = {k: data.get(k) for k in _OVERRIDE_FIELDS if data.get(k) is not None}
+    msg = _bad_number(ov)
+    if msg:
+        return ov, msg
+    for k in ("text_lang", "prompt_lang"):
+        if k in ov:
+            ov[k] = str(ov[k]).lower()
+            if ov[k] not in SUPPORTED_LANGS:
+                return ov, f"{k} unsupported: {ov[k]!r}"
+    for k in ("top_k", "seed", "batch_size"):
+        if k in ov:
+            try:
+                ov[k] = int(ov[k])
+            except (TypeError, ValueError):
+                return ov, f"{k} must be an integer: {ov[k]!r}"
+    for k in ("top_p", "temperature", "speed_factor", "fragment_interval"):
+        if k in ov:
+            ov[k] = float(ov[k])
+    return ov, None
+
+
 @router.get("/voices", summary="音色列表 (N.E.K.O 自定义音色源)")
 async def voices_list(request: Request):
     out = []
@@ -146,7 +185,6 @@ async def tts_ws_stream_input(websocket: WebSocket):
 
     app = websocket.app
     voice: Optional[dict] = None
-    session_voice_id = "_default"
     overrides: dict = {}
     text_buffer = _TextBuffer()
     task_ids = itertools.count(1)
@@ -201,7 +239,11 @@ async def tts_ws_stream_input(websocket: WebSocket):
         def _produce():
             gen = None
             try:
-                samp = voice.get("sampling") or {}
+                # 批次69 (Q6): overrides 采样参数叠加到档案采样之上 (请求优先)
+                samp = dict(voice.get("sampling") or {})
+                for k in ("top_k", "top_p", "temperature"):
+                    if k in overrides:
+                        samp[k] = overrides[k]
                 gen = SynthesisService.stream_chunks(
                     _engine(), text, voice["ref_audio"],
                     prompt_text=voice.get("prompt_text") or "",
@@ -218,6 +260,7 @@ async def tts_ws_stream_input(websocket: WebSocket):
                     top_k=samp.get("top_k", 15),
                     top_p=samp.get("top_p", 1.0),
                     temperature=samp.get("temperature", 1.0),
+                    speed_factor=overrides.get("speed_factor", 1.0),
                     fragment_interval=overrides.get("fragment_interval"),
                 )
                 for chunk, sr in gen:
@@ -310,13 +353,14 @@ async def tts_ws_stream_input(websocket: WebSocket):
                         {"type": "error", "message": f"voice_id '{vid}' not found",
                          "code": "profile_not_found"})
                     break
+                # 批次69 (Q6): overrides 归一 + 校验 — 非法值回错误帧, 不静默忽略
+                ov, ov_err = _normalize_overrides(data)
+                if ov_err:
+                    await _safe_send_json({"type": "error", "message": ov_err,
+                                           "code": "invalid_params"})
+                    continue
                 voice = v
-                session_voice_id = vid
-                overrides = {k: data.get(k) for k in (
-                    "text_lang", "prompt_lang", "speed_factor", "temperature",
-                    "top_k", "top_p", "seed", "batch_size",
-                    "text_split_method", "media_type", "fragment_interval",
-                ) if data.get(k) is not None}
+                overrides = ov
                 await _safe_send_json({"type": "ready", "voice_id": vid})
 
             elif cmd == "text":

@@ -82,7 +82,7 @@ RUN git clone ${GSV_PROXY_PREFIX}https://github.com/RVC-Boss/GPT-SoVITS.git \
 # ================================ Stage 2: 运行时 ==============================
 FROM python:3.11-slim AS runtime
 
-ARG ADR_VERSION=1.2.0
+ARG ADR_VERSION=1.3.1
 ARG APT_MIRROR
 
 ENV PATH="/opt/venv/bin:$PATH" \

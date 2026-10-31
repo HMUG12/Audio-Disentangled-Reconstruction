@@ -11,6 +11,9 @@
   7. scripts/installer/installer.iss    #define MyAppVersion
   8. desktop/src/launcher.html          about 弹窗 fallback 文案
   9. README.md                          安装包文件名 ADR-Studio-<ver>-x64
+ 10. docker/Dockerfile                  ARG ADR_VERSION
+ 11. docker/docker-compose*.yml         镜像 tag adr-server:<ver>-cpu|cuda
+ 12. docker/README.md / README.md       镜像 tag 示例（含 ghcr 拉取命令）
 
 用法：python scripts/check_versions.py
 全部一致返回 0，存在差异列出明细返回 1（CI smoke 与双包构建前置均可复用）。
@@ -72,12 +75,25 @@ def main() -> int:
     if f"ADR-Studio-{ver}-x64" not in _read("README.md"):
         problems.append(f"README.md: 安装包文件名未含 ADR-Studio-{ver}-x64（下载链接/静默安装示例需同步）")
 
+    # 批次69 (D2): Docker 镜像面同样属于版本面 — 容器 tag 与文档示例必须同源
+    for rel, needle in (
+        ("docker/Dockerfile", f"ARG ADR_VERSION={ver}"),
+        ("docker/docker-compose.yml", f"adr-server:{ver}-cpu"),
+        ("docker/docker-compose.gpu.yml", f"adr-server:{ver}-cuda"),
+        ("docker/README.md", f"adr-server:{ver}-cpu"),
+        ("docker/README.md", f"adr-server:{ver}-cuda"),
+        ("README.md", f"adr-server:{ver}-cpu"),
+        ("README.md", f"adr-server:{ver}-cuda"),
+    ):
+        if needle not in _read(rel):
+            problems.append(f"{rel}: 未含 {needle}")
+
     if problems:
         for p in problems:
             print(f"check_versions: MISMATCH {p}", file=sys.stderr)
         print(f"check_versions: {len(problems)} 处不一致（事实源 pyproject = {ver}）", file=sys.stderr)
         return 1
-    print(f"check_versions: all faces = {ver} (9 checks OK)")
+    print(f"check_versions: all faces = {ver} (16 checks OK)")
     return 0
 
 

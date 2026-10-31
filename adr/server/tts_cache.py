@@ -32,6 +32,12 @@ from pathlib import Path
 
 from adr.core import settings
 
+# 缓存格式版本 (批次69): 音频编码参数 (pack_audio 码率/重采样) 或 _KEY_FIELDS
+# 集合变化时递增 — make_key 参与哈希, 且磁盘文件名带 v<版本>- 前缀,
+# 启动扫描丢弃旧版本条目, 避免升级后仍命中旧格式音频。
+CACHE_VERSION = 1
+_PREFIX = f"v{CACHE_VERSION}-"
+
 # 参与 key 的请求字段 (seed 有意排除, 见模块 docstring)
 # fragment_interval 烤进输出音频 (句末静音长度), 必须参与 key (批次33)
 _KEY_FIELDS = (
@@ -67,8 +73,14 @@ def _max_bytes() -> int:
 
 def make_key(req: dict) -> str:
     payload = {f: req.get(f) for f in _KEY_FIELDS}
+    payload["_cache_version"] = CACHE_VERSION
     blob = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()
+
+
+def _fname(key: str, ext: str) -> str:
+    """盘上文件名: v<版本>-<key>.<ext> (版本前缀供扫描识别/丢弃旧格式)。"""
+    return f"{_PREFIX}{key}.{ext}"
 
 
 def _unlink_quiet(p: Path) -> None:
@@ -102,6 +114,8 @@ def _disk_load_locked() -> None:
     for p in entries:
         if p.name.endswith(".tmp"):
             _unlink_quiet(p)  # 批次66: 上次写盘失败残留的半截临时文件, 扫描时清掉
+        elif not p.name.startswith(_PREFIX):
+            _unlink_quiet(p)  # 批次69: 旧缓存版本/未知格式 → 丢弃, 不再命中
         else:
             files.append(p)
     # 一次 stat 同时取 mtime + size; 并发下文件可能刚被逐出删除
@@ -116,12 +130,13 @@ def _disk_load_locked() -> None:
     statted.sort(key=lambda t: t[0], reverse=True)
     max_b, max_n = _max_bytes(), _max_entries()
     for _, size, p in statted:
-        if p.stem in _cache:  # 批次66: 已在内存的条目先跳过, 不能按超限误删 / 重复记账
+        key = p.stem[len(_PREFIX):]   # 批次69: 去掉版本前缀得到缓存键
+        if key in _cache:  # 批次66: 已在内存的条目先跳过, 不能按超限误删 / 重复记账
             continue
         if len(_cache) >= max_n or _total_bytes + size > max_b:
             _unlink_quiet(p)  # 超限旧文件: 删盘上副本
             continue
-        _cache[p.stem] = (b"", p.name, size)
+        _cache[key] = (b"", p.name, size)
         _total_bytes += size
 
 
@@ -160,7 +175,7 @@ def put(key: str, data: bytes, ext: str = "bin") -> None:
     with _lock:
         _disk_load_locked()
         # 落盘 (盘不可写则退化为纯内存, 不影响服务)
-        fname: str | None = f"{key}.{ext}"
+        fname: str | None = _fname(key, ext)
         size = len(data)
         tmp: Path | None = None
         try:

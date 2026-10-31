@@ -24,7 +24,7 @@ $env:NUMBA_CACHE_DIR = "E:\adr_numba_cache"   # 任意可写目录, 避免 numba
 ## 1. 安装自检（实测）
 
 ```powershell
-python -c "import adr; print(adr.__version__)"   # 1.0.0
+python -c "import adr; print(adr.__version__)"   # 1.3.1
 adr doctor                                        # 环境体检; 实测 8 ok 1 警告, --fix 后清零
 ```
 
