@@ -347,6 +347,15 @@
 - **验证**：污染复现组 150 passed → 全量 **696 passed / 1 skipped（322s，exit 0）**；批次 65 N=2 改动（batchrng 桥/settings 三函数/调度器）全部幸存；pytest 统一 `--basetemp=.pytest_tmp` 规避 Windows 默认临时目录 PermissionError（.gitignore 已收编）
 - **合入**：merge-tree 预检无冲突 → audit-pr-1 合并 c9c3e33 + 修复 e045d01 → fast-forward 合回 main 推送（d056a85..e045d01）；GitHub 检测到 PR 提交进 main 后自动标 Merged
 
+**批次 67 落地记录（2026-10-31，分支 main）：跨请求合批（N=2 第三子批，兑现批次 65 留白）**：
+
+- **实现**：同签名多请求跨请求合批——`adr/models/gsv_coalescer.py`（529 行）worker 线程：请求线程 `submit()`（Future 回执）即返回，worker 阻塞 get → 50ms 窗口凑批（cap=`ADR_T2S_COALESCE_BATCH`）→ 轮内持引擎 `_lock` 懒加载 + `_gsv_context` → 按 (t2s_weights, vits_weights) 热换/签名分组 → 组内逐请求 set_seed + 前端切分/bert → 合并 data 池 `to_batch` 整池单批 → t2s 批解码（批次 65 行种子桥，行间零串扰）→ 按请求重组行 → 逐请求 vits 解码 → 逐请求回填 Future；组级失败隔离（单组异常只回填该组，同轮他组不受累）；audit `log_event("coalesce", requests=..., wait_ms=...)`。`gsv_engine.synthesize` 三条件门控（实时读，默认配置走 solo 行为不变）：`ADR_T2S_COALESCE=1`（默认开总闸）× `ADR_T2S_BATCH_RNG=1`（默认关）× 调度并发 ≥2；合批分支请求线程不持 `_gsv_context`、不做 `_ensure_weights`（worker 轮内做），提交路径轻。批次 65 留白所述 TTS.py 多段池入口不再需要——单请求内多段合批已由 `ADR_TTS_BATCH_SIZE`（批次 65）覆盖，本子批做引擎级跨请求合批
+- **settings 旋钮**（+26）：`t2s_coalesce_enabled`（默认开，仅总闸）、`t2s_coalesce_batch`（默认 4 不封顶，worker 单轮抽干请求数上限；与 `tts_batch_size` 段级批大小语义区分）
+- **四修复（字节级位等）**：Fix A 桥解码循环抛弃式全局流抽取 `torch.empty_like(logits).exponential_(1)`——stock 逐步采样经全局流抽 exponential_，行 generator 桥不耗全局流，单行批补齐推进使下游 vits 起点位等、混批由重播重置（adr_t2s_batchrng.py）；Fix B 合并池 `to_batch` 传 `batch_size=len(data_all)` + `split_bucket=False`——官方默认 batch_size=1 会把整池拆回逐行批、分桶按长度聚类会把悬殊请求拆散；Fix C 每请求 vits 解码前重播 `set_seed` + 逐步重放 stock t2s 采样对全局流的消耗（整池单批下逐行重放 = stock batch_size=1 语义）——混批 A/B 先后 set_seed 会污染彼此 vits 起点；Fix D worker 50ms 合批窗口 `_COALESCE_WINDOW_S=0.05`。四修复不碰 third_party（补丁面零新增）
+- **测试**：新增 `tests/test_gsv_coalescer.py`（tiny 假内核，12 项全绿）：G3-cross 混批 vs 串行字节等价 / G1 混批确定性 / 签名分组双权重集 / 签名失败隔离 / 行参数覆盖 / 空切分静默 / 预处理异常隔离 / 合成异常组语义 / no-prompt 组回退 / vocoder 组回退 / settings 旋钮 / worker submit 与 cap 分轮；批次 65 batchrng 桥 7 项全幸存。全量 **708 passed, 1 skipped（387.78s，exit 0）**，较批次 66 +12
+- **冒烟**（`scripts/smoke_coalesce.py`，225 行；yui 档案 vits + 官方预训练 t2s；同进程双腿切 env，A_solo 串行 vs B_coalesce 两请求线程并发提交）：诊断链五问题——①首跑 JIT/形状预热混入计时（形状预热丢弃输出隔离）；②vits 全局流分歧（→Fix C）；③官方 `to_batch` 按 TTS.py 默认 batch_size=1 拆批（→Fix B）；④多线程 submit 重复 spawn worker（`_spawn_lock`）；⑤**调度并发构造期快照**——`GSVEngine.__init__` 构造期快照 scheduler cap（默认 1），引擎创建后切 env 无效，B 腿线程 B 在 `_admit()` 排队到线程 A 合成完才 submit，合批窗口永远落空（两轮各单请求、real=2、x1.01；audit 历史 `coalesce` 事件全 `requests: 1` 同指纹）→ 冒烟侧引擎创建前固定 `ADR_SCHED_MAX_CONCURRENCY=2`。**最终 PASS**：单轮混批日志指纹（`0,[A前端],123,[B前端],0,123` 顺序 set_seed）、真路径门 real=1 solo_fallback=0、音质门双腿 bit_equal=True max|Δ|=0.0（真混批行隔离 + 真权重位等实证，非 n=1 对齐）、加速比 x1.15（串行 20.11s vs 并发 17.43s；output/smoke_coalesce/report.json）
+- **遗留**：加速比取自长度悬殊负载（14.9s vs 2.6s 音频），同签名短请求密集场景收益未测；调度 cap 仍为构造期快照（与合批门控实时读不对称，生产 env 先于进程设置无感，冒烟脚本已注记）；真机多请求压测与 Policy 加速开关联动（音质门过后 Policy 才有可选档）待后续
+
 ---
 
 ## 总体 Review — v1.3.1 实测与画像分档（2026-10-23 ~ 10-25）
@@ -402,6 +411,7 @@
 1. 并发落地顺序（纪要）：N=2 固定份额 → 动态份额 + 隔离 → 准入控制；N=2 前置为真连续批处理内核（t2s bs>1，per-seq RNG + 音质门）
    - [x] **N=2 固定份额第一子批**（批次 64，2026-10-25 落地）：调度层放宽到 2 槽准入验证（`ADR_SCHED_MAX_CONCURRENCY=2`），引擎 `_lock` 保持串行化（避免全局 RNG 竞态）；Runtime 报告新增 `sched_budget` 字段；测试验证两请求同时准入（`busy=2`）但合成不重叠；commit 161f4e2
    - [x] **per-seq RNG 内核底座第二子批**（批次 65，2026-10-31 落地）：t2s 逐行采样桥 `adr/models/adr_t2s_batchrng.py`——decode 循环逐算子对齐 `infer_panel_batch_infer`（左 pad/mask/EOS 逐出/early_stop 全保留），采样改逐行（行 logits 切片 → 行参数 → 行独立 `torch.Generator` 抽 `exponential_`），行间 RNG 零串扰；TTS.py 接线（`ADR_T2S_BATCH_RNG=1` 挂桥 + 非流式逐段行种子派生 `derive_row_seeds` + `to_batch` 行种子透传 + L1280 传 `row_seeds`/`row_sampling`，stock 路径 **kwargs 吸收零影响）；`ADR_TTS_BATCH_SIZE`（默认 1）激活 to_batch 段合批（t2s batch_infer + vits batched decode 上游既有路径）；**音质门**（tiny Text2SemanticDecoder，7 项全绿）：G3 bs=1 桥与 stock 同种子位等（每步恰一次 exponential_ [1,V]）、G1 同种子确定性、G2 行隔离（固定行 a 种子、行 b 种子扫变 → 行 a 全等，EOS 逐出路径真实踩到）、行参数覆盖（top_k=1 贪心与行种子无关）、row_seeds 缺席 fallback 与 stock 位等；**留白第三子批**：跨请求合批（引擎级 segment coalescer + TTS.py 多段池入口 + 逐请求结果分拆），行采样参数/行种子机制已备
+   - [x] **跨请求合批第三子批**（批次 67，2026-10-31 落地）：同签名多请求合并 data 池 → t2s 批解码（行种子桥）→ 按请求重组行 → 逐请求 vits → 逐请求回填；`adr/models/gsv_coalescer.py` worker（50ms 凑批窗口 + 签名分组 + 组级失败隔离 + audit 观测）；三条件门控（总闸默认开 × 行种子桥默认关 × 调度并发 ≥2，默认行为不变）；四修复（全局流补抽/整池单批/vits 重播/凑批窗口）达字节级位等；冒烟 real=1 + 双腿 bit_equal max|Δ|=0.0 + x1.15；全量 708 passed（详见批次 67 落地记录）
 2. 加速开关（STATIC_KV / CUDA Graph / 分桶）过落地门音质把关，之后另出规则集让 Policy 自动开
 3. 真机标定两锚点（E5-2667 v3 CPU / 4060Ti），校准 conservative-v1 阈值
 4. 视觉与 UI（2026-10-25 用户新增）：新图标转 ICO 全尺寸替换 + "默认"配色主题（见 ⑤），与并发并行
