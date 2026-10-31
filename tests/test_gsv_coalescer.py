@@ -585,3 +585,27 @@ def test_h_worker_submit_and_cap_rounds(tmp_path, monkeypatch):
     assert all(sr == SR and a.dtype == np.int16 and len(a) > 0
                for sr, a in results)
     assert len(engine.ensured) >= 1
+
+
+def test_h2_worker_signature_buckets(tmp_path, monkeypatch):
+    """分桶凑轮: 窗口内异签名各自成轮, 同桶一次热换独占整批。
+
+    cap=4, A×2 + B×2 同刻提交 (签名 = 权重集不同):
+    - 旧语义一轮 2 组 → 组间热换 2 次, 每组只 2 条;
+    - 分桶语义 → 2 轮各 1 组, ensured 恰 2 次且按首现顺序。
+    """
+    monkeypatch.setenv("ADR_T2S_COALESCE_BATCH", "4")
+    ref = _make_ref(tmp_path)
+    tts = _make_fake_tts()
+    engine = FakeEngine(tts)
+    c = gc._Coalescer(engine)
+
+    futs = [c.submit(_inputs(f"s13|s9|s{i}", seed=100 + i, ref=ref,
+                             vits_w=f"vits{'A' if i < 2 else 'B'}",
+                             t2s_w=f"t2s{'A' if i < 2 else 'B'}"))
+            for i in range(4)]
+    results = [f.result(timeout=120) for f in futs]
+    assert all(sr == SR and a.dtype == np.int16 and len(a) > 0
+               for sr, a in results)
+    # 每桶一次热换 (桶内同签名不再重换), 桶序 = 首现顺序
+    assert engine.ensured == [("vitsA", "t2sA"), ("vitsB", "t2sB")]

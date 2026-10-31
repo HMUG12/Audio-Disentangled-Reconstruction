@@ -46,6 +46,7 @@ import threading
 import time
 import traceback
 from concurrent.futures import Future
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from adr.core import settings
@@ -111,9 +112,13 @@ def _signature(inputs: dict) -> tuple:
     if prompt_text in [None, ""]:
         norm_prompt = ""
     else:
-        # 与 stock L1177-1180 同款规范化 — 规范化后相同才共享 prompt_cache
+        # 与 stock L1177-1180 同款规范化 — 规范化后相同才共享 prompt_cache。
+        # splits 未加载时 (首窗口分桶发生在请求线程, 不在 GSV 上下文无法
+        # 导入) 跳过句尾归一化 — 只会让签名更分散 (少合批, 保守), 不会
+        # 错误合并; _round 内 splits 已就绪, 分组仍按规范化签名准确。
         norm_prompt = str(prompt_text).strip("\n")
-        if norm_prompt and norm_prompt[-1] not in _HELPERS.splits:
+        if (norm_prompt and _HELPERS.splits is not None
+                and norm_prompt[-1] not in _HELPERS.splits):
             norm_prompt += "。" if (inputs.get("prompt_lang") or "zh") != "en" else "."
     return (
         inputs.get("ref_audio_path") or "",
@@ -124,6 +129,22 @@ def _signature(inputs: dict) -> tuple:
         inputs.get("t2s_weights"),
         inputs.get("vits_weights"),
     )
+
+
+def _sig_dbg(sig: Optional[tuple]) -> str:
+    """签名调试串 (审计用): 同档案请求签名漂移时, 定位是哪个成分变了。"""
+    if sig is None:
+        return "none"
+    ref, aux, prompt, lang, speed, t2s, vits = sig
+    return "|".join([
+        Path(ref).parent.name if ref else "-",
+        f"aux{len(aux)}",
+        f"p{len(prompt)}",
+        lang or "-",
+        f"x{speed:g}",
+        Path(str(t2s)).name if t2s else "-",
+        Path(str(vits)).name if vits else "-",
+    ])
 
 
 def _sampling_params(inputs: dict) -> Tuple[int, float, float, float]:
@@ -180,21 +201,49 @@ class _Coalescer:
     def _loop(self):
         while True:
             job = self._queue.get()  # 阻塞等第一个
-            cap = max(1, settings.t2s_coalesce_batch())
-            jobs = [job]
-            # 小合批窗口: 首个到达后再等 ~50ms 凑批; 队列已有后续时
-            # get 立即返回, 窗口零浪费 — 单请求仅多付 50ms 延迟
-            deadline = time.perf_counter() + _COALESCE_WINDOW_S
-            while len(jobs) < cap:
-                remain = deadline - time.perf_counter()
-                if remain <= 0:
-                    break
-                try:
-                    jobs.append(self._queue.get(timeout=remain))
-                except queue.Empty:
-                    break
             try:
-                self._round(jobs)
+                cap = max(1, settings.t2s_coalesce_batch())
+                # 小合批窗口: 首个到达后再等 ~50ms 抽干队列 (不设条数上限 —
+                # 池深受调度并发约束, 天然有限); 队列已有后续时 get 立即返回,
+                # 窗口零浪费 — 单请求仅多付 50ms 延迟。
+                jobs = [job]
+                deadline = time.perf_counter() + _COALESCE_WINDOW_S
+                while True:
+                    remain = deadline - time.perf_counter()
+                    if remain <= 0:
+                        break
+                    try:
+                        jobs.append(self._queue.get(timeout=remain))
+                    except queue.Empty:
+                        break
+                # 按签名分桶: 同签名才进同一轮。异签名既无法共享 t2s 批解码,
+                # 又引入组间权重热换 — 混合档案下原"一轮多组"每轮吃 2-3 次
+                # 热换、每组只剩 1-2 条可合; 分桶后热换收敛为每桶一次,
+                # 桶内独占整批 cap (实测 12 请求 3 档案: 80s → 3 轮 ~36s)。
+                buckets: Dict[Optional[tuple], List[_Job]] = {}
+                for j in jobs:
+                    try:
+                        sig = _signature(j.inputs)
+                    except BaseException:
+                        sig = None  # 签名失败单独成桶, 由 _round 报错
+                    buckets.setdefault(sig, []).append(j)
+                log_event("coalesce_window", jobs=len(jobs), buckets=len(buckets),
+                          sigs=[f"{_sig_dbg(k)}x{len(v)}"
+                                for k, v in buckets.items()])
+                for bucket in buckets.values():
+                    for i in range(0, len(bucket), cap):
+                        # 同桶超 cap 连续拆片 — 不重开窗口, 无凑批等待
+                        chunk = bucket[i:i + cap]
+                        try:
+                            self._round(chunk)
+                        except BaseException:
+                            # 兜底: 轮级意外不得吞掉未决 future (请求线程
+                            # .result() 会挂死), 逐个回填异常后继续
+                            traceback.print_exc()
+                            for j in chunk:
+                                if not j.future.done():
+                                    j.future.set_exception(
+                                        RuntimeError("coalesce round failed"))
             except BaseException:  # 兜底: worker 永不因单轮异常死亡
                 traceback.print_exc()
 
@@ -208,7 +257,18 @@ class _Coalescer:
         t0 = time.perf_counter()
         groups: Dict[tuple, List[_Job]] = {}
         with engine._lock:
-            engine._lazy_init()
+            try:
+                engine._lazy_init()
+            except BaseException as e:
+                # 懒加载失败 (冷启动 OOM 等): 本轮全部未决请求必须拿到
+                # 异常 — 若任其逃逸到 _loop 兜底, 请求线程 .result() 挂死
+                traceback.print_exc()
+                for job in jobs:
+                    if not job.future.done():
+                        job.future.set_exception(e)
+                log_event("coalesce", requests=len(jobs), ok=0, groups=0,
+                          err=type(e).__name__, sig=["init_failed"])
+                return
             tts = engine._tts
             helpers = _HELPERS.get(tts)
             with engine._gsv_context():
@@ -250,7 +310,8 @@ class _Coalescer:
                       if j.future.done() and j.future.exception() is None)
         log_event("coalesce", requests=len(jobs), ok=ok_jobs,
                   groups=len(groups), wait_ms=int(
-                      (t0 - min(j.submitted for j in jobs)) * 1000))
+                      (t0 - min(j.submitted for j in jobs)) * 1000),
+                  sig=[_sig_dbg(k) for k in groups])
 
     def _reset_models(self, tts):
         """stock run() L1555-1561 语义: 模型态不可信时 del + 按 configs 路径
