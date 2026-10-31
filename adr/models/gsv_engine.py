@@ -40,6 +40,7 @@ from adr.models.gsv_runtime import (  # noqa: F401
 from adr.core import settings
 from adr.core.audit import log_event
 from adr.core.scheduler import SynthesisScheduler
+from adr.models.gsv_coalescer import _Coalescer
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 GSV_DIR = REPO_ROOT / "third_party" / "gpt_sovits"
@@ -402,6 +403,11 @@ class GSVEngine:
         # 批次64 第一子批: N=2 固定份额调度层, 放宽准入到 2 槽; _lock 仍串行化,
         # 真并行需第二子批 t2s 连续批处理内核 (bs>1, per-seq RNG, 音质门)
         self._sched = SynthesisScheduler(settings.scheduler_max_concurrency())
+        # 批次 67 (m10 N=2 第三子批): 跨请求合批 worker — 同签名请求合并
+        # 段池走 t2s 批解码; 实际生效还需 ADR_T2S_COALESCE=1 (默认开) +
+        # 行种子桥 ADR_T2S_BATCH_RNG=1 + 调度并发 >=2 (见 synthesize 门控),
+        # 默认配置下三条件不同时满足 → 合成行为不变
+        self._coalescer = _Coalescer(self)
         # v1.3.x Policy (conservative-v1): 只应用不影响音质的 overrides
         # (线程数 / 流式分块), 显式 env 优先; 构造时应用, 首个请求的切分即生效
         try:
@@ -886,37 +892,66 @@ class GSVEngine:
         t2s_weights = str(Path(t2s_weights).resolve()) if t2s_weights else None
         vits_weights = str(Path(vits_weights).resolve()) if vits_weights else None
         # 批次63 第三子批: 调度准入 (N=1 硬预算), 计数/报告由调度器持有
+        # 批次 67: 跨请求合批门控 — 总开关 (默认开) × 行种子桥 (行隔离
+        # 内核, 默认关) × 调度并发 >=2 (单并发合批无意义) — 默认配置走 solo
+        coalesce_on = (settings.t2s_coalesce_enabled()
+                       and settings.t2s_batch_rng()
+                       and settings.scheduler_max_concurrency() >= 2)
+
+        def _build_inputs(with_weights: bool) -> dict:
+            d = {
+                "text": text,
+                "text_lang": text_lang,
+                "ref_audio_path": str(ref_audio),
+                "prompt_text": prompt_text,
+                "prompt_lang": prompt_lang,
+                "top_k": top_k,
+                "top_p": top_p,
+                "temperature": temperature,
+                "speed_factor": speed_factor,
+                "seed": seed,
+                "text_split_method": split_method,
+                "return_fragment": False,
+                "streaming_mode": False,
+                "parallel_infer": True,
+                "fragment_interval": _resolve_fragment_interval(fragment_interval),
+            }
+            if with_weights:
+                # 合批 worker 按 (t2s_weights, vits_weights) 热换/分组
+                d["t2s_weights"] = t2s_weights
+                d["vits_weights"] = vits_weights
+            return d
+
         with self._admit(), _RuntimeProbe(stream=False) as probe:
-            with self._lock:
-                self._lazy_init()
+            if coalesce_on:
+                # leader 懒加载 (双重检查; worker 轮内持 _lock 合成,
+                # 请求线程只排队 — 锁语义与 solo 相反)
+                if self._tts is None:
+                    with self._lock:
+                        self._lazy_init()
                 probe.start()
-                inputs = {
-                    "text": text,
-                    "text_lang": text_lang,
-                    "ref_audio_path": str(ref_audio),
-                    "prompt_text": prompt_text,
-                    "prompt_lang": prompt_lang,
-                    "top_k": top_k,
-                    "top_p": top_p,
-                    "temperature": temperature,
-                    "speed_factor": speed_factor,
-                    "seed": seed,
-                    "text_split_method": split_method,
-                    "return_fragment": False,
-                    "streaming_mode": False,
-                    "parallel_infer": True,
-                    "fragment_interval": _resolve_fragment_interval(fragment_interval),
-                }
+                inputs = _build_inputs(with_weights=True)
                 # 批次 65 第二子批: 段合批大小 (ADR_TTS_BATCH_SIZE, >1 时
                 # to_batch 把多段合成 bs>1 批; 默认 1 不注入 = stock 字节级一致)
                 bs = settings.tts_batch_size()
                 if bs > 1:
                     inputs["batch_size"] = bs
-                self._ensure_weights(vits_weights, t2s_weights)
-                with self._gsv_context():
-                    sr, audio = None, None
-                    for sr, audio in self._tts.run(inputs):
-                        pass  # 非流式只 yield 一次完整音频
+                sr, audio = self._coalescer.submit(inputs).result()
+            else:
+                with self._lock:
+                    self._lazy_init()
+                    probe.start()
+                    inputs = _build_inputs(with_weights=False)
+                    # 批次 65 第二子批: 段合批大小 (ADR_TTS_BATCH_SIZE, >1 时
+                    # to_batch 把多段合成 bs>1 批; 默认 1 不注入 = stock 字节级一致)
+                    bs = settings.tts_batch_size()
+                    if bs > 1:
+                        inputs["batch_size"] = bs
+                    self._ensure_weights(vits_weights, t2s_weights)
+                    with self._gsv_context():
+                        sr, audio = None, None
+                        for sr, audio in self._tts.run(inputs):
+                            pass  # 非流式只 yield 一次完整音频
             if audio is not None:
                 probe.chunk(len(audio), int(sr))
         if audio is None:
