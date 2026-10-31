@@ -45,7 +45,19 @@ def _find_bigvgan_dir() -> Optional[Path]:
 
 # 批次66 #6: BigVGAN 官方源码用裸顶层名互相 import, 这些名字只在导入期间借用 sys.modules
 _BIGVGAN_TOPLEVEL = ("env", "activations", "utils", "bigvgan")
+# alias_free_activation 是包, 导入期间会连带 alias_free_activation.torch(.act) 等
+# 子模块条目 — 只清父条目会留下指向旧路径的子模块, 后续真导入命中旧空壳
+# (实测: stub 测试残留导致 cannot import name 'Activation1d')
+_BORROWED_PKG = "alias_free_activation"
 _ATTRDICT = None  # env.AttrDict (导入后 env 不再留在 sys.modules, _load_model 用它)
+
+
+def _borrowed_module_names() -> set:
+    """本次导入将借用的 sys.modules 键: 4 个裸顶层名 + alias_free_activation 家族。"""
+    names = set(_BIGVGAN_TOPLEVEL)
+    names.update(n for n in sys.modules
+                 if n == _BORROWED_PKG or n.startswith(_BORROWED_PKG + "."))
+    return names
 
 
 def _import_bigvgan_module(bigvgan_dir: Path) -> Optional[object]:
@@ -60,7 +72,8 @@ def _import_bigvgan_module(bigvgan_dir: Path) -> Optional[object]:
     if inserted:
         sys.path.insert(0, str(bigvgan_dir))
     # 让出已存在的同名模块, 保证 BigVGAN 拿到自己的 utils/env
-    saved = {n: sys.modules.pop(n) for n in _BIGVGAN_TOPLEVEL if n in sys.modules}
+    borrowed = _borrowed_module_names()
+    saved = {n: sys.modules.pop(n) for n in borrowed if n in sys.modules}
 
     try:
         # 先 import env / activations / alias_free_activation (因为 bigvgan.py 依赖它们)
@@ -79,7 +92,7 @@ def _import_bigvgan_module(bigvgan_dir: Path) -> Optional[object]:
         )
         return None
     finally:
-        for n in _BIGVGAN_TOPLEVEL:
+        for n in _borrowed_module_names():
             sys.modules.pop(n, None)
         sys.modules.update(saved)
         if inserted:

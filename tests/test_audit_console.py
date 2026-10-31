@@ -301,7 +301,7 @@ def test_timeout_kills_grandchild_and_reader_finishes(monkeypatch, tmp_path):
     script = tmp_path / "parent.py"
     script.write_text(
         "import subprocess, sys\n"
-        "subprocess.run([sys.executable, '-c', 'import time;time.sleep(25)'], shell=True)\n",
+        "subprocess.run([sys.executable, '-c', 'import time;time.sleep(60)'], shell=True)\n",
         encoding="utf-8")
     proc = subprocess.Popen([sys.executable, str(script)],
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -310,7 +310,9 @@ def test_timeout_kills_grandchild_and_reader_finishes(monkeypatch, tmp_path):
     t0 = time.time()
     console._train_reader(proc, None, run_id=8)
     elapsed = time.time() - t0
-    assert elapsed < 15, "reader 不该等孙进程自然退出 (25s)"
+    # 阈值 30s: 全量套件负载下实测 16.3s (spawn+taskkill 慢), 单跑 ~3s;
+    # 判别本质是 "不等孙进程自然退出 (60s)" — 30s 两侧余量充足
+    assert elapsed < 30, "reader 不该等孙进程自然退出 (60s)"
     assert console._train["state"] == "failed"
     assert any("[timeout]" in ln for ln in console._train["logs"])
 
@@ -322,7 +324,7 @@ def test_train_stop_kills_tree_not_only_parent(monkeypatch, tmp_path, client):
     script = tmp_path / "p.py"
     script.write_text(
         "import subprocess, sys\n"
-        "subprocess.run([sys.executable, '-c', 'import time;time.sleep(30)'], shell=True)\n",
+        "subprocess.run([sys.executable, '-c', 'import time;time.sleep(90)'], shell=True)\n",
         encoding="utf-8")
     proc = subprocess.Popen([sys.executable, str(script)],
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -334,7 +336,9 @@ def test_train_stop_kills_tree_not_only_parent(monkeypatch, tmp_path, client):
     time.sleep(0.1)
     r = client.post("/api/adr/v1/train/stop")
     assert r.status_code == 200
-    reader.join(timeout=5)
+    # 20s: stop 整树杀正常亚秒级收尾, 全量负载下放宽 (实测 <5s);
+    # 孙进程 90s 自然退出 — 杀树失效时 reader 仍不会在 20s 内结束, 断言保持判别力
+    reader.join(timeout=20)
     assert not reader.is_alive(), "reader 该在 stop 后收尾, 不该等孙进程自然退"
     assert console._train["state"] == "stopped"
 

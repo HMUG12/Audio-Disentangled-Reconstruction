@@ -167,6 +167,11 @@ def test_bigvgan_import_restores_sys_path_and_modules(tmp_path, monkeypatch):
     assert sys.modules["utils"] is host_utils, "宿主 utils 模块应被恢复"
     for n in ("env", "activations", "bigvgan"):
         assert n not in sys.modules, f"{n} 不应残留在 sys.modules"
+    # alias_free_activation 是包, 连带 .torch/.torch.act 子条目都不得残留
+    # (残留会让后续真导入命中旧空壳: cannot import name 'Activation1d')
+    assert not [n for n in sys.modules
+                if n == "alias_free_activation" or n.startswith("alias_free_activation.")], \
+        "alias_free_activation 家族不应残留在 sys.modules"
     assert bv._ATTRDICT is not None and issubclass(bv._ATTRDICT, dict)
 
 
