@@ -1,6 +1,6 @@
 # ADR 服务容器 (CUDA 变体, 叠加配置 — 必须与基础 compose 文件同用)
 #
-# 与 docker-compose.yml 叠加后: 镜像切到 adr-server:1.2.0-cuda (cu130 wheel),
+# 与 docker-compose.yml 叠加后: 镜像切到 adr-server:1.3.1-cuda (cu130 wheel),
 # 并向容器透传全部 GPU。无 GPU 机器误用时, 引擎 auto 自检会回退 CPU 运行。
 #
 # 用法:
@@ -11,7 +11,7 @@
 
 services:
   adr:
-    image: adr-server:1.2.0-cuda
+    image: adr-server:1.3.1-cuda
     build:
       context: ..
       dockerfile: docker/Dockerfile

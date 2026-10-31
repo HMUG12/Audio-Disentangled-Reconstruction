@@ -139,6 +139,14 @@ def engine_busy(engine) -> bool:
     return callable(qd) and qd() >= max_queue()
 
 
+# 批次69: 入口语言白名单 (GSV v2_languages; 合批层不再依赖 assert)。
+# 与 third_party/gpt_sovits TTS.py v2_languages 对齐, v1 模型为其子集。
+SUPPORTED_LANGS = frozenset({
+    "auto", "auto_yue", "en", "zh", "ja", "yue", "ko",
+    "all_zh", "all_ja", "all_yue", "all_ko",
+})
+
+
 # 批次66: 数值参数合法闭区间 (None = 未传不校验; speed 区间可 env 调)
 _FIXED_BOUNDS = {
     "top_k": (1, 1000),
@@ -208,6 +216,15 @@ def _check_params(req: dict):
     if msg:
         return JSONResponse(status_code=400,
                             content={"message": msg, "code": "invalid_params"})
+    # 批次69: 语言在入口收敛 (此前非法值穿到合批层 assert, 同组请求连坐)
+    for key in ("text_lang", "prompt_lang"):
+        v = req.get(key)
+        if v is not None and str(v).lower() not in SUPPORTED_LANGS:
+            return JSONResponse(
+                status_code=400,
+                content={"message": f"{key} unsupported: {v!r}, "
+                                    f"must be one of {sorted(SUPPORTED_LANGS)}",
+                         "code": "invalid_params"})
     return None
 
 
@@ -215,6 +232,15 @@ def _busy_response() -> JSONResponse:
     return JSONResponse(status_code=503,
                         content={"message": "busy: synthesis queue full",
                                  "code": "busy"})
+
+
+def _encode_and_cache(cache_key: str, audio, sr: int, media_type: str) -> bytes:
+    """批次69 (Q7): 编码 (ffmpeg 子进程) + 缓存落盘均在线程池执行,
+    不再阻塞事件循环 (含 /health 与流式首包)。"""
+    buf = pack_audio(BytesIO(), to_int16(audio), sr, media_type)
+    data = buf.getvalue()
+    tts_cache.put(cache_key, data, ext=media_type)
+    return data
 
 
 def _stream_generator(engine, req: dict, media_type: str):
@@ -332,9 +358,9 @@ async def tts_handle(req: dict, request: Request) -> Response:
             temperature=req.get("temperature", 1.0),
             fragment_interval=req.get("fragment_interval"),
         )
-        buf = pack_audio(BytesIO(), to_int16(audio), sr, media_type)
-        tts_cache.put(cache_key, buf.getvalue(), ext=media_type)
-        return Response(buf.getvalue(), media_type=f"audio/{media_type}")
+        data = await asyncio.to_thread(
+            _encode_and_cache, cache_key, audio, sr, media_type)
+        return Response(data, media_type=f"audio/{media_type}")
     except Exception as e:
         if is_cuda_oom(e):
             # 批次57: OOM 独立分流 — 释放碎片显存 + 503 友好提示 (此前是裸 400 堆栈原文)

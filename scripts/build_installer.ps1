@@ -1,4 +1,4 @@
-﻿# Batch 44: build the ADR Studio installer (Inno Setup).
+﻿﻿# Batch 44: build the ADR Studio installer (Inno Setup).
 # NSIS (tauri bundle) hit the hard ~2GB data limit on our 3.89GB runtime,
 # so the installer is produced by Inno Setup from the no-bundle output.
 #
@@ -26,6 +26,14 @@ if (-not (Test-Path $iscc)) { throw "Inno Setup 6 not found at: $iscc" }
 $rtDirName = if ($Gpu) { "runtime-gpu" } else { "runtime-cpu" }
 $rtPy = Join-Path $root "build\$rtDirName\python\python.exe"
 if (Test-Path $rtPy) { $py = $rtPy } else { $py = "python" }
+
+# 批次69 (Q2): 版本面单源 + 合规门禁前置 — 漂移/缺口在出包前失败, 不产出坏包
+foreach ($gate in @("check_versions.py", "check_compliance.py")) {
+  Write-Host "[build_installer] gate: $gate" -ForegroundColor Cyan
+  & $py (Join-Path $PSScriptRoot $gate)
+  if ($LASTEXITCODE -ne 0) { throw "$gate failed - 修复后再打包" }
+}
+
 $checkArgs = @((Join-Path $PSScriptRoot "check_runtime.py"),
                "--runtime", (Join-Path $root "build\$rtDirName"))
 if ($Gpu) { $checkArgs += "--allow-cuda" }
@@ -33,10 +41,16 @@ Write-Host "[build_installer] runtime check: $py $checkArgs" -ForegroundColor Cy
 & $py @checkArgs
 if ($LASTEXITCODE -ne 0) { throw "check_runtime failed - 修复 runtime 后再打包" }
 
+# 批次69 (Q1): 固定版本 Tauri CLI (desktop/package.json 钉死), 不再 npx @2 动态解析
+$tauriCli = Join-Path $root "desktop\node_modules\.bin\tauri.cmd"
+if (-not (Test-Path $tauriCli)) {
+  throw "tauri CLI missing - 先执行: cd desktop && npm ci (版本见 package.json)"
+}
+
 Push-Location (Join-Path $root "desktop\src-tauri")
 try {
   $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
-  npx -y @tauri-apps/cli@2 build --no-bundle
+  & $tauriCli build --no-bundle
   if ($LASTEXITCODE -ne 0) { throw "tauri build failed" }
 }
 finally { Pop-Location }

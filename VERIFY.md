@@ -5,7 +5,7 @@
 
 | # | 声明 | 验证步骤 | 预期结果 |
 | --- | --- | --- | --- |
-| 1 | 可安装、可自检 | `python -c "import adr; print(adr.__version__)"`；`adr doctor` | `1.0.0`；doctor 无 FAIL（警告可 `--fix` 清理） |
+| 1 | 可安装、可自检 | `python -c "import adr; print(adr.__version__)"`；`adr doctor` | `1.3.1`；doctor 无 FAIL（警告可 `--fix` 清理） |
 | 2 | 测试套件全绿 | `python -m pytest --basetemp=<tmp> -p no:cacheprovider` | 实测基线 **431 passed + 1 skipped**（ASR 用例默认跳过，`--run-asr` 开启） |
 | 3 | 桌面壳测试全绿 | `cd desktop/src-tauri; cargo test --lib` | **4 passed** |
 | 4 | 服务可启动 | `python -m adr.server` 后请求 `/api/adr/v1/health` | HTTP 200，含引擎阶段/就绪状态 |
@@ -18,7 +18,7 @@
 | 11 | 个人数据不入库 | `git ls-files data/ output/ "*.wav"` | 空（录音/档案/产物全部 ignore；`.gitignore` 头部原则：个人录音为生物特征数据，绝不入库） |
 | 12 | 局域网访问强制鉴权 | `python -m adr.server --addr 0.0.0.0`（不设 key） | 启动横幅打无鉴权安全警告；设置 `ADR_TTS_API_KEY` 后无 key 请求被拒 |
 | 13 | 安装包卫生 | `python scripts/check_runtime.py`（构建产物上） | exit 0：无根级裸 .pth、无个人数据面、无底模、CPU 包无 nvidia_* 库 |
-| 14 | 版本一致 | `import adr` vs `desktop/src-tauri/Cargo.toml` vs `tauri.conf.json` | 四面统一 `1.0.0` |
+| 14 | 版本一致 | `python scripts/check_versions.py`（已覆盖 Docker 镜像 tag 与文档示例） | 全部版本面统一 `1.3.1`，exit 0 |
 
 ## 评估口径说明（为何不是 PESQ/ESTOI）
 

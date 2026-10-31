@@ -605,9 +605,12 @@ class _Coalescer:
 
         no_prompt_text = prompt_text in [None, ""]
 
-        assert text_lang in tts.configs.languages
-        if not no_prompt_text:
-            assert prompt_lang in tts.configs.languages
+        # 批次69 (Q8): 显式校验替代 assert — assert 在 -O 下被剥离, 且错误文案
+        # 无法定位是哪个语种字段 (入口已校验, 此处为兜底防线)。
+        if text_lang not in tts.configs.languages:
+            raise ValueError(f"unsupported text_lang: {text_lang!r}")
+        if not no_prompt_text and prompt_lang not in tts.configs.languages:
+            raise ValueError(f"unsupported prompt_lang: {prompt_lang!r}")
 
         if no_prompt_text and tts.configs.use_vocoder:
             raise helpers.no_prompt_error(

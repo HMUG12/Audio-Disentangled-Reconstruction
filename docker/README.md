@@ -10,7 +10,7 @@
 - GPT-SoVITS 钉版: 构建时容器内 clone commit
   `d523079fc05d9a8028d6085bffe4a2757c32abb6`, 并自动应用 24 处兼容补丁
   (`scripts/apply_compat_patches.py`)
-- 双镜像变体: `adr-server:1.2.0-cpu` (默认) / `adr-server:1.2.0-cuda` (cu130 wheel)
+- 双镜像变体: `adr-server:1.3.1-cpu` (默认) / `adr-server:1.3.1-cuda` (cu130 wheel)
 
 ## 系统要求
 
@@ -37,7 +37,7 @@ cd docker
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
 ```
 
-镜像 tag 变为 `adr-server:1.2.0-cuda`, 并透传全部 GPU。无 GPU 的机器误用 CUDA
+镜像 tag 变为 `adr-server:1.3.1-cuda`, 并透传全部 GPU。无 GPU 的机器误用 CUDA
 镜像时, 引擎 auto 自检会回退 CPU 运行 (不会崩溃)。
 
 验证 GPU 生效:
@@ -51,8 +51,8 @@ docker compose exec adr python -c "import torch; print(torch.cuda.is_available()
 tag `v*` 推送自动触发 GitHub Actions 构建双变体并发布至 ghcr.io，无需本地构建：
 
 ```bash
-docker pull ghcr.io/hmug12/adr-server:1.2.0-cpu
-docker pull ghcr.io/hmug12/adr-server:1.2.0-cuda
+docker pull ghcr.io/hmug12/adr-server:1.3.1-cpu
+docker pull ghcr.io/hmug12/adr-server:1.3.1-cuda
 
 # 常青 tag: 始终指向最新发布版
 docker pull ghcr.io/hmug12/adr-server:cpu
@@ -62,7 +62,7 @@ docker pull ghcr.io/hmug12/adr-server:cpu
 
 ```bash
 docker run -d --name adr-server -p 127.0.0.1:9881:9881 -v adr-data:/data \
-  ghcr.io/hmug12/adr-server:1.2.0-cpu
+  ghcr.io/hmug12/adr-server:1.3.1-cpu
 ```
 
 默认只发布到宿主机回环 (仅本机可达)。需要局域网/公网访问时改为
@@ -110,7 +110,7 @@ docker run -d --name adr-server -p 127.0.0.1:9881:9881 -v adr-data:/data \
 # 仓库根执行
 powershell -File scripts/build_docker.ps1                                    # CPU
 powershell -File scripts/build_docker.ps1 -Cuda                              # CUDA
-powershell -File scripts/build_docker.ps1 -Tag myreg/adr:1.2.0 -Cuda         # 自定义 tag
+powershell -File scripts/build_docker.ps1 -Tag myreg/adr:1.3.1 -Cuda         # 自定义 tag
 powershell -File scripts/build_docker.ps1 -ProxyPrefix "https://ghproxy.net/"  # GSV clone 加速
 ```
 

@@ -20,7 +20,7 @@ runtime 1.78GB。本脚本固化排除规则, 防止垃圾再混入。
    日/韩/粤合成的 import 链, 缺失则 text_lang=ja/ko/yue 请求 400)
 
 用法:
-  python scripts/check_runtime.py                 # 默认 build/runtime, CPU 包
+  python scripts/check_runtime.py                 # 自动探测 build/runtime-cpu|gpu
   python scripts/check_runtime.py --allow-cuda    # GPU 包构建体检
 退出码: 0 通过 / 1 有 FAIL
 """
@@ -32,6 +32,10 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_RUNTIME = REPO / "build" / "runtime"
+# 批次69 (Q3): 实际构建产物是 runtime-cpu / runtime-gpu, 旧默认 build/runtime 不存在
+RUNTIME_CANDIDATES = (REPO / "build" / "runtime-cpu",
+                      REPO / "build" / "runtime-gpu",
+                      DEFAULT_RUNTIME)
 
 # 个人数据面: 通用分发不得携带 (档案/训练产物/日志/实验输出)
 PRIVATE_DIRS = ("data", "output", "logs", "GPT_weights_v2", "SoVITS_weights_v2")
@@ -47,13 +51,21 @@ def dir_size_gb(p: Path) -> float:
     return sum(f.stat().st_size for f in p.rglob("*") if f.is_file()) / 1024**3
 
 
+def _default_runtime() -> Path:
+    """批次69 (Q3): 未显式指定时按实际产物名探测, 全不存在则回落旧默认 (报不存在)。"""
+    for p in RUNTIME_CANDIDATES:
+        if p.is_dir():
+            return p
+    return DEFAULT_RUNTIME
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--runtime", type=Path, default=DEFAULT_RUNTIME)
+    ap.add_argument("--runtime", type=Path, default=None)
     ap.add_argument("--allow-cuda", action="store_true",
                     help="GPU 包构建: 放行 nvidia_* CUDA 库")
     args = ap.parse_args()
-    rt = args.runtime.resolve()
+    rt = (args.runtime or _default_runtime()).resolve()
 
     fails: list[str] = []
     warns: list[str] = []

@@ -366,6 +366,18 @@
 - **验证**：全量 **713 passed, 1 skipped（392.19s，exit 0）**，较批次 67 +5；`check_versions` 9 项 OK、`check_compliance` 7 组 OK；`tauri.conf.json` JSON 解析通过；`build_installer.ps1` 误删的 UTF-8 BOM 已修回（PS 5.1 读含中文脚本必需）
 - **遗留**：P1-4（`externalBin`/`resources` 声明让 `tauri build` 产物自洽）与 P1/P2 其余项未动，见审计报告第 6 节
 
+**批次 69 落地记录（2026-10-31，分支 main）：8 维审计 P1 修复（第 4–10 项）**（审计全文 `docs/audit-2026-10-31.md` §7.2）：
+
+- **P1-5 构建可复现**：`scripts/build_runtime.ps1` 的 PBS 下载钉 `tag=20261009` + 完整 asset 名 + SHA256（缓存命中与下载后都校验，不匹配删除重下；原 `releases/latest` 与 GitHub API 拉取不可复现且有 403/限流风险）；`chardet` 钉 `7.7.0`（按 `build/runtime-cpu` 实测 dist-info 版本，非审计预设值）；`desktop/package.json`/lock 钉 `@tauri-apps/cli=2.12.1`，`build_installer.ps1` 改为调用 `desktop/node_modules/.bin/tauri.cmd`（缺失即报错提示 `npm ci`，不再 `npx -y` 每次拉最新）
+- **P1-6 门禁前置**：`build_installer.ps1` 在 runtime 体检前串行跑 `check_versions.py` + `check_compliance.py`，非 0 即 throw；`check_runtime.py` 默认 `--runtime` 改为按序探测 `build/runtime-cpu` → `build/runtime-gpu` → `build/runtime`（原硬编码 `build/runtime` 不存在），`--runtime` 仍可显式覆盖
+- **P1-7 缓存版本化**：`adr/server/tts_cache.py` 增 `CACHE_VERSION=1`，`make_key` 哈希纳入版本、盘上文件名带 `v1-` 前缀；扫描时删除 `.tmp` 与非当前前缀条目（旧格式/旧版本自动失效），内存键仍为剥离前缀后的裸 key，对上层零感
+- **P1-8 语言/overrides 收口**：`v2_compat.py` 新增 `SUPPORTED_LANGS`（对齐 GSV v2_languages）并在 `_check_params` 对 `text_lang`/`prompt_lang` 返回 400；`v3_compat.py` 新增 `_normalize_overrides()`（11 字段，复用 `_bad_number`，语言小写+白名单，整型/浮点归一），非法值回 `invalid_params` 错误帧且会话保持；`top_k`/`top_p`/`temperature` 叠加到档案 `sampling` 之上（请求优先）、`speed_factor`/`seed` 透传；合批层 `gsv_coalescer._preprocess` 的 `assert` 改显式 `ValueError`（`-O` 下 assert 被剥离且原文案无法定位字段）；删死变量 `session_voice_id`
+- **P1-9 非流式不阻塞事件循环**：`v2_compat.py` 新增 `_encode_and_cache()`（`pack_audio` + `tts_cache.put`），经 `asyncio.to_thread` 执行，ffmpeg 编码与写盘不再卡 `/health` 与流式首包
+- **P1-10 版本面单源化**：Dockerfile `ARG ADR_VERSION`、两份 compose 镜像 tag、`docker/README.md`、根 `README.md`、`VERIFY.md`、`REPRODUCE.md` 全部对齐 `1.3.1`；`check_versions.py` 扩到 16 项（新增 Dockerfile/compose/两份 README 检查）
+- **P1-4 废止**：批次 68 P0-3 已定 `tauri build --no-bundle` + Inno Setup 唯一交付路径，`externalBin`/`resources` 只对 bundler 生效，补齐即无效配置；决定不新增，约定固化在 `build_installer.ps1` 头注释
+- **测试**：新增 8 项——v2 语言白名单 400（`text_lang`/`prompt_lang` 参数化 2 项）、v3 overrides 采样叠加生效、v3 非法 overrides（`top_k=0`/`text_lang`/`speed_factor=0` 参数化 3 项）错误帧且会话可恢复、合批「1 坏 2 好」隔离（显式 `ValueError`，两条合法请求照常出音频）、缓存旧版本/裸 hex 文件扫描丢弃；既有缓存用例改用 `_fname()` 生成断言文件名
+- **验证**：定向 pytest 56 passed（3 文件 + 新增用例）；全量 **721 passed, 1 skipped（351.76s，exit 0）**，较批次 68 +8；`check_versions` → `all faces = 1.3.1 (16 checks OK)`、`check_compliance` → 7 组 OK
+
 ---
 
 ## 总体 Review — v1.3.1 实测与画像分档（2026-10-23 ~ 10-25）

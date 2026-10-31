@@ -17,6 +17,7 @@ class FakeEngine:
         self.fail = None          # 待抛异常 (None = 正常)
         self.waiting = 0          # 模拟排队数
         self.synth_calls = 0
+        self.stream_kw = []       # 批次69: 记录 synthesize_stream 实参
 
     def queue_depth(self):
         return self.waiting
@@ -28,6 +29,7 @@ class FakeEngine:
         return np.full(320, 0.1, np.float32), 32000
 
     def synthesize_stream(self, text, ref_audio, **kw):
+        self.stream_kw.append(dict(kw))
         yield np.full(160, 0.1, np.float32), 32000
         if self.fail:
             raise self.fail
@@ -145,6 +147,19 @@ def test_normal_params_pass(client):
     assert r.status_code == 200
 
 
+# ─── 批次69: 语言入口白名单 (此前非法值穿到合批层 assert, 同组连坐) ───
+
+@pytest.mark.parametrize("field", ["text_lang", "prompt_lang"])
+def test_v2_unsupported_lang_400(client, engine, field):
+    r = client.post("/api/v2/tts", json=dict(BODY, **{field: "klingon"}))
+    assert r.status_code == 400 and r.json()["code"] == "invalid_params"
+    assert field in r.json()["message"]
+    assert engine.synth_calls == 0
+    # 合法语种 (v2_languages 全集内) 照常放行
+    assert client.post("/api/v2/tts",
+                       json=dict(BODY, **{field: "yue"})).status_code == 200
+
+
 # ─── #42 ref_audio_path 普通文件 + 大小上限 ───
 
 def test_ref_audio_dir_rejected(client, engine, tmp_path):
@@ -215,6 +230,52 @@ def test_v3_busy_when_queue_full(client, engine, voice_dir, monkeypatch):
         ws.send_json({"cmd": "text", "data": "你好"})
         assert ws.receive_json() == {"type": "error", "code": "busy",
                                      "message": "busy: synthesis queue full"}
+
+
+def _drain_sentence(ws) -> int:
+    """读到 sentence_done 为止 (跳过二进制音频帧), 返回音频帧数。"""
+    assert ws.receive_json()["type"] == "sentence"
+    n = 0
+    while True:
+        m = ws.receive()
+        if m.get("bytes") is not None:
+            n += 1
+            continue
+        msg = json.loads(m["text"])
+        assert msg["type"] != "error", msg
+        if msg["type"] == "sentence_done":
+            return n
+
+
+# ─── 批次69: v3 overrides 采样叠加 + 非法值错误帧 ───
+
+def test_v3_overrides_applied_to_engine(client, engine, voice_dir):
+    with _ws(client) as ws:
+        ws.send_json({"cmd": "init", "voice_id": "demo",
+                      "top_k": 5, "top_p": 0.8, "temperature": 0.9,
+                      "speed_factor": 1.2, "seed": 7})
+        assert ws.receive_json() == {"type": "ready", "voice_id": "demo"}
+        ws.send_json({"cmd": "text", "data": "你好"})
+        assert _drain_sentence(ws) == 2          # FakeEngine 两帧
+    kw = engine.stream_kw[0]
+    assert (kw["top_k"], kw["top_p"], kw["temperature"]) == (5, 0.8, 0.9)
+    assert kw["speed_factor"] == 1.2 and kw["head_seed"] == 7
+
+
+@pytest.mark.parametrize("overrides, needle", [
+    ({"top_k": 0}, "top_k"),
+    ({"text_lang": "klingon"}, "text_lang"),
+    ({"speed_factor": 0}, "speed_factor"),
+])
+def test_v3_invalid_overrides_error_frame(client, voice_dir, overrides, needle):
+    # 非法 overrides 回错误帧 (不静默忽略), 会话保持可用
+    with _ws(client) as ws:
+        ws.send_json({"cmd": "init", "voice_id": "demo", **overrides})
+        msg = ws.receive_json()
+        assert msg["type"] == "error" and msg["code"] == "invalid_params"
+        assert needle in msg["message"]
+        ws.send_json({"cmd": "init", "voice_id": "demo"})
+        assert ws.receive_json() == {"type": "ready", "voice_id": "demo"}
 
 
 def test_v3_voices_logs_bad_profile(client, voice_dir, caplog):
