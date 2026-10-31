@@ -280,3 +280,29 @@ def tts_batch_size() -> int:
         return max(1, int(os.environ.get("ADR_TTS_BATCH_SIZE", "1")))
     except ValueError:
         return 1
+
+
+# ===== 跨请求合批 (批次67, m10 N=2 第三子批) =====
+def t2s_coalesce_enabled() -> bool:
+    """跨请求合批总开关 (ADR_T2S_COALESCE, 批次67; 默认 "1" 开)。
+
+    仅是总闸: 实际生效还需 t2s_batch_rng() (行种子可复现内核) 与
+    scheduler_max_concurrency() >= 2 (调度层允许多请求), 默认配置下
+    两者皆不满足 → 默认行为不变。
+    """
+    return os.environ.get("ADR_T2S_COALESCE", "1") != "0"
+
+
+def t2s_coalesce_batch() -> int:
+    """跨请求合批单轮最多一次处理的请求数 (ADR_T2S_COALESCE_BATCH, 批次67;
+    默认 4)。非数字 / 小于 1 回落 4; 不设上限钳制 — 默认 4 不只服务 8G 卡,
+    显存充裕的机器可自行调大, 合批行数随请求数自然增长。
+
+    注意与 tts_batch_size() (段级 to_batch 批大小) 语义不同: 本值限制
+    worker 每轮抽干的请求数, 后者限制合并池 to_batch 的批行数。
+    """
+    try:
+        v = int(os.environ.get("ADR_T2S_COALESCE_BATCH", 4))
+        return v if v > 0 else 4
+    except ValueError:
+        return 4

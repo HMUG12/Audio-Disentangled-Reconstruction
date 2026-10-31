@@ -188,6 +188,13 @@ def _batch_rng_decode(model, x: List[torch.Tensor], x_lens: torch.Tensor,
         if idx < 11:  ###至少预测出10个token不然不给停止（0.4s）
             logits = logits[:, :-1]
 
+        # stock 采样每步经 multinomial_sample_one_no_sync 在全局流抽
+        # exponential_ (utils.py 无 generator); 本桥逐行 generator 不耗全局
+        # 流 → 抛弃式同形抽取补齐推进: 单行批时全局流消耗与 stock 逐步
+        # 一致, 下游 vits randn_like 起点位等; 混批时形状随行数变化, 由
+        # 调用方 (coalescer) set_seed 重播重置, 无害
+        torch.empty_like(logits).exponential_(1)
+
         samples = _sample_rows(logits, y, [rows[g] for g in active_row_ids])
 
         y = torch.concat([y, samples], dim=1)
