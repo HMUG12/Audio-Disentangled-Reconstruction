@@ -8,6 +8,8 @@
 环境变量:
     ADR_TTS_DEFAULT_PROFILE  默认音色档案名 (ref_audio_path 缺失时回退)
     ADR_TTS_API_KEY          API Key, 逗号分隔多个; 未设置则不鉴权 (默认)
+    ADR_CORS_ORIGINS         额外允许的浏览器来源, 逗号分隔; * = 全开 (S2)
+    ADR_ALLOWED_HOSTS        额外允许的 Host 主机名, 逗号分隔; * = 不检查 (S2)
     (解析单源: adr/core/settings.py, 批次36 — 本文件不再裸读 os.environ)
 """
 from __future__ import annotations
@@ -24,6 +26,7 @@ from adr.core import settings
 from adr.server import console, native, openai_compat, v2_compat, v3_compat
 from adr.server.auth import APIKeyMiddleware
 from adr.server.exceptions import http_error_code
+from adr.server.origin_guard import LOCAL_ORIGIN_REGEX, OriginGuardMiddleware
 
 
 def _prewarm_gsv(default_profile: str | None) -> None:
@@ -61,12 +64,35 @@ def create_app(engine=None) -> FastAPI:
     # CORS 需在外层: 预检 OPTIONS 免 key, 401 响应也带 CORS 头 (浏览器可读)。
     api_keys = settings.api_keys()
     app.add_middleware(APIKeyMiddleware, api_keys=api_keys)
-    # CORS 全开 (与 api_neko 一致): N.E.K.O 前端 / 浏览器插件直连
+    # S2: CORS 白名单 (原为 "*", 任意网页可跨站读写本机服务)。
+    # 允许: Tauri 壳 + 本机 localhost 页面 + ADR_CORS_ORIGINS; "*" 恢复全开。
+    # 控制台页同源, 不经 CORS。N.E.K.O 后端 / curl 不带 Origin, 不受影响。
+    extra_origins = settings.cors_origins()
+    any_origin = "*" in extra_origins
+    if any_origin:
+        cors_kwargs = {"allow_origins": ["*"]}
+    else:
+        cors_kwargs = {
+            "allow_origins": [*settings.TAURI_ORIGINS, *extra_origins],
+            "allow_origin_regex": LOCAL_ORIGIN_REGEX,
+        }
+    # 来源守卫: 未设 API Key 时拦截跨站请求 (CORS 拦不住表单/WS) 与 DNS 重绑定;
+    # 设了 key 由鉴权兜底, 守卫关闭 (反代/自定义域名部署不受限)。
+    # 加在 CORS 之前 = 位于 CORS 内层: 403 也带 CORS 头, 白名单来源可读。
+    extra_hosts = settings.allowed_hosts()
+    app.add_middleware(
+        OriginGuardMiddleware,
+        enabled=not api_keys,
+        allowed_origins=[*settings.TAURI_ORIGINS, *extra_origins],
+        allowed_hosts=extra_hosts,
+        allow_any_origin=any_origin,
+        allow_any_host="*" in extra_hosts,
+    )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
         allow_methods=["*"],
         allow_headers=["*"],
+        **cors_kwargs,
     )
     # 批次41a: HTTPException 响应增量补结构化 code — 既有 detail 字段与
     # 文本逐字保留 (wire 兼容), 422 校验错误 (RequestValidationError) 不经

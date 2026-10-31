@@ -273,6 +273,9 @@
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
+/* 批次66: api_key 透传 (与 pro/easy 同款) — 启用 ADR_TTS_API_KEY 后壳/浏览器经 ?api_key= 带入 */
+const KEY = new URLSearchParams(location.search).get("api_key");
+const api = p => p + (KEY ? (p.includes("?") ? "&" : "?") + "api_key=" + encodeURIComponent(KEY) : "");
 const LANGS = ["all_zh", "auto", "all_ja", "all_ko", "zh", "en", "ja", "ko", "yue"];
 const STAGE_TXT = () => ({
   ready: I.t("call.stg_ready"), queued: I.t("call.stg_queued"), importing: I.t("call.stg_importing"),
@@ -322,7 +325,7 @@ $("plang").value = "zh";
 /* ---- 档案下拉 → 自动填充 prompt_text / ref_audio_path ---- */
 async function loadProfiles() {
   try {
-    const d = await fetch("/api/adr/v1/profiles").then(r => r.json());
+    const d = await fetch(api("/api/adr/v1/profiles")).then(r => r.json());
     profiles = d.profiles || [];
   } catch { profiles = []; }
   const sel = $("prof");
@@ -479,7 +482,7 @@ $("go").onclick = async () => {
   $("meta").textContent = I.t("call.meta_synth");
   const t0 = performance.now();
   try {
-    const r = await fetch(url, {
+    const r = await fetch(api(url), {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
@@ -513,7 +516,10 @@ $("go").onclick = async () => {
 async function pollEngine() {
   const el = $("engStat");
   try {
-    const d = await fetch("/api/adr/v1/system/stats").then(r => r.json());
+    // 读 /health 而非 /system/stats: 两者都含 engine_stage/queue_depth/synth_busy,
+    // 但启用 API_KEY 后 /health 免鉴权、stats 需鉴权 (保护硬件+模型数据);
+    // 此轮询纯读引擎字段, 改读 /health 避免鉴权后全页瘫痪。
+    const d = await fetch(api("/api/adr/v1/health")).then(r => r.json());
     const stage = d.engine_stage || "";
     if (d.engine_ready) {
       const q = d.queue_depth || 0, b = d.synth_busy || 0;

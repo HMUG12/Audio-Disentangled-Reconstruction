@@ -454,12 +454,18 @@ class Trainer:
             self.log.info(f"  checkpoint: saving LoRA-only "
                          f"({sum(v.numel() for v in model_state_to_save.values())/1e3:.1f}K params)")
         else:
+            # 批次66 #2: dequantize 需要复制模型, 不能就地破坏正在训练的 self.model
             # 全量保存前反量化 4bit 层, 避免 uint8 权重与未量化模型 shape/keys 不匹配
             from adr.training.efficient import has_quantized_modules, dequantize_4bit
             if has_quantized_modules(self.model):
-                self.log.info("  checkpoint: 4bit layers detected, dequantizing before save")
-                dequantize_4bit(self.model)
-            model_state_to_save = self.model.state_dict()
+                self.log.info("  checkpoint: 4bit layers detected, dequantizing a copy for save")
+                import copy
+                model_copy = copy.deepcopy(self.model)
+                dequantize_4bit(model_copy)
+                model_state_to_save = model_copy.state_dict()
+                del model_copy
+            else:
+                model_state_to_save = self.model.state_dict()
 
         ckpt = {
             "model_state": model_state_to_save,
@@ -487,7 +493,9 @@ class Trainer:
         path = Path(path)
         # weights_only=False 是因为我们保存了 dataclass config
         # ADR checkpoint 只来自我们自己的训练,trusted
-        ckpt = torch.load(path, map_location=self.device, weights_only=False)
+        # 批次65 显存双重加载: map CPU 后再由 load_state_dict 自动迁到模型设备,
+        # 避免反序列化与参数复制两份 GPU 驻留
+        ckpt = torch.load(path, map_location="cpu", weights_only=False)
         if ckpt.get("use_lora", False) or self.config.use_lora:
             from adr.training.lora import load_lora_state_dict
             loaded, missing = load_lora_state_dict(self.model, ckpt["model_state"])

@@ -18,7 +18,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
+import os
 from io import BytesIO
+from pathlib import Path
 from typing import Union
 
 from fastapi import APIRouter, Request, Response
@@ -111,9 +114,81 @@ def _resolve_profile(request: Request, req: dict):
     return None
 
 
+def _env_num(name: str, default, cast=int):
+    """批次66: 资源上限 env 读取; 非法/非正值回落默认 (正常使用碰不到的宽松值)。"""
+    try:
+        v = cast(os.environ.get(name, default))
+    except ValueError:
+        return default
+    return v if v > 0 and math.isfinite(v) else default
+
+
+def max_text_chars() -> int:
+    """ADR_TTS_MAX_TEXT_CHARS — 单次合成文本字数上限 (批次66, 默认 20000; v3 WS 共用)。"""
+    return _env_num("ADR_TTS_MAX_TEXT_CHARS", 20000)
+
+
+def max_queue() -> int:
+    """ADR_TTS_MAX_QUEUE — 引擎排队数上限, 超出回 503 busy (批次66, 默认 32; v3 WS 共用)。"""
+    return _env_num("ADR_TTS_MAX_QUEUE", 32)
+
+
+def engine_busy(engine) -> bool:
+    """批次66: 软准入 — 引擎排队数达上限即拒绝 (测试假引擎无 queue_depth 视为不忙)。"""
+    qd = getattr(engine, "queue_depth", None)
+    return callable(qd) and qd() >= max_queue()
+
+
+# 批次66: 数值参数合法闭区间 (None = 未传不校验; speed 区间可 env 调)
+_FIXED_BOUNDS = {
+    "top_k": (1, 1000),
+    "top_p": (0.0, 1.0),
+    "temperature": (0.0, 10.0),
+    "fragment_interval": (0.0, 10.0),
+}
+
+
+def _bad_number(req: dict):
+    """返回第一个越界/非数值参数的错误文案, 全部合法返回 None。"""
+    bounds = dict(_FIXED_BOUNDS, speed_factor=(
+        _env_num("ADR_TTS_SPEED_MIN", 0.1, float),
+        _env_num("ADR_TTS_SPEED_MAX", 10.0, float)))
+    for key, (lo, hi) in bounds.items():
+        v = req.get(key)
+        if v is None:
+            continue
+        try:
+            ok = lo <= float(v) <= hi   # NaN 比较恒 False → 拒绝
+        except (TypeError, ValueError):
+            ok = False
+        if not ok:
+            return f"{key} out of range: {v!r}, must be within [{lo}, {hi}]"
+    return None
+
+
+def _check_ref_audio(path: str):
+    """批次66: ref_audio_path 若存在须为普通文件且不超大小上限 (挡设备文件/巨型文件)。
+
+    路径不存在时放行, 维持既有行为 (由引擎报错); 返回错误文案或 None。
+    """
+    try:
+        p = Path(path)
+        if not p.exists():
+            return None
+        if not p.is_file():
+            return f"ref_audio_path is not a regular file: {path}"
+        cap_mb = _env_num("ADR_TTS_REF_MAX_MB", 100)
+        if p.stat().st_size > cap_mb * 1024 * 1024:
+            return f"ref_audio_path exceeds {cap_mb}MB limit: {path}"
+    except (OSError, ValueError) as e:
+        return f"invalid ref_audio_path: {e}"
+    return None
+
+
 def _check_params(req: dict):
     """必填项 + media_type 白名单 (批次34 收口至 SynthesisService)。
 
+    批次66: 追加文本长度上限 (413) 与数值参数区间校验 (400)。
     返回错误 Response 或 None。
     """
     try:
@@ -122,7 +197,24 @@ def _check_params(req: dict):
     except SynthesisParamsError as e:
         return JSONResponse(status_code=400,
                             content={"message": str(e), "code": error_code(e)})
+    cap = max_text_chars()
+    if len(req["text"]) > cap:
+        return JSONResponse(
+            status_code=413,
+            content={"message": f"text too long: {len(req['text'])} chars, "
+                                f"limit {cap} (ADR_TTS_MAX_TEXT_CHARS)",
+                     "code": "payload_too_large"})
+    msg = _bad_number(req)
+    if msg:
+        return JSONResponse(status_code=400,
+                            content={"message": msg, "code": "invalid_params"})
     return None
+
+
+def _busy_response() -> JSONResponse:
+    return JSONResponse(status_code=503,
+                        content={"message": "busy: synthesis queue full",
+                                 "code": "busy"})
 
 
 def _stream_generator(engine, req: dict, media_type: str):
@@ -152,6 +244,8 @@ def _stream_generator(engine, req: dict, media_type: str):
         # 流已开始, 无法改写状态码 — 记录后终止 (与 GSV api_v2 行为一致)
         if is_cuda_oom(e):
             handle_cuda_oom(e)  # 释放碎片显存 + 友好警告日志 (批次57)
+            # 批次66: OOM 截断同样记一条可定位的服务端日志 (wire 行为不变)
+            logger.warning("streaming tts truncated by CUDA OOM")
         else:
             logger.exception("streaming tts failed: %s", e)
 
@@ -183,6 +277,10 @@ async def tts_handle(req: dict, request: Request) -> Response:
     err = _check_params(req)
     if err is not None:
         return err
+    msg = await asyncio.to_thread(_check_ref_audio, req["ref_audio_path"])
+    if msg:
+        return JSONResponse(status_code=400,
+                            content={"message": msg, "code": "invalid_params"})
 
     streaming_mode = req.get("streaming_mode", False)
     media_type = req["media_type"]
@@ -206,6 +304,9 @@ async def tts_handle(req: dict, request: Request) -> Response:
 
     try:
         if streaming:
+            # 批次66: 排队达上限即 503, 不再无界占用线程池
+            if engine_busy(engine):
+                return _busy_response()
             return StreamingResponse(
                 _stream_generator(engine, req, media_type),
                 media_type=f"audio/{media_type}")
@@ -213,6 +314,8 @@ async def tts_handle(req: dict, request: Request) -> Response:
         cached = tts_cache.get(cache_key)
         if cached is not None:
             return Response(cached, media_type=f"audio/{media_type}")
+        if engine_busy(engine):   # 批次66: 缓存命中不占引擎, 故放在命中之后
+            return _busy_response()
         audio, sr = await asyncio.to_thread(
             SynthesisService.synthesize_once,
             engine, req["text"], req["ref_audio_path"],
@@ -238,6 +341,8 @@ async def tts_handle(req: dict, request: Request) -> Response:
             return JSONResponse(status_code=503,
                                 content={"message": handle_cuda_oom(e),
                                          "code": "cuda_oom"})
+        # 批次66: 服务端留堆栈; 400 状态码为 GSV wire 兼容保留 (code 区分 internal_error)
+        logger.exception("tts failed")
         return JSONResponse(status_code=400,
                             content={"message": "tts failed", "Exception": str(e),
                                      "code": error_code(e)})
@@ -345,6 +450,12 @@ async def set_gpt_weights(request: Request, weights_path: str = None):
         engine = _get_engine(request)
         await asyncio.to_thread(engine.warmup, None, weights_path)
     except Exception as e:
+        if is_cuda_oom(e):
+            # 批次66: 热换权重 OOM 与 tts_handle 同口径 — 释放碎片显存 + 503
+            return JSONResponse(status_code=503,
+                                content={"message": handle_cuda_oom(e),
+                                         "code": "cuda_oom"})
+        logger.exception("change gpt weight failed")  # 批次66
         return JSONResponse(status_code=400,
                             content={"message": "change gpt weight failed",
                                      "Exception": str(e),
@@ -365,6 +476,12 @@ async def set_sovits_weights(request: Request, weights_path: str = None):
         engine = _get_engine(request)
         await asyncio.to_thread(engine.warmup, weights_path, None)
     except Exception as e:
+        if is_cuda_oom(e):
+            # 批次66: 热换权重 OOM 与 tts_handle 同口径 — 释放碎片显存 + 503
+            return JSONResponse(status_code=503,
+                                content={"message": handle_cuda_oom(e),
+                                         "code": "cuda_oom"})
+        logger.exception("change sovits weight failed")  # 批次66
         return JSONResponse(status_code=400,
                             content={"message": "change sovits weight failed",
                                      "Exception": str(e),

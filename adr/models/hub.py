@@ -40,6 +40,7 @@ PRETRAINED_REGISTRY: dict[str, PretrainedInfo] = {
         category="vocoder",
         url="https://huggingface.co/nvidia/bigvgan_22khz_80band/resolve/main/bigvgan_generator.pt",
         filename="bigvgan_22khz_80band.pt",
+        sha256="88a217b20d46f1607f1f7c298673d73ce0f20443ccc1e90b3cc9b776c6144f05",  # 批次66: 探针P13 补全校验
         size_mb=420.0,
         description="NVIDIA BigVGAN 22kHz 80-band (default vocoder)",
         version="1.0.0",
@@ -47,8 +48,9 @@ PRETRAINED_REGISTRY: dict[str, PretrainedInfo] = {
     "bigvgan_24khz_100band": PretrainedInfo(
         name="bigvgan_24khz_100band",
         category="vocoder",
-        url="https://huggingface.co/nvidia/bigvgan_24khz_100band_256x/resolve/main/bigvgan_generator.pt",
+        url="https://huggingface.co/nvidia/bigvgan_24khz_100band/resolve/main/bigvgan_generator.pt",
         filename="bigvgan_24khz_100band.pt",
+        sha256="89ea59f0e3d83f87bf80ffa4dde3a5c32a5279ee465d90dbd31c0da80878ce99",  # 批次66
         size_mb=450.0,
         description="NVIDIA BigVGAN 24kHz 100-band (high quality)",
         version="1.0.0",
@@ -59,6 +61,7 @@ PRETRAINED_REGISTRY: dict[str, PretrainedInfo] = {
         category="content_encoder",
         url="https://huggingface.co/microsoft/wavlm-base/resolve/main/pytorch_model.bin",
         filename="wavlm_base.pt",
+        sha256="b41ab60fdcdc113ff164212c72b371dcd420a5773ca1f6c8f54d6809225ce072",  # 批次66
         size_mb=380.0,
         description="Microsoft WavLM-Base (content features)",
         version="1.0.0",
@@ -154,6 +157,13 @@ class PretrainedHub:
                 raise RuntimeError(
                     f"Truncated download for {name}: "
                     f"expected {total} bytes, got {downloaded}"
+                )
+
+            # 批次66: 既无 sha256 又无 Content-Length 时无从校验, 拒收 (防截断体被当成模型)
+            if not info.sha256 and total <= 0:
+                raise RuntimeError(
+                    f"Unverifiable download for {name}: "
+                    f"no sha256 and no Content-Length"
                 )
 
             # 验证 SHA256 (如果有) — 在 .part 上做, 通过后才替换正式文件

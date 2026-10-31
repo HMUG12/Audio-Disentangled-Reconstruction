@@ -8,20 +8,29 @@
 """
 from __future__ import annotations
 
+import logging
+import os
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.routing import APIRoute
 from pydantic import BaseModel
 
 from adr.models import voice_library
 from adr.server import pathsafe
 from adr.server.v2_compat import tts_handle
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/adr/v1", tags=["adr-native"])
 
 _API_VERSION = "1.0"
+
+
+def _basename(path):
+    return Path(path).name if path else None
 
 
 @router.get("/health", summary="服务状态")
@@ -44,9 +53,10 @@ async def health(request: Request):
         "queue_depth": _gsv.queue_depth(),
         "synth_busy": _gsv.synth_busy(),
         "default_profile": getattr(state, "default_profile", None),
+        # 批次66: /health 免鉴权 — 权重只回文件名, 不泄露服务器绝对路径/用户名
         "weights": {
-            "t2s": getattr(state, "t2s_weights", None),
-            "vits": getattr(state, "vits_weights", None),
+            "t2s": _basename(getattr(state, "t2s_weights", None)),
+            "vits": _basename(getattr(state, "vits_weights", None)),
         },
     }
 
@@ -58,6 +68,9 @@ async def profiles():
         try:
             meta = voice_library.load_voice(name)
         except Exception:
+            # 批次66: 坏档案仍跳过 (行为不变), 但留日志便于定位
+            logger.warning("profiles: load_voice(%r) failed, skipped", name,
+                           exc_info=True)
             continue
         out.append({
             "name": name,
@@ -135,21 +148,86 @@ async def profile_export(name: str):
         return JSONResponse(status_code=400,
                             content={"message": f"invalid profile name: {name}",
                                      "code": "invalid_name"})
+    # 批次66: 404 由档案存在性直接判定, 不再匹配异常文案 "不存在"
+    if name not in voice_library.list_voices():
+        return JSONResponse(status_code=404,
+                            content={"message": f"档案不存在: {name}",
+                                     "code": "export_failed"})
     fd, tmp = tempfile.mkstemp(suffix=".adrvoice")
     os.close(fd)
     try:
         await asyncio.to_thread(voice_package.export_voice, name, tmp)
     except ValueError as e:
         os.unlink(tmp)
-        return JSONResponse(
-            status_code=404 if "不存在" in str(e) else 400,
-            content={"message": str(e), "code": "export_failed"})
+        return JSONResponse(status_code=400,
+                            content={"message": str(e), "code": "export_failed"})
+    except BaseException:
+        # 批次65 导出回滚: 非 ValueError (OSError/取消等) 也删掉含声纹权重的临时包
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     return FileResponse(tmp, media_type="application/zip",
                         filename=f"{name}.adrvoice",
                         background=BackgroundTask(os.unlink, tmp))
 
 
-@router.post("/profiles/import", summary="导入音色档案包 (.adrvoice)")
+def _import_max_bytes() -> int:
+    """ADR_PROFILE_IMPORT_MAX_MB — 档案包上传上限 (批次66, 默认 4096MB; 含权重的正常包远小于此)。"""
+    try:
+        mb = int(os.environ.get("ADR_PROFILE_IMPORT_MAX_MB", 4096))
+    except ValueError:
+        mb = 4096
+    return (mb if mb > 0 else 4096) * (1 << 20)
+
+
+def _import_too_large(cap: int) -> JSONResponse:
+    return JSONResponse(
+        status_code=413,
+        content={"message": f"档案包超过 {cap // (1 << 20)}MB 上限 "
+                            f"(ADR_PROFILE_IMPORT_MAX_MB)",
+                 "code": "payload_too_large"})
+
+
+class _ImportTooLarge(HTTPException):
+    """批次66: 继承 HTTPException — FastAPI 解析 body 时原样上抛 (不被包成 400)。"""
+
+
+class _CappedImportRoute(APIRoute):
+    """批次66: 在 multipart 解析 (会先整包落临时盘) 之前卡上传大小。
+
+    Content-Length 超限直接 413; 无 Content-Length (chunked) 则逐块计数,
+    越限即中断解析 — 临时盘占用不超过上限 + 一块。
+    """
+
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+
+        async def capped(request: Request):
+            cap = _import_max_bytes()
+            cl = request.headers.get("content-length", "")
+            if cl.isdigit() and int(cl) > cap:
+                return _import_too_large(cap)
+            receive, seen = request.receive, 0
+
+            async def limited_receive():
+                nonlocal seen
+                msg = await receive()
+                if msg["type"] == "http.request":
+                    seen += len(msg.get("body", b""))
+                    if seen > cap:
+                        raise _ImportTooLarge(status_code=413)
+                return msg
+
+            try:
+                return await handler(Request(request.scope, limited_receive))
+            except _ImportTooLarge:
+                return _import_too_large(cap)
+
+        return capped
+
+
 async def profile_import(package: UploadFile = File(...),
                          name: str = Form(None),
                          overwrite: bool = Form(False)):
@@ -163,13 +241,19 @@ async def profile_import(package: UploadFile = File(...),
     from starlette.background import BackgroundTask
 
     suffix = Path(package.filename or "import.adrvoice").suffix or ".adrvoice"
+    cap = _import_max_bytes()
     fd, tmp = tempfile.mkstemp(suffix=suffix)
     try:
+        size = 0
         with os.fdopen(fd, "wb") as out:
             while True:
                 chunk = await package.read(1 << 20)
                 if not chunk:
                     break
+                size += len(chunk)
+                if size > cap:
+                    # 批次66: 二道防线 (主防线在 _CappedImportRoute, 解析前即拦)
+                    return _import_too_large(cap)
                 out.write(chunk)
         r = await asyncio.to_thread(voice_package.import_voice, tmp,
                                     name, overwrite)
@@ -186,6 +270,12 @@ async def profile_import(package: UploadFile = File(...),
     log_event("voice_import",
               name_fp=text_fp(name) if name else None, overwrite=overwrite)
     return {"imported": r}
+
+
+# 批次66: 用 add_api_route 挂自定义 route 类 (装饰器不支持 route_class_override)
+router.add_api_route("/profiles/import", profile_import, methods=["POST"],
+                     summary="导入音色档案包 (.adrvoice)",
+                     route_class_override=_CappedImportRoute)
 
 
 class NativeTTS_Request(BaseModel):

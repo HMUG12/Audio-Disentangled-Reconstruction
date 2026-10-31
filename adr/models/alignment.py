@@ -49,6 +49,15 @@ def maximum_path(logp: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
 def _maximum_path_single(logp: np.ndarray, mask: np.ndarray,
                          N: int, T: int) -> np.ndarray:
     """单样本 DP。只考虑前 N 音素 × 前 T 帧 (有效区域)。"""
+    # 批次66: MAS 要求 N≤T (每音素至少1帧), N>T 无解; 原代码会让末音素吃光所有帧。
+    # 退化为均匀单调对齐: 每帧仍恰好属于一个音素, 首帧→音素0, 末帧→末音素
+    if N > T:
+        path = np.zeros((logp.shape[0], logp.shape[1]), dtype=np.float32)
+        if T > 0:
+            idx = np.rint(np.linspace(0, N - 1, T)).astype(int)
+            path[idx, np.arange(T)] = 1.0
+        return path
+
     NEG = -1e9
     v = np.where(mask[:N, :T], logp[:N, :T], NEG).astype(np.float64)
 

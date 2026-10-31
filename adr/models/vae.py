@@ -11,12 +11,10 @@ QLoRA-ready: 所有可学习变换均为 Conv1d/Linear, 无自定义 CUDA 算子
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Optional
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
 class PosteriorEncoder(nn.Module):

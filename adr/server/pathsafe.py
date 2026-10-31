@@ -39,7 +39,8 @@ def is_safe_name(name: str) -> bool:
     并拒绝 Windows 设备保留名 (CON/NUL 等会致落盘失败或重定向为设备)。"""
     if not name:
         return False
-    if any(ch in name for ch in ("/", "\\", "\x00")):
+    # ":" 拦 Windows 盘符相对名 (如 "D:evil"): pathlib join 丢基路径换盘符 (批次62)。
+    if any(ch in name for ch in ("/", "\\", "\x00", ":")):
         return False
     if ".." in name:
         return False

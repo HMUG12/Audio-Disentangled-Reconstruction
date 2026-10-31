@@ -44,6 +44,13 @@ def _resolve_ffmpeg() -> str:
     )
 
 
+def _check_ffmpeg(returncode: int, err: bytes) -> None:
+    """批次66: ffmpeg 非 0 退出时抛错, 不把空/半截音频当成功返回。"""
+    if returncode != 0:
+        tail = (err or b"").decode("utf-8", "replace").strip()[-500:]
+        raise RuntimeError(f"ffmpeg 编码失败 (exit={returncode}): {tail}")
+
+
 def to_int16(data: np.ndarray) -> np.ndarray:
     """float [-1,1] → int16 (clip 防爆音, 与 api_neko 打包逻辑一致)。"""
     if data.dtype == np.int16:
@@ -69,7 +76,8 @@ def pack_ogg(io_buffer: BytesIO, data: np.ndarray, rate: int) -> BytesIO:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    out, _ = process.communicate(input=to_int16(data).tobytes())
+    out, err = process.communicate(input=to_int16(data).tobytes())
+    _check_ffmpeg(process.returncode, err)
     io_buffer.write(out)
     return io_buffer
 
@@ -121,7 +129,8 @@ def pack_mp3(io_buffer: BytesIO, data: np.ndarray, rate: int) -> BytesIO:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    out, _ = process.communicate(input=to_int16(data).tobytes())
+    out, err = process.communicate(input=to_int16(data).tobytes())
+    _check_ffmpeg(process.returncode, err)
     io_buffer.write(out)
     return io_buffer
 
@@ -145,7 +154,8 @@ def pack_aac(io_buffer: BytesIO, data: np.ndarray, rate: int) -> BytesIO:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    out, _ = process.communicate(input=to_int16(data).tobytes())
+    out, err = process.communicate(input=to_int16(data).tobytes())
+    _check_ffmpeg(process.returncode, err)
     io_buffer.write(out)
     return io_buffer
 

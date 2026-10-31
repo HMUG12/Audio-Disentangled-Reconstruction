@@ -23,7 +23,6 @@ from adr.training.callbacks import (
 from adr.training.dataset import CollatedBatch, VoiceCloneDataset, collate_samples
 from adr.training.grad_ckpt import (
     enable_gradient_checkpointing,
-    estimate_memory_saved,
     is_gradient_checkpointing_enabled,
 )
 from adr.training.optimizer import (
@@ -39,7 +38,6 @@ try:
         LoRAConfig,
         LoRALinear,
         apply_lora,
-        freeze_non_lora,
         get_lora_state_dict,
         load_lora_state_dict,
         merge_lora,
@@ -51,17 +49,10 @@ except ImportError:
 # M2: efficient (FlashAttn/quant/memory)
 try:
     from adr.training.efficient import (
-        enable_flash_attention,
-        estimate_inference_memory,
-        estimate_model_memory,
         get_memory_stats,
-        get_sdpa_backends,
         is_bnb_available,
-        is_sdpa_available,
-        print_memory_stats,
         print_trainable_parameters,
         quantize_4bit,
-        quantize_8bit,
     )
     _EFFICIENT_AVAILABLE = True
 except ImportError:
@@ -82,19 +73,18 @@ __all__ = [
     "build_scheduler",
     "collate_samples",
     "enable_gradient_checkpointing",
-    "estimate_memory_saved",
     "is_gradient_checkpointing_enabled",
 ]
 
 if _LORA_AVAILABLE:
     __all__ += [
-        "LoRAConfig", "LoRALinear", "apply_lora", "freeze_non_lora",
+        "LoRAConfig", "LoRALinear", "apply_lora",
         "get_lora_state_dict", "load_lora_state_dict", "merge_lora",
     ]
 if _EFFICIENT_AVAILABLE:
     __all__ += [
-        "enable_flash_attention", "estimate_inference_memory",
-        "estimate_model_memory", "get_memory_stats", "get_sdpa_backends",
-        "is_bnb_available", "is_sdpa_available", "print_memory_stats",
-        "print_trainable_parameters", "quantize_4bit", "quantize_8bit",
+        "get_memory_stats",
+        "is_bnb_available",
+        "print_trainable_parameters",
+        "quantize_4bit",
     ]
