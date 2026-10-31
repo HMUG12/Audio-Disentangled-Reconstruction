@@ -2,10 +2,12 @@
 
 对齐 OpenAI Audio API 规范:
 - POST /v1/audio/speech  body: {model, input, voice?, response_format?, speed?, stream?}
-  · model / voice → ADR 音色档案 (data/voices/<name>), 与 /api/v2 的 profile 同源
+  · model / voice → ADR 音色档案 (data/voices/<name>), 与 /api/v2 的 profile 同源;
+    官方标准名 (tts-1 / tts-1-hd / gpt-4o-mini-tts 及 alloy/nova/... 音色) 不当作
+    档案, 落回 app.state.default_profile — 官方 SDK 默认参数开箱可用
   · response_format ∈ wav/mp3/aac/ogg/pcm, 默认 mp3 (与 OpenAI 官方一致)
-  · speed 透传语速; stream=true 时流式音频响应 (逐块可播, 默认 true,
-    对应 N.E.KO 界面"完整文本请求、流式音频响应")
+  · speed 透传语速; stream 默认 false (与官方一致, 返回整段音频);
+    stream=true 时流式音频响应 (N.E.K.O 界面"完整文本请求、流式音频响应"显式传 true)
 - GET /v1/models  列出可用音色档案, 供客户端模型下拉选择
 - 错误响应统一改写为 OpenAI 风格 {"error": {"message", "type"}}
 
@@ -28,15 +30,36 @@ router = APIRouter(prefix="/v1", tags=["openai"])
 # OpenAI response_format → v2 media_type (pcm = 裸 s16le)
 FORMATS = {"wav": "wav", "mp3": "mp3", "aac": "aac", "ogg": "ogg", "pcm": "raw"}
 
+# 官方标准 model / voice 名: 不作为 ADR 档案解析, 交给默认档案兜底
+_OPENAI_MODELS = {"tts-1", "tts-1-hd", "gpt-4o-mini-tts", "gpt-4o-audio-preview"}
+_OPENAI_VOICES = {
+    "alloy", "ash", "ballad", "coral", "echo", "fable", "onyx", "nova",
+    "sage", "shimmer", "verse", "marin", "cedar",
+}
+
+
+def _archive_name(model: str | None, voice: str | None) -> str | None:
+    """model / voice → ADR 档案名。
+
+    官方标准名 (标准 SDK 的 tts-1 / alloy) 不是 ADR 档案, 跳过并返回 None,
+    由 v2 侧回退 ``app.state.default_profile``; 自定义名照旧解析, 加载失败
+    仍回 400 (名称笔误要显式报错, 不能静默换成默认人声)。
+    """
+    for name in (model, voice):
+        name = (name or "").strip()
+        if name and name not in _OPENAI_MODELS and name not in _OPENAI_VOICES:
+            return name
+    return None
+
 
 class SpeechRequest(BaseModel):
     """OpenAI /v1/audio/speech 请求体; 末段为 ADR 扩展 (可选)。"""
-    model: str | None = None          # 音色档案名 (N.E.KO"模型ID")
+    model: str | None = None          # 音色档案名 (N.E.KO"模型ID"); 官方标准名跳过
     input: str = ""                   # 要合成的完整文本
-    voice: str | None = None          # OpenAI 语义的音色 → 档案别名回退
+    voice: str | None = None          # OpenAI 语义的音色 → 档案别名回退 (标准名跳过)
     response_format: str = "mp3"      # wav/mp3/aac/ogg/pcm
     speed: float = 1.0
-    stream: bool = True
+    stream: bool = False
     # ── ADR 扩展 ── (OpenAI 协议外, 可选)
     text_lang: str | None = None
     prompt_lang: str | None = None
@@ -87,8 +110,7 @@ async def audio_speech(request: Request, body: SpeechRequest):
         "seed": body.seed,
         "media_type": FORMATS[fmt],
         "streaming_mode": 1 if body.stream else 0,
-        "profile": body.model,
-        "voice": body.voice,
+        "profile": _archive_name(body.model, body.voice),
         "t2s_weights": body.t2s_weights,
         "vits_weights": body.vits_weights,
     }

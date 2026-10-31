@@ -16,8 +16,9 @@
 #   ./data       -> /data    (ADR_DATA_DIR: 档案/输出/TTS缓存/HF缓存, bind mount)
 #   named volume -> 权重自引导目录 (首启自动下载约 2GB: pretrained_models + G2PWModel)
 #
-# 注意: 容器默认监听 0.0.0.0 且无鉴权; 若暴露到局域网/公网,
-# 请在 environment 设置 ADR_TTS_API_KEY (详见 docker/README.md)。
+# 注意: 容器内监听 0.0.0.0 (端口映射必需), 默认只发布到宿主机回环地址;
+# 若改为对外发布 (如 "0.0.0.0:9881:9881"), 必须设置 ADR_TTS_API_KEY
+# (详见 docker/README.md 与 adr/server/__main__.py 的启动告警)。
 
 services:
   adr:
@@ -32,7 +33,8 @@ services:
     restart: unless-stopped
     shm_size: "2g"
     ports:
-      - "9881:9881"
+      # 默认仅本机可达; 局域网/公网访问改为 "0.0.0.0:9881:9881" 并设 ADR_TTS_API_KEY
+      - "127.0.0.1:9881:9881"
     volumes:
       # 业务数据 (档案/输出/缓存): 宿主机 docker/data/ 目录
       - ./data:/data

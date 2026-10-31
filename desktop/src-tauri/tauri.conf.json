@@ -14,14 +14,7 @@
     }
   },
   "bundle": {
-    "active": true,
-    "targets": ["nsis"],
-    "icon": ["icons/icon.ico"],
-    "licenseFile": "./resources/license.rtf",
-    "windows": {
-      "nsis": {
-        "languages": ["SimpChinese"]
-      }
-    }
+    "active": false,
+    "icon": ["icons/icon.ico"]
   }
 }

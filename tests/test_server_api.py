@@ -633,7 +633,7 @@ def test_openai_speed_passthrough(client, engine, voice_dir):
 
 
 def test_openai_stream_wav(client, engine, voice_dir):
-    """stream=true (默认) → 流式 WAV, 首块 44B 头 + 裸 PCM。"""
+    """stream=true → 流式 WAV, 首块 44B 头 + 裸 PCM (默认 false, 与官方一致)。"""
     r = client.post("/v1/audio/speech", json={
         "model": "demo", "input": "hi", "response_format": "wav", "stream": True})
     assert r.status_code == 200
