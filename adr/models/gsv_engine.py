@@ -824,6 +824,11 @@ class GSVEngine:
                     "parallel_infer": True,
                     "fragment_interval": _resolve_fragment_interval(fragment_interval),
                 }
+                # 批次 65 第二子批: 段合批大小 (ADR_TTS_BATCH_SIZE, >1 时
+                # to_batch 把多段合成 bs>1 批; 默认 1 不注入 = stock 字节级一致)
+                bs = settings.tts_batch_size()
+                if bs > 1:
+                    inputs["batch_size"] = bs
                 self._ensure_weights(vits_weights, t2s_weights)
                 with self._gsv_context():
                     sr, audio = None, None

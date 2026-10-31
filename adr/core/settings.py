@@ -225,3 +225,26 @@ def scheduler_max_concurrency() -> int:
         return max(1, int(os.environ.get("ADR_SCHED_MAX_CONCURRENCY", "1")))
     except ValueError:
         return 1
+
+
+def t2s_batch_rng() -> bool:
+    """t2s per-seq RNG 批采样桥开关 (ADR_T2S_BATCH_RNG=1, 批次65 第二子批)。
+
+    开启后多段合批解码走逐行采样 (每行独立 torch.Generator, 行间 RNG 零
+    串扰) — 行种子可复现, 为跨请求合批 (第三子批) 备内核; 关闭 = stock
+    全局 RNG 行为字节级一致。TTS.py 挂钩直接读 env, 此入口供设置中心/
+    观测层同源。
+    """
+    return os.environ.get("ADR_T2S_BATCH_RNG", "").strip() == "1"
+
+
+def tts_batch_size() -> int:
+    """t2s/vits 段合批大小 (ADR_TTS_BATCH_SIZE, 批次65 第二子批; 默认 1 =
+    上游行为)。>1 时 run() 的 to_batch 把多段合成 bs>1 批 (t2s infer_panel
+    batch_infer + vits batched decode); 配合 t2s_batch_rng 桥保证行种子可
+    复现。非数字 / 小于 1 一律回落 1。
+    """
+    try:
+        return max(1, int(os.environ.get("ADR_TTS_BATCH_SIZE", "1")))
+    except ValueError:
+        return 1

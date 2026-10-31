@@ -392,7 +392,7 @@
 **下阶段入口**：
 1. 并发落地顺序（纪要）：N=2 固定份额 → 动态份额 + 隔离 → 准入控制；N=2 前置为真连续批处理内核（t2s bs>1，per-seq RNG + 音质门）
    - [x] **N=2 固定份额第一子批**（批次 64，2026-10-25 落地）：调度层放宽到 2 槽准入验证（`ADR_SCHED_MAX_CONCURRENCY=2`），引擎 `_lock` 保持串行化（避免全局 RNG 竞态）；Runtime 报告新增 `sched_budget` 字段；测试验证两请求同时准入（`busy=2`）但合成不重叠；commit 161f4e2
-   - [ ] **N=2 真并行第二子批**（批次 65）：t2s 连续批处理内核（bs>1 动态批, per-seq RNG + 音质门）
+   - [x] **per-seq RNG 内核底座第二子批**（批次 65，2026-10-31 落地）：t2s 逐行采样桥 `adr/models/adr_t2s_batchrng.py`——decode 循环逐算子对齐 `infer_panel_batch_infer`（左 pad/mask/EOS 逐出/early_stop 全保留），采样改逐行（行 logits 切片 → 行参数 → 行独立 `torch.Generator` 抽 `exponential_`），行间 RNG 零串扰；TTS.py 接线（`ADR_T2S_BATCH_RNG=1` 挂桥 + 非流式逐段行种子派生 `derive_row_seeds` + `to_batch` 行种子透传 + L1280 传 `row_seeds`/`row_sampling`，stock 路径 **kwargs 吸收零影响）；`ADR_TTS_BATCH_SIZE`（默认 1）激活 to_batch 段合批（t2s batch_infer + vits batched decode 上游既有路径）；**音质门**（tiny Text2SemanticDecoder，7 项全绿）：G3 bs=1 桥与 stock 同种子位等（每步恰一次 exponential_ [1,V]）、G1 同种子确定性、G2 行隔离（固定行 a 种子、行 b 种子扫变 → 行 a 全等，EOS 逐出路径真实踩到）、行参数覆盖（top_k=1 贪心与行种子无关）、row_seeds 缺席 fallback 与 stock 位等；**留白第三子批**：跨请求合批（引擎级 segment coalescer + TTS.py 多段池入口 + 逐请求结果分拆），行采样参数/行种子机制已备
 2. 加速开关（STATIC_KV / CUDA Graph / 分桶）过落地门音质把关，之后另出规则集让 Policy 自动开
 3. 真机标定两锚点（E5-2667 v3 CPU / 4060Ti），校准 conservative-v1 阈值
 4. 视觉与 UI（2026-10-25 用户新增）：新图标转 ICO 全尺寸替换 + "默认"配色主题（见 ⑤），与并发并行
