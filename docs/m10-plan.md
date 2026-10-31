@@ -338,6 +338,15 @@
 - **测试**：新增画像并存 / 旧文件兼容 / policy 设备不一致不应用 / worker 重新生成 4 项；全量 523 passed, 1 skipped
 - **未实测**：未重打安装包做真机换包验证（逻辑由单测覆盖）
 
+**批次 66 落地记录（2026-10-31，分支 main）：外部 PR #1 审计收编**：
+
+- **背景**：仓库收到首个外部 PR（#1，贡献者 NavaCloudy，8 个 fix 提交，50 文件 +3525/−471，配套 9 个 test_audit_*.py + test_gsv_stream_threading.py + test_naming.py 约 2000 行测试）。贡献者对仓库了解深入（提交信息直接引用"批次 64 放宽 N=2 并发后必现"），修复风格与本仓注释/批次规范一致
+- **发现与审查路径**：gh CLI 未安装、GitHub API 匿名限流 403 → `git ls-remote origin 'refs/pull/*'` 发现 refs/pull/1/head → fetch 到本地 audit-pr-1 分支逐提交审查（同 refs 下的 plan-v2-roadmap 为自家批次 61 路线分支，非 PR）
+- **8 提交内容**：cache（TTS 缓存惰性加载/满载误删/ffmpeg 空音频）；voice-lib（并发绑定锁/TOCTOU/zip 炸弹）；engines（ORT 会话加锁/**N=2 流式 _CHDIR_LOCK 跨 yield 死锁**——StreamingResponse 线程池逐 next() 换线程，RLock 持锁跨 yield 后 release 抛错永久卡死，批次 64 放宽并发后必现，修法为持锁合成进单 worker 线程、音频块入队生成器锁外 yield/NaN 显式报错/原子写）；inference（不静默降级/sha256 校验）；training（4bit 不就地反量化/训练结束释放显存/attention mask 语义）；server（上传 413 前置/输入上限）；auth（**Origin 门禁 origin_guard.py**：纯 ASGI 中间件，仅未设 API Key 时生效守住 N.E.K.O 零改造红线，Host 检查防 DNS 重绑定 + Origin 同源/白名单，`ADR_CORS_ORIGINS`/`ADR_ALLOWED_HOSTS` 逃生阀/空白 Key 判未设/theme.js 豁免）；cli（list 遮蔽/doctor 备份）
+- **收编时修复 PR 自带 2 个问题**（e045d01）：① **bigvgan.py sys.modules 清理漏 alias_free_activation 包家族**——PR 只清 4 个裸顶层名，stub 测试（test_audit_training 写空 act.py）残留 `alias_free_activation.torch.act` 空壳条目 → 后续真 BigVGAN 导入命中空壳报 `cannot import name 'Activation1d'` → vocoder 连锁 4 failed + 2 errors；症状隐蔽（main 全量过、audit 单跑过、仅 audit 全量挂），逐组二分定位。修法 `_borrowed_module_names()` 按包名前缀通配借用+清理，审计测试补"家族不得残留"断言。② **计时阈值全量负载抖动**——`test_timeout_kills_grandchild` 实测 16.3s > 15s 阈值（单跑 2.9s；spawn+taskkill 全量负载下变慢），孙进程 sleep 25→60s、阈值 15→30s，同类 stop 杀树测试 join 5→20s/sleep 30→90s，判别本质不变
+- **验证**：污染复现组 150 passed → 全量 **696 passed / 1 skipped（322s，exit 0）**；批次 65 N=2 改动（batchrng 桥/settings 三函数/调度器）全部幸存；pytest 统一 `--basetemp=.pytest_tmp` 规避 Windows 默认临时目录 PermissionError（.gitignore 已收编）
+- **合入**：merge-tree 预检无冲突 → audit-pr-1 合并 c9c3e33 + 修复 e045d01 → fast-forward 合回 main 推送（d056a85..e045d01）；GitHub 检测到 PR 提交进 main 后自动标 Merged
+
 ---
 
 ## 总体 Review — v1.3.1 实测与画像分档（2026-10-23 ~ 10-25）
