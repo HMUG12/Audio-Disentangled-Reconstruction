@@ -924,11 +924,10 @@ class GSVEngine:
 
         with self._admit(), _RuntimeProbe(stream=False) as probe:
             if coalesce_on:
-                # leader 懒加载 (双重检查; worker 轮内持 _lock 合成,
-                # 请求线程只排队 — 锁语义与 solo 相反)
-                if self._tts is None:
-                    with self._lock:
-                        self._lazy_init()
+                # 请求线程不懒加载 (锁语义与 solo 相反): 懒加载由 worker
+                # 轮内持 _lock 完成 — 冷启动 burst 若 12 个请求线程各自
+                # 抢锁, 会与 prewarm 争锁串行成数十秒停顿 (实测 50s);
+                # 直接排队, 由 worker 单点等待, 请求侧零阻塞。
                 probe.start()
                 inputs = _build_inputs(with_weights=True)
                 # 批次 65 第二子批: 段合批大小 (ADR_TTS_BATCH_SIZE, >1 时
