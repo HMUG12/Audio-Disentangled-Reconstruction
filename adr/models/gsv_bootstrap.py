@@ -10,7 +10,6 @@ server stats 透传桌面壳 prewarm 页显示 (用户要求的下载提示)。
 from __future__ import annotations
 
 import os
-import shutil
 import threading
 import urllib.request
 import zipfile
@@ -206,5 +205,5 @@ def cleanup_cache() -> None:
     """清理下载残留 .part (维护用)。"""
     for entry in _MANIFEST:
         part = entry["extract_to"] / (entry["zip_name"] + ".part")
-        if part.exists():
-            shutil.rmtree(part, ignore_errors=True)
+        # 批次66: .part 是文件, rmtree(ignore_errors) 会静默删不掉
+        part.unlink(missing_ok=True)

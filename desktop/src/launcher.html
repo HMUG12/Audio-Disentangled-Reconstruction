@@ -505,12 +505,14 @@ let stCompatLoaded = null;  // 上次加载的 compat_cpu 真值 (null=自动语
 let stPaths = {};          // app_paths 缓存 (打开日志/数据目录)
 
 // 引擎就绪 → 拉档案列表填默认档案下拉 (datalist)
-async function fillProfiles(base) {
+async function fillProfiles(base, keys) {
   const dl = $st("st-profiles");
   dl.innerHTML = "";
   if (!base) return;
+  // 批次66: 启用 API Key 后档案列表需鉴权 — 带首个非空 key (与 sidecar 注入同源)
+  const key = String(keys || "").split(",").map(k => k.trim()).find(k => k);
   try {
-    const r = await fetch(base + "/api/adr/v1/profiles");
+    const r = await fetch(base + "/api/adr/v1/profiles" + (key ? "?api_key=" + encodeURIComponent(key) : ""));
     const j = await r.json();
     for (const p of (j.profiles || [])) {
       const o = document.createElement("option");
@@ -567,7 +569,7 @@ async function openSettings() {
     $st("st-lan-ip").textContent = lan?.ip || "未获取到 (离线?)";
     $st("st-lan-url").textContent = lan?.url || "引擎未运行";
     $st("st-copy-url").style.display = lan?.url ? "" : "none";
-    fillProfiles(lan?.url || "");
+    fillProfiles(lan?.url || "", cfg.api_key);
   } catch (e) { showToast("加载设置失败: " + e); }
 }
 

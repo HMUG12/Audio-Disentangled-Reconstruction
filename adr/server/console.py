@@ -14,10 +14,14 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
+import math
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -34,11 +38,26 @@ from adr.core.naming import sanitize_exp_name
 from adr.server.exceptions import ProfileNameInvalid
 from adr.server.pathsafe import is_safe_name
 
+logger = logging.getLogger(__name__)
+
 REPO = Path(__file__).resolve().parents[2]
 STATIC_DIR = Path(__file__).parent / "static"
 OUTPUT_DIR = REPO / "output"
 UPLOAD_DIR = OUTPUT_DIR / "uploads"
-TRAIN_TIMEOUT = 7200  # 与 webui 一致: 2h 兜底 (超时强杀由 reader 线程执行)
+# 与 webui 一致: 2h 兜底; 批次66: 真正生效 (reader 线程起看门狗定时强杀), 可用环境变量放宽
+def _parse_timeout(raw: str | None, default: float = 7200.0) -> float:
+    """批次66: 非法/非正/非有限值回落默认并告警, 不让坏环境变量拖垮导入或秒杀训练。"""
+    try:
+        v = float(raw) if raw is not None else default
+    except ValueError:
+        v = math.nan
+    if not (math.isfinite(v) and v > 0):
+        logger.warning("ADR_TRAIN_TIMEOUT=%r 非法, 回落 %.0fs", raw, default)
+        return default
+    return v
+
+
+TRAIN_TIMEOUT = _parse_timeout(os.environ.get("ADR_TRAIN_TIMEOUT"))
 
 _BOOT_T0 = time.time()
 
@@ -192,6 +211,8 @@ _train: dict = {
     "early_stop": False,
     "bind_voice": "",    # 批次50: 绑定目标 (收尾相似度结算用)
     "degraded": None,    # 批次50: 收尾退化门结果 {new_sim, old_sim} | None
+    "run_id": 0,         # 批次66: 每轮自增代号, 旧 reader 线程据此不碰新一轮状态
+    "reader": None,      # 批次66: 本轮 reader 线程; 存活=仍有后代进程占着管道
     "logs": deque(maxlen=400),
 }
 
@@ -238,43 +259,113 @@ def _train_snapshot() -> dict:
     return snap
 
 
-def _train_reader(proc: subprocess.Popen) -> None:
-    """后台读训练 stdout → 日志环形缓冲; EOF 后收割退出码并收尾门禁。"""
-    for line in proc.stdout:
-        line = line.rstrip()
-        if not line:
-            continue
+def _kill_tree(p: subprocess.Popen, graceful: bool = False) -> None:
+    """批次66: 连同孙进程整树终止 — gsv_finetune 以 shell=True 起 s2_train,
+    只杀父进程时孙进程继续占显卡并握着 stdout 管道, reader 永远等不到 EOF。
+    Windows: taskkill /T /F (须在父进程存活时调用, 否则查不到子树);
+    POSIX: 子进程以 start_new_session 起, 按进程组发信号。"""
+    if os.name == "nt":
+        try:
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)],
+                           capture_output=True, timeout=15,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
+        except (OSError, subprocess.SubprocessError):
+            logger.warning("taskkill 失败, 回落只杀父进程 pid=%s", p.pid, exc_info=True)
+    else:
+        try:
+            os.killpg(p.pid, signal.SIGTERM if graceful else signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass  # 整组已退出 / 非组长 (未用 start_new_session 起的进程)
+    if p.poll() is None:  # 兜底: 至少保证父进程被处理
+        p.terminate() if graceful else p.kill()
+
+
+def _stop_proc(p: subprocess.Popen | None, timeout: float = 10) -> None:
+    """批次66: 整树终止子进程并收割 (先优雅 → 超时强杀), 失败只记日志。"""
+    if p is None or p.poll() is not None:
+        return
+    try:
+        _kill_tree(p, graceful=True)
+        p.wait(timeout=timeout)
+    except Exception:
+        try:
+            _kill_tree(p)
+            p.wait(timeout=5)
+        except Exception:
+            logger.warning("子进程强杀失败 pid=%s", p.pid, exc_info=True)
+
+
+def _train_reader(proc: subprocess.Popen, gate: subprocess.Popen | None = None,
+                  run_id: int | None = None) -> None:
+    """后台读训练 stdout → 日志环形缓冲; EOF 后收割退出码并收尾门禁。
+
+    批次66: 只收尾本轮自己的 proc/gate; 所有 _train 读写持锁且校验 run_id,
+    旧 reader 迟到时不会覆盖/杀掉新一轮。TRAIN_TIMEOUT 看门狗超时强杀。"""
+    if run_id is None:
         with _train_lock:
-            _train["logs"].append(line)
-            if "收到训练门禁早停信号" in line:
-                _train["early_stop"] = True
-    rc = proc.wait()
+            run_id = _train["run_id"]
+
+    def _mine() -> bool:  # 调用方须持 _train_lock
+        return _train["run_id"] == run_id
+
+    def _on_timeout() -> None:
+        if proc.poll() is None:
+            try:
+                _kill_tree(proc)  # 整树杀, 孙进程不放管道 reader 才能 EOF
+                msg = f"[timeout] 训练超过 {TRAIN_TIMEOUT:.0f}s 未结束, 已强杀"
+            except Exception as e:
+                logger.warning("训练超时强杀失败", exc_info=True)
+                msg = f"[timeout] 训练超过 {TRAIN_TIMEOUT:.0f}s 未结束, 强杀失败: {e}"
+            with _train_lock:
+                if _mine():
+                    _train["logs"].append(msg)
+
+    watchdog = threading.Timer(TRAIN_TIMEOUT, _on_timeout)
+    watchdog.daemon = True
+    watchdog.start()
+    try:
+        for line in proc.stdout:
+            line = line.rstrip()
+            if not line:
+                continue
+            with _train_lock:
+                if not _mine():
+                    continue
+                _train["logs"].append(line)
+                if "收到训练门禁早停信号" in line:
+                    _train["early_stop"] = True
+        rc = proc.wait()
+    finally:
+        watchdog.cancel()
+        watchdog.join()  # 批次66: 已触发时等它写完 [timeout] 日志再收尾
+    _stop_proc(gate)  # 只收本轮门禁, 不读 _train["gate"] (可能已是新一轮的)
     with _train_lock:
+        if not _mine():
+            return
         _train["exit_code"] = rc
         if _train["state"] == "running":
             _train["state"] = "done" if rc == 0 else "failed"
-    gate = _train.get("gate")
-    if gate and gate.poll() is None:
-        gate.terminate()
-        try:
-            gate.wait(timeout=10)
-        except Exception:
-            gate.kill()
-    _train["gate"] = None
+        _train["gate"] = None
+        exp, bind_voice = _train["exp"], _train.get("bind_voice")
     # 批次50: 退化门收尾 — 训练成功且有绑定档案时, 用门禁最优 sim 结算
     # (与 history[-1].sim 比对, 退化 Δ<-0.05 置标记; voice_library.finalize_bind_sim)
-    if rc == 0 and _train.get("bind_voice"):
-        _train["degraded"] = None
+    if rc == 0 and bind_voice:
+        degraded, err = None, None
         try:
             from adr.models.voice_library import finalize_bind_sim
-            entries = _gate_entries(_train["exp"])
+            entries = _gate_entries(exp)
             sims = [e["sim"] for e in entries
                     if e.get("kind") != "zero_shot" and "sim" in e]
             if sims:
-                _train["degraded"] = finalize_bind_sim(
-                    _train["bind_voice"], max(sims))
+                degraded = finalize_bind_sim(bind_voice, max(sims))
         except Exception as e:
-            _train["logs"].append(f"[finalize] 相似度结算失败: {e}")
+            logger.exception("训练收尾相似度结算失败")
+            err = e
+        with _train_lock:
+            if _mine():
+                _train["degraded"] = degraded
+                if err is not None:
+                    _train["logs"].append(f"[finalize] 相似度结算失败: {err}")
 
 
 class TrainStartReq(BaseModel):
@@ -297,7 +388,11 @@ async def train_start(body: TrainStartReq):
         raise HTTPException(500, f"缺少训练脚本: {script}")
 
     with _train_lock:
-        if _train["state"] == "running":
+        # 批次66: 已 stop 但旧进程尚未真正退出时也拒绝, 防两轮训练抢同一张卡
+        # 批次66: 上一轮 reader 未结束 (孙进程仍握管道/占卡) 也拒绝
+        old, rd = _train["proc"], _train.get("reader")
+        if (_train["state"] == "running" or (old is not None and old.poll() is None)
+                or (rd is not None and rd.is_alive())):
             raise HTTPException(409, "已有训练在进行, 请先停止或等待完成")
         exp = sanitize_exp_name(body.exp_name)
         epochs = max(1, min(int(body.epochs), 50))
@@ -316,10 +411,20 @@ async def train_start(body: TrainStartReq):
         if body.resume_from:
             # 批次50: 续训 — 档案须存在且有微调权重 (CLI --resume-from voice:名)
             from adr.models.voice_library import load_voice
+            # 批次66: 按异常类型区分「不存在 / 损坏 / 名称非法 / 读取失败」, 保留异常链
             try:
                 rv = load_voice(body.resume_from)
-            except Exception:
-                raise HTTPException(400, f"续训档案不存在: {body.resume_from}")
+            except FileNotFoundError as e:
+                raise HTTPException(400, f"续训档案不存在: {body.resume_from}") from e
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                raise HTTPException(
+                    400, f"续训档案 meta.json 损坏: {body.resume_from} ({e})") from e
+            except ValueError as e:
+                raise HTTPException(400, f"续训档案名非法: {body.resume_from}") from e
+            except Exception as e:
+                logger.exception("续训档案读取失败: %s", body.resume_from)
+                raise HTTPException(
+                    400, f"续训档案读取失败: {body.resume_from} ({e})") from e
             if not rv.get("vits_weights"):
                 raise HTTPException(
                     400, f"档案「{body.resume_from}」无微调权重, 无法续训 (先完成一次普通微调)")
@@ -327,42 +432,56 @@ async def train_start(body: TrainStartReq):
 
         # 质量门禁: CPU 打分, 与训练并行, sim≥0.80 写 STOP 早停
         gate_proc = None
+        gate_err = ""
         if body.gate_on:
             gate_log = OUTPUT_DIR / f"train_gate_{exp}.log"
-            gate_log.parent.mkdir(exist_ok=True)
             gate_cmd = [sys.executable, "-u",
                         str(REPO / "scripts" / "train_gate.py"),
                         "--exp", exp, "--ref", str(audio),
                         "--target", "0.80", "--cpu"]
             try:
-                fh = open(gate_log, "a", encoding="utf-8", errors="replace")
-                gate_proc = subprocess.Popen(
-                    gate_cmd, stdout=fh, stderr=subprocess.STDOUT,
-                    text=True, encoding="utf-8", errors="replace", cwd=str(REPO),
-                    env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"})
-            except Exception:
-                gate_proc = None  # 门禁失败不影响训练
+                gate_log.parent.mkdir(exist_ok=True)
+                # 批次66: 子进程已继承句柄, 父进程 with 退出即关, 不再泄漏/锁日志
+                with open(gate_log, "a", encoding="utf-8", errors="replace") as fh:
+                    gate_proc = subprocess.Popen(
+                        gate_cmd, stdout=fh, stderr=subprocess.STDOUT,
+                        text=True, encoding="utf-8", errors="replace", cwd=str(REPO),
+                        start_new_session=True,  # 批次66: POSIX 整组可杀
+                        env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"})
+            except Exception as e:
+                gate_proc = None  # 门禁失败不影响训练, 但批次66 起记日志可见
+                gate_err = f"[gate] 质量门禁启动失败, 本轮无门禁: {e}"
+                logger.warning("训练质量门禁启动失败", exc_info=True)
 
+        spawn_err = None
         try:
             proc = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, encoding="utf-8", errors="replace",
-                cwd=str(REPO), bufsize=1,
+                cwd=str(REPO), bufsize=1, start_new_session=True,  # 批次66: POSIX 整组可杀
                 env={**os.environ, "PYTHONIOENCODING": "utf-8",
                      "PYTHONUTF8": "1"})  # 训练链全 utf-8, 否则 Windows GBK 输出乱码
         except Exception as e:
-            if gate_proc:
-                gate_proc.terminate()
-            raise HTTPException(500, f"训练进程启动失败: {e}")
+            spawn_err = e
+        else:
+            run_id = _train["run_id"] + 1
+            reader = threading.Thread(target=_train_reader,
+                                      args=(proc, gate_proc, run_id), daemon=True)
+            _train.update(state="running", proc=proc, gate=gate_proc, exp=exp,
+                          recipe=recipe, epochs=epochs, started_at=time.time(),
+                          exit_code=None, early_stop=False,
+                          bind_voice=bind_voice, degraded=None, run_id=run_id,
+                          reader=reader)
+            _train["logs"].clear()
+            _train["logs"].append(f"[CMD] {' '.join(cmd)}")
+            if gate_err:
+                _train["logs"].append(gate_err)
 
-        _train.update(state="running", proc=proc, gate=gate_proc, exp=exp,
-                      recipe=recipe, epochs=epochs, started_at=time.time(),
-                      exit_code=None, early_stop=False,
-                      bind_voice=bind_voice, degraded=None)
-        _train["logs"].clear()
-        _train["logs"].append(f"[CMD] {' '.join(cmd)}")
-
-    threading.Thread(target=_train_reader, args=(proc,), daemon=True).start()
+    if spawn_err is not None:
+        # 批次66: 回滚门禁要收割不留孤儿; 放锁外线程池, 不卡事件循环/status
+        await asyncio.to_thread(_stop_proc, gate_proc)
+        raise HTTPException(500, f"训练进程启动失败: {spawn_err}") from spawn_err
+    reader.start()
     return {"state": "running", "exp": exp, "epochs": epochs, "recipe": recipe}
 
 
@@ -377,11 +496,16 @@ async def train_stop():
         proc = _train["proc"]
         if not proc or proc.poll() is not None:
             raise HTTPException(409, "当前没有进行中的训练")
-        _train["state"] = "stopped"
-    try:
-        proc.terminate()
-    except Exception:
-        pass
+        run_id = _train["run_id"]
+        prev = _train["state"]
+        _train["state"] = "stopped"  # 先置位, reader 收尾时不会改写成 failed
+    # 批次66: 确认进程真退出才报 stopped; 等待丢线程池, 不卡事件循环
+    await asyncio.to_thread(_stop_proc, proc)
+    if proc.poll() is None:
+        with _train_lock:
+            if _train["run_id"] == run_id and _train["state"] == "stopped":
+                _train["state"] = prev
+        raise HTTPException(500, "停止训练失败: 进程仍在运行")
     return {"state": "stopped"}
 
 
@@ -393,8 +517,8 @@ _UPLOAD_MAX_DURATION = 7200.0             # 2h; 训练素材建议 5~30 分钟
 def _probe_audio(path: Path) -> dict:
     """音频真伪/时长探测 (批次18 兜底): soundfile 优先, 失败回落 ffprobe
     (m4a/aac 等 libsndfile 不认的格式)。两者都失败 → 抛 ValueError 拒收。"""
-    import soundfile as sf
     try:
+        import soundfile as sf  # 批次66: 移入 try, 缺模块时走 ffprobe 回落而非 500
         info = sf.info(str(path))
         return {"duration_s": round(info.frames / info.samplerate, 1),
                 "samplerate": info.samplerate, "via": "soundfile"}
@@ -410,11 +534,15 @@ def _probe_audio(path: Path) -> dict:
     if not exe:
         # 无 ffprobe 无法判定真伪 — 放行 (训练管线 ffmpeg 会再报错), 不阻塞上传
         return {"duration_s": None, "samplerate": None, "via": "none"}
-    r = subprocess.run(
-        [exe, "-v", "error", "-show_entries", "format=duration",
-         "-of", "default=nw=1:nk=1", str(path)],
-        capture_output=True, text=True, timeout=30,
-        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+    try:
+        r = subprocess.run(
+            [exe, "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=nw=1:nk=1", str(path)],
+            capture_output=True, text=True, timeout=30,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+    except (subprocess.TimeoutExpired, OSError) as e:
+        # 批次66: 探测超时/不可执行 → 归为 ValueError, 调用方 400 并删落盘文件
+        raise ValueError(f"音频文件探测失败 (超时或探测工具不可用): {e}") from e
     try:
         return {"duration_s": round(float(r.stdout.strip()), 1),
                 "samplerate": None, "via": "ffprobe"}
@@ -459,7 +587,8 @@ async def train_upload(file: UploadFile = File(...),
                         413, f"文件超过 {_UPLOAD_MAX_SIZE // (1024 * 1024)}MB 上限"
                              " (训练素材建议 5~30 分钟)")
                 fh.write(chunk)
-    except HTTPException:
+    except BaseException:
+        # 批次65 上传回滚: 客户端断连/磁盘满/取消等任何中断都删半截文件
         dest.unlink(missing_ok=True)
         raise
     if size == 0:
@@ -528,6 +657,7 @@ def _profile_worker(name: str, audio_path: str, prompt_text: str, style: str,
         from adr.models.gsv_engine import try_schedule_profile
         try_schedule_profile()
     except Exception as e:
+        logger.exception("控制台建档失败: %s", name)  # 批次66: 保留堆栈便于排查
         with _profile_lock:
             _profile_job.update(state="failed", message=str(e))
 

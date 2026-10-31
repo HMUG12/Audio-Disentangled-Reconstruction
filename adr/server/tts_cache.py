@@ -71,6 +71,15 @@ def make_key(req: dict) -> str:
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()
 
 
+def _unlink_quiet(p: Path) -> None:
+    """删盘上文件, 吞 OSError (批次66: Windows 上杀软/播放器占用会抛
+    PermissionError; 删不掉只是多占点盘, 不能让已合成的音频跟着失败)。"""
+    try:
+        p.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def _disk_load_locked() -> None:
     """惰性扫描缓存目录重建内存 LRU (服务重启后缓存仍可用)。
 
@@ -79,15 +88,22 @@ def _disk_load_locked() -> None:
     盘上文件就是 put 时写下的完整字节, st_size == len(data), 统计口径一致。
     """
     global _loaded, _total_bytes
+    if _loaded:  # 批次66: 惰性守卫 — 只扫一次, 否则满载后重扫会删掉活条目的盘上副本
+        return
     _loaded = True
     d = _dir()
     if not d.is_dir():
         return
     try:
-        files = [p for p in d.iterdir()
-                 if p.is_file() and not p.name.endswith(".tmp")]
+        entries = [p for p in d.iterdir() if p.is_file()]
     except OSError:
         return
+    files = []
+    for p in entries:
+        if p.name.endswith(".tmp"):
+            _unlink_quiet(p)  # 批次66: 上次写盘失败残留的半截临时文件, 扫描时清掉
+        else:
+            files.append(p)
     # 一次 stat 同时取 mtime + size; 并发下文件可能刚被逐出删除
     # (stat 抛 FileNotFoundError), 容错跳过当作不存在
     statted: list[tuple[float, int, Path]] = []
@@ -100,10 +116,10 @@ def _disk_load_locked() -> None:
     statted.sort(key=lambda t: t[0], reverse=True)
     max_b, max_n = _max_bytes(), _max_entries()
     for _, size, p in statted:
-        if len(_cache) >= max_n or _total_bytes + size > max_b:
-            p.unlink(missing_ok=True)  # 超限旧文件: 删盘上副本
+        if p.stem in _cache:  # 批次66: 已在内存的条目先跳过, 不能按超限误删 / 重复记账
             continue
-        if p.stem in _cache:
+        if len(_cache) >= max_n or _total_bytes + size > max_b:
+            _unlink_quiet(p)  # 超限旧文件: 删盘上副本
             continue
         _cache[p.stem] = (b"", p.name, size)
         _total_bytes += size
@@ -146,6 +162,7 @@ def put(key: str, data: bytes, ext: str = "bin") -> None:
         # 落盘 (盘不可写则退化为纯内存, 不影响服务)
         fname: str | None = f"{key}.{ext}"
         size = len(data)
+        tmp: Path | None = None
         try:
             d = _dir()
             d.mkdir(parents=True, exist_ok=True)
@@ -160,6 +177,8 @@ def put(key: str, data: bytes, ext: str = "bin") -> None:
                 size = len(data)
         except OSError:
             fname = None
+            if tmp is not None:
+                _unlink_quiet(tmp)  # 批次66: 写一半/替换失败时清掉 .tmp, 免残留占盘
         old = _cache.get(key)
         if old is not None:
             _total_bytes -= old[2]  # 按旧条目记录值回减
@@ -171,7 +190,7 @@ def put(key: str, data: bytes, ext: str = "bin") -> None:
             _, (_, old_name, old_size) = _cache.popitem(last=False)  # LRU 逐出最旧
             _total_bytes -= old_size  # 按记录值回减 (磁盘条目 data=b"", 不能用 len)
             if old_name is not None:
-                (_dir() / old_name).unlink(missing_ok=True)
+                _unlink_quiet(_dir() / old_name)  # 批次66: 内存账已扣, 删盘失败不能冒泡
 
 
 def clear() -> None:

@@ -502,6 +502,31 @@ def test_auth_static_pages_exempt(auth_client):
         assert r.status_code == 200, path
 
 
+def test_auth_i18n_assets_exempt(auth_client):
+    """i18n 运行时脚本必须随页面一起豁免: 页面 <script src="/i18n.js"> 不带凭据,
+    设 key 后若 401 则全局 I 未定义 → I.init 抛错 → 四个控制台整体瘫痪 (回归防护)。"""
+    assert auth_client.get("/i18n.js").status_code == 200
+    for page in ("index", "pro", "easy", "call"):
+        r = auth_client.get(f"/i18n-{page}.js")
+        assert r.status_code == 200, page
+
+
+def test_auth_health_has_engine_stage_for_desktop(auth_client):
+    """桌面壳预热轮询改读 /health (而非需鉴权的 /system/stats): /health 必须豁免
+    且带 engine_stage/engine_stage_text, 否则壳轮询 401 → 永久卡预热页 (回归防护)。"""
+    r = auth_client.get("/api/adr/v1/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert "engine_stage" in body and "engine_stage_text" in body
+
+
+def test_auth_system_stats_still_requires_key(auth_client):
+    """反向锁定: 修复 i18n/health 豁免时不得顺手放开带硬件+业务数据的
+    /system/stats — 它仍须鉴权, 页面 JS 经 ?api_key 透传访问。"""
+    r = auth_client.get("/api/adr/v1/system/stats")
+    assert r.status_code == 401
+
+
 def test_theme_js_served_and_pages_reference_it(client):
     """主题层: /theme.js 同源提供; 四个控制台页在 <head> 引用; 桌面壳副本与服务端一致。"""
     from pathlib import Path

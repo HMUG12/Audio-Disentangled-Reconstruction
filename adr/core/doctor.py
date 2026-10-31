@@ -11,11 +11,13 @@ API:  GET /api/adr/v1/system/doctor?fix=1   (console.py 挂载)
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import socket
 import subprocess
 import time
 import urllib.request
+import uuid
 from collections import Counter
 from pathlib import Path
 
@@ -35,10 +37,15 @@ _GSV_REQUIRED = [
 ]
 
 
-def _clip_profile_ref(ref: Path) -> None:
-    """档案 ref 超长就地裁剪: 去首尾静音取 8s (与 voice_library 兜底同思路)。"""
+def _clip_profile_ref(ref: Path, dur: float) -> str:
+    """档案 ref 超长裁剪: 去首尾静音取 8s (与 voice_library 兜底同思路)。
+
+    批次66: 先备份原 ref, 再写临时文件 os.replace 原子替换 (保留原 subtype);
+    meta.json 记 ref_clipped 标记 prompt_text 可能与裁后音频不符。返回备份文件名。
+    """
     import numpy as np
     import soundfile as sf
+    subtype = sf.info(str(ref)).subtype
     wav, sr = sf.read(str(ref), dtype="float32")
     orig = wav
     if wav.ndim > 1:
@@ -55,7 +62,25 @@ def _clip_profile_ref(ref: Path) -> None:
     wav = wav[: int(8.0 * sr)]
     if len(wav) < int(3.0 * sr):
         wav = orig[: int(8.0 * sr)]  # 几乎全静音兜底
-    sf.write(str(ref), wav, sr, subtype="PCM_16")
+    backup = ref.with_name(f"ref.orig.{time.strftime('%Y%m%d-%H%M%S')}.wav")
+    tmp = ref.with_name(f"ref.wav.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    try:
+        sf.write(str(tmp), wav, sr, subtype=subtype, format="WAV")
+        shutil.copy2(ref, backup)
+        os.replace(tmp, ref)
+    finally:
+        tmp.unlink(missing_ok=True)
+    meta_path = ref.with_name("meta.json")
+    m = json.loads(meta_path.read_text(encoding="utf-8"))
+    m["ref_clipped"] = {"from_s": round(dur, 2), "backup": backup.name,
+                        "prompt_text_stale": True}
+    mtmp = meta_path.with_name(f"meta.json.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    try:
+        mtmp.write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(mtmp, meta_path)
+    finally:
+        mtmp.unlink(missing_ok=True)
+    return backup.name
 
 
 def run_checks(fix: bool = False) -> dict:
@@ -156,8 +181,13 @@ def run_checks(fix: bool = False) -> dict:
             n_profiles += 1
             if dur > 10.0:  # GSV 合成硬限制 (TTS.py:815)
                 if fix:
-                    _clip_profile_ref(ref)
-                    vfixed.append(f"「{d.name}」ref {dur:.1f}s → 已裁 8s")
+                    # 批次66: 单档裁剪失败 (文件被占用/只读) 只记问题, 不中断后续检查
+                    try:
+                        bak = _clip_profile_ref(ref, dur)
+                        vfixed.append(f"「{d.name}」ref {dur:.1f}s → 已裁 8s "
+                                      f"(原文件备份为 {bak}, 请核对 prompt_text)")
+                    except Exception as e:
+                        vissues.append(f"「{d.name}」ref 裁剪失败: {e}")
                 else:
                     vissues.append(
                         f"「{d.name}」ref {dur:.1f}s 超 10s — 合成将报 "

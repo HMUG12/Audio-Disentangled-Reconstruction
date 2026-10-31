@@ -6,7 +6,7 @@
 - backbone.sample → mel
 - vocoder.infer(mel) → wav
 - 支持 GPU/CPU 自动切换
-- vocoder 加载失败时 fallback 到 mel 第一个 channel (placeholder)
+- 未配置 vocoder 时输出 mel 第一个 channel 占位 (告警); vocoder 失败默认报错 (批次66)
 
 典型用法:
     >>> from adr.inference import InferPipeline
@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union
@@ -26,6 +27,20 @@ import torch
 from adr.core import get_logger
 from adr.data.g2p import G2P, G2PConfig
 from adr.utils.audio import AudioData, inject_wav_info, load_audio, save_audio
+
+
+def _env_cap(name: str, default: int) -> int:
+    """批次66: 推理输入上限 (env 可调, 非法/非正值回落默认)。"""
+    try:
+        v = int(os.environ.get(name, default))
+        return v if v > 0 else default
+    except ValueError:
+        return default
+
+
+# 批次66: 默认值远超正常使用, 只防超长文本/超大步数把显存或时间耗尽
+DEFAULT_MAX_TEXT_CHARS = 2000      # ADR_INFER_MAX_TEXT_CHARS
+DEFAULT_MAX_TIMESTEPS = 1000       # ADR_INFER_MAX_TIMESTEPS
 
 
 @dataclass
@@ -94,7 +109,9 @@ class InferPipeline:
                 self.vocoder.eval()
                 self.log.info("Vocoder loaded")
             except Exception as e:
-                self.log.warning(f"Vocoder move-to-device failed: {e}")
+                # 批次66: 迁移失败的 vocoder 可能半迁移, 保留会让每次合成都因设备错配失败
+                raise RuntimeError(
+                    f"Vocoder 迁移到 {self.device} 失败: {e}") from e
 
     @classmethod
     def from_checkpoint(
@@ -134,9 +151,12 @@ class InferPipeline:
                     backbone_cls = cls_
                     break
             if backbone_cls is None:
-                # fallback: 用 SoVITS
-                from adr.models.sovits import SoVITS
-                backbone_cls = SoVITS
+                # 批次66: 未注册类名直接报错, 不再静默退回 SoVITS 再误报权重错配
+                known = sorted({c.__name__ for _, c in REGISTRY.backbone.items()})
+                raise ValueError(
+                    f"checkpoint model_class={model_class_name!r} 未注册 "
+                    f"(已注册: {known}); 请传入 backbone_cls"
+                )
 
         # 推断 backbone config (优先级: ckpt['backbone_config'] > LoRA preset > 默认)
         lora_cfg_saved = ckpt.get("lora_config") or {}
@@ -146,9 +166,11 @@ class InferPipeline:
                 try:
                     backbone_config = backbone_cls.config_class(**saved_bb_cfg)
                 except Exception as e:
-                    get_logger("adr.inference").warning(
-                        f"Failed to reconstruct backbone config from ckpt: {e}"
-                    )
+                    # 批次66: 重建失败不再退回默认配置 (会误报为权重形状不匹配)
+                    raise ValueError(
+                        f"无法从 checkpoint 重建 {backbone_cls.__name__} 的 "
+                        f"backbone_config: {e}; 请显式传入 backbone_config"
+                    ) from e
             if backbone_config is None and lora_cfg_saved.get("preset"):
                 # LoRA-only ckpt 可能没带 backbone_config, 但 demo 会记 preset
                 from adr.models.sovits import SOVITS_PRESETS, SoVITSConfig
@@ -224,10 +246,17 @@ class InferPipeline:
                     from adr.vocoder.bigvgan import _find_bigvgan_dir
                     found = _find_bigvgan_dir()
                     vocoder_path = str(found) if found else None
-                except Exception:
+                except Exception as e:
+                    get_logger("adr.inference").warning(f"BigVGAN 自动查找失败: {e}")
                     vocoder_path = None
             if vocoder_path is not None:
                 vocoder = cls._load_vocoder(vocoder_path)
+                # 批次66: 找到/指定了 vocoder 却加载失败, 未允许占位时报错而非静默出假音频
+                if vocoder is None and not (config and config.use_placeholder_vocoder):
+                    raise RuntimeError(
+                        f"Vocoder 加载失败: {vocoder_path} "
+                        "(如需占位输出请设 use_placeholder_vocoder=True)"
+                    )
 
         return cls(model, config=config, vocoder=vocoder)
 
@@ -268,6 +297,12 @@ class InferPipeline:
 
         if not text or not text.strip():
             raise ValueError(f"Empty text")
+        max_chars = _env_cap("ADR_INFER_MAX_TEXT_CHARS", DEFAULT_MAX_TEXT_CHARS)
+        if len(text) > max_chars:
+            # 批次66: 整段一次编码, 注意力显存随长度平方增长
+            raise ValueError(
+                f"Text too long: {len(text)} > {max_chars} chars "
+                "(ADR_INFER_MAX_TEXT_CHARS)")
 
         # 用真实音素字典
         pd = load_default_phoneme_dict()
@@ -277,8 +312,9 @@ class InferPipeline:
             ids = encode_phonemes(text, phoneme_dict=pd, strip_tone=True)
             if ids and not all(i == pd.encode("<unk>") for i in ids):
                 return ids
-        except Exception:
-            pass
+        except Exception as e:
+            # 批次66: G2P 失效须留痕, 否则中文退化成字符级编码却无从排查
+            self.log.warning(f"G2P 音素编码失败 ({e}), 退化为字符级编码")
 
         # Fallback: char-level (英文/数字/pypinyin 失败)
         from adr.data.g2p import G2P, G2PConfig
@@ -331,6 +367,12 @@ class InferPipeline:
             (T,) wav 数组, sample_rate = self.config.ref_sample_rate
         """
         n_timesteps = n_timesteps or self.config.n_timesteps
+        max_steps = _env_cap("ADR_INFER_MAX_TIMESTEPS", DEFAULT_MAX_TIMESTEPS)
+        if not 0 < n_timesteps <= max_steps:
+            # 批次66: 步数无上限会长时间占满 GPU
+            raise ValueError(
+                f"n_timesteps={n_timesteps} 超出范围 [1, {max_steps}] "
+                "(ADR_INFER_MAX_TIMESTEPS)")
 
         # 1. 文本 → 音素 ids
         phoneme_ids = self.text_to_phoneme_ids(text)
@@ -378,9 +420,12 @@ class InferPipeline:
             try:
                 wav_t = self.vocoder.infer(mel)
             except Exception as e:
-                self.log.warning(f"Vocoder failed ({e}), using placeholder")
-                wav_t = self._placeholder_vocoder(mel)
+                # 批次66: use_placeholder_vocoder=False 时不再静默退化成假音频
+                raise RuntimeError(f"Vocoder 推理失败: {e}") from e
         else:
+            if self.vocoder is None and not self.config.use_placeholder_vocoder:
+                # 未配置 vocoder (演示/测试路径) 仍出占位, 但须明确告警
+                self.log.warning("未加载 vocoder, 输出为占位音频 (mel→wav 不真实)")
             wav_t = self._placeholder_vocoder(mel)
 
         wav = wav_t.squeeze().cpu().numpy().astype(np.float32)
@@ -421,14 +466,20 @@ class InferPipeline:
         save_audio(audio, str(path))
         # 批次62 分发侧声音安全: 合成输出 WAV 标注 AI 生成 (素材链不经此)
         if str(path).lower().endswith(".wav"):
+            tmp = f"{path}.tmp"
             try:
                 with open(path, "rb") as f:
                     raw = f.read()
                 marked = inject_wav_info(raw)
                 if marked != raw:
-                    with open(path, "wb") as f:
+                    # 批次66: 同目录临时文件 + os.replace 原子替换, 失败时原文件完好
+                    with open(tmp, "wb") as f:
                         f.write(marked)
+                    os.replace(tmp, path)
             except OSError as exc:
-                # 写回失败须留痕: 若已截断原文件, 静默会让损坏文件仍报成功
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
                 self.log.warning(f"WAV 元数据标注写入失败 (保留原文件): {exc}")
         self.log.info(f"Saved wav: {path} (sr={sr}, duration={len(waveform)/sr:.2f}s)")

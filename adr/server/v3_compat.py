@@ -34,6 +34,7 @@ from adr.core.exceptions import (
 )
 from adr.models import voice_library
 from adr.models.gsv_engine import handle_cuda_oom, is_cuda_oom
+from adr.server.v2_compat import engine_busy, max_text_chars
 from adr.services import SynthesisService
 
 logger = logging.getLogger(__name__)
@@ -115,6 +116,8 @@ async def voices_list(request: Request):
         try:
             meta = voice_library.load_voice(name)
         except Exception:
+            # 批次66: 坏档案仍列出 (行为不变), 但留日志便于定位
+            logger.warning("v3 voices: load_voice(%r) failed", name, exc_info=True)
             meta = {}
         out.append({
             "id": name,
@@ -173,6 +176,13 @@ async def tts_ws_stream_input(websocket: WebSocket):
         - 帧队列满时不再堆积/吞异常: 消费侧立即回 busy 错误帧并结束本句,
           生产线程感知 cancel 后停止。
         """
+        # 批次66: 引擎排队达上限 → 本句回 busy 错误帧, 会话保持 (引擎未建则无排队)
+        eng = getattr(app.state, "engine", None)
+        if eng is not None and engine_busy(eng):
+            await _safe_send_json(
+                {"type": "error", "message": "busy: synthesis queue full",
+                 "code": "busy"})
+            return
         task_id = next(task_ids)
         await _safe_send_json({"type": "sentence", "text": text, "task_id": task_id})
 
@@ -266,6 +276,16 @@ async def tts_ws_stream_input(websocket: WebSocket):
                 await _safe_send_json({"type": "error", "message": "session timeout",
                                        "code": "session_timeout"})
                 break
+            except (ValueError, KeyError, TypeError):
+                # 批次66: 非 JSON 文本帧 / 二进制帧 = 客户端协议错误, 回 invalid_params 不断会话
+                await _safe_send_json({"type": "error", "message": "invalid frame: expected JSON object",
+                                       "code": "invalid_params"})
+                continue
+            if not isinstance(data, dict):
+                # 批次66: JSON 数组/标量同属客户端错误
+                await _safe_send_json({"type": "error", "message": "invalid frame: expected JSON object",
+                                       "code": "invalid_params"})
+                continue
 
             cmd = data.get("cmd", "")
 
@@ -306,6 +326,12 @@ async def tts_ws_stream_input(websocket: WebSocket):
                          "code": "not_initialized"})
                     continue
                 text_data = (data.get("data") or "").strip()
+                if len(text_data) > max_text_chars():
+                    # 批次66: 文本长度上限与 HTTP 面同源 (ADR_TTS_MAX_TEXT_CHARS)
+                    await _safe_send_json(
+                        {"type": "error", "message": "text too long",
+                         "code": "payload_too_large"})
+                    continue
                 if text_data:
                     await _push_task(text_data)
 
@@ -315,7 +341,14 @@ async def tts_ws_stream_input(websocket: WebSocket):
                         {"type": "error", "message": "not initialized, send init first",
                          "code": "not_initialized"})
                     continue
-                text_buffer.append(data.get("data") or "")
+                piece = data.get("data") or ""
+                if len(text_buffer.content) + len(piece) > max_text_chars():
+                    # 批次66: 无标点累积上限 — 拒收本片, 缓冲不再无界增长
+                    await _safe_send_json(
+                        {"type": "error", "message": "text buffer too long",
+                         "code": "payload_too_large"})
+                    continue
+                text_buffer.append(piece)
                 for sentence in text_buffer.extract_sentences():
                     await _push_task(sentence)
 

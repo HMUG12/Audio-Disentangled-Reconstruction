@@ -107,8 +107,8 @@ def check() -> None:
     log.info("All presets loaded successfully.")
 
 
-@main.command()
-def list() -> None:
+@main.command("list")
+def list_plugins() -> None:  # 批次66: 不再以 list 命名, 避免遮蔽内置 list()
     """列出已注册的插件 (Backbone/Vocoder/ASR/G2P/...)。"""
     from adr.core import REGISTRY
 

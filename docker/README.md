@@ -81,6 +81,8 @@ docker run -d --name adr-server -p 9881:9881 -v adr-data:/data \
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `ADR_TTS_API_KEY` | 空 | 设置后所有 API 需鉴权; 暴露到局域网/公网必须设置 |
+| `ADR_CORS_ORIGINS` | 空 | 未设 key 时额外允许的浏览器来源 (逗号分隔); `*` = 全开 |
+| `ADR_ALLOWED_HOSTS` | 空 | 未设 key 时额外允许的 Host 域名 (如 `tts.lan.example`); `*` = 不检查 |
 | `ADR_TTS_DEVICE` | auto | 引擎自检: 有 GPU 用 cuda, 否则 cpu (镜像内不写死) |
 | `ADR_PORT` | 9881 | HEALTHCHECK 依据; 自定义容器内端口时需同步设置 |
 
