@@ -299,6 +299,119 @@ patch(
 ''',
 )
 
+# 批次65 t2s per-seq RNG 批采样桥挂钩: ADR_T2S_BATCH_RNG=1 时把 infer_panel
+# 换成逐行采样桥 (桥逻辑在 adr/models/adr_t2s_batchrng.py — 行独立 generator,
+# 跨请求合批的内核前置)。排在前两桥之后安装, row_seeds 缺席时透传 fallback。
+patch(
+    "gpt_sovits/GPT_SoVITS/TTS_infer_pack/TTS.py",
+    "ADR_T2S_BATCH_RNG",
+    '''        # ADR 兼容补丁: t2s 静态 KV 桥挂钩 (AR 3.77x, ADR_T2S_STATIC_KV=1 启用;
+        # 排在 CUDA Graph 之后安装, 同开时本桥的 infer_panel 覆盖生效)
+        if os.environ.get("ADR_T2S_STATIC_KV") == "1":
+            from adr.models.adr_t2s_static_kv import install_static_kv_infer_panel
+            self.t2s_model.model.infer_panel = install_static_kv_infer_panel(
+                self.t2s_model.model, self)
+''',
+    '''        # ADR 兼容补丁: t2s 静态 KV 桥挂钩 (AR 3.77x, ADR_T2S_STATIC_KV=1 启用;
+        # 排在 CUDA Graph 之后安装, 同开时本桥的 infer_panel 覆盖生效)
+        if os.environ.get("ADR_T2S_STATIC_KV") == "1":
+            from adr.models.adr_t2s_static_kv import install_static_kv_infer_panel
+            self.t2s_model.model.infer_panel = install_static_kv_infer_panel(
+                self.t2s_model.model, self)
+
+        # ADR 兼容补丁: t2s per-seq RNG 批采样桥 (批次 65 第二子批,
+        # ADR_T2S_BATCH_RNG=1 启用; 排在前两桥之后安装, row_seeds 缺席时
+        # 透传 fallback = stock 全局 RNG 行为)
+        if os.environ.get("ADR_T2S_BATCH_RNG") == "1":
+            from adr.models.adr_t2s_batchrng import install_batched_rng_infer_panel
+            self.t2s_model.model.infer_panel = install_batched_rng_infer_panel(
+                self.t2s_model.model, self)
+''',
+)
+
+# 批次65 非流式逐段行种子派生: 桥启用时每段独立 generator (段 0 = 请求种子,
+# 其余 set_seed 重播的全局 random → 请求内确定性); stock 路径忽略此字段。
+patch(
+    "gpt_sovits/GPT_SoVITS/TTS_infer_pack/TTS.py",
+    "derive_row_seeds",
+    '''            data = self.text_preprocessor.preprocess(text, text_lang, text_split_method, self.configs.version)
+            if len(data) == 0:
+                yield 16000, np.zeros(int(16000), dtype=np.int16)
+                return
+''',
+    '''            data = self.text_preprocessor.preprocess(text, text_lang, text_split_method, self.configs.version)
+            if len(data) == 0:
+                yield 16000, np.zeros(int(16000), dtype=np.int16)
+                return
+
+            # 批次 65 第二子批: per-seq RNG 行种子 — 桥启用时逐段独立 generator
+            # (段 0 = 请求种子, 其余 set_seed 重播的全局 random → 请求内确定
+            # 性); stock 路径 (桥未装/row_seeds 透传 fallback) 忽略此字段零影响
+            if os.environ.get("ADR_T2S_BATCH_RNG") == "1":
+                from adr.models.adr_t2s_batchrng import derive_row_seeds
+                for it, s in zip(data, derive_row_seeds(len(data), actual_seed)):
+                    it["seed"] = s
+''',
+)
+
+# 批次65 to_batch 行种子透传 (两处: item 收集 + batch dict 字段) —
+# split_bucket 重排后种子跟随行走到 t2s 调用点。
+patch(
+    "gpt_sovits/GPT_SoVITS/TTS_infer_pack/TTS.py",
+    "item_seed_list",
+    '''            all_bert_features_list = []
+            norm_text_batch = []
+            all_bert_max_len = 0
+            all_phones_max_len = 0
+            for item in item_list:
+''',
+    '''            all_bert_features_list = []
+            norm_text_batch = []
+            item_seed_list = []  # 批次 65 第二子批: per-seq RNG 行种子透传
+            all_bert_max_len = 0
+            all_phones_max_len = 0
+            for item in item_list:
+                item_seed_list.append(item.get("seed"))
+''',
+)
+patch(
+    "gpt_sovits/GPT_SoVITS/TTS_infer_pack/TTS.py",
+    '"row_seeds": (item_seed_list',
+    '''                "all_bert_features": all_bert_features_batch,
+                "norm_text": norm_text_batch,
+                "max_len": max_len,
+            }
+''',
+    '''                "all_bert_features": all_bert_features_batch,
+                "norm_text": norm_text_batch,
+                "max_len": max_len,
+                "row_seeds": (item_seed_list
+                              if any(s is not None for s in item_seed_list) else None),
+            }
+''',
+)
+
+# 批次65 t2s 调用点传行参数 (stock infer_panel_batch_infer **kwargs 吸收零影响;
+# cudagraph / static_kv 桥 **kw 吸收透传 fallback)。
+patch(
+    "gpt_sovits/GPT_SoVITS/TTS_infer_pack/TTS.py",
+    "row_seeds=item.get",
+    '''                        early_stop_num=self.configs.hz * self.configs.max_sec,
+                        max_len=max_len,
+                        repetition_penalty=repetition_penalty,
+                    )
+''',
+    '''                        early_stop_num=self.configs.hz * self.configs.max_sec,
+                        max_len=max_len,
+                        repetition_penalty=repetition_penalty,
+                        # 批次 65 第二子批: per-seq RNG 行参数 (桥消费; stock
+                        # infer_panel_batch_infer **kwargs 吸收, 零影响)
+                        row_seeds=item.get("row_seeds"),
+                        row_sampling=item.get("row_sampling"),
+                    )
+''',
+)
+
 # 批次20 O3 bf16 混合精度 (s2 训练降显存 30~40%): ADR_S2_BF16=1 且显卡支持
 # (Ampere+, torch.cuda.is_bf16_supported) 时 autocast 用 bfloat16 并关 GradScaler
 # (bf16 动态范围大, 无需 loss scale, 数值更稳)。未开环境变量 → dtype=fp16,
