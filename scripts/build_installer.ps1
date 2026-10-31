@@ -2,6 +2,9 @@
 # NSIS (tauri bundle) hit the hard ~2GB data limit on our 3.89GB runtime,
 # so the installer is produced by Inno Setup from the no-bundle output.
 #
+# 单一交付路径: Tauri 只负责产出 adr-desktop.exe (tauri.conf bundle.active=false,
+# 本脚本再显式传 --no-bundle); 安装包唯一来源 = Inno Setup (installer.iss)。
+#
 # Batch 52 双包 (docs/m10-plan.md G 节): CPU 包 (默认) + GPU 包 (-Gpu,
 # 打包 build_runtime.ps1 -AllowCuda 产出的 cu130 runtime, 文件名带 -gpu)。
 #

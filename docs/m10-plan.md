@@ -357,6 +357,15 @@
 - **遗留**：加速比取自长度悬殊负载（14.9s vs 2.6s 音频），同签名短请求密集场景收益未测；调度 cap 仍为构造期快照（与合批门控实时读不对称，生产 env 先于进程设置无感，冒烟脚本已注记）；真机多请求压测与 Policy 加速开关联动（音质门过后 Policy 才有可选档）待后续
 - **流式指标回填**（2026-10-31，同批次收尾）：Policy 已按 conservative-v1 自动应用 `ADR_TTS_STREAM_HEAD=10` / `ADR_TTS_SPLIT_MAX=30`（依据实测 RTF 1.177 / cuda），Runtime 闭环无二次微调，**自动调整已收敛**；全新文本（规避段缓存）实测 10 条：音频 4.91–6.05s（均 5.28）、墙钟 4.47–5.68s（均 5.03）、RTF 0.85–1.04（均 0.95），非流式对照 RTF 1.00–1.11（均 1.04）；按 5s 音频归一化流式≈4.75s、非流式≈5.2s，首包延迟 1.69–2.30s（日志 first_package_delay）。口径约束备案：native 接口 `streaming_mode` 仅为 bool（只到 mode1），真流式 mode2/3 仅在 `/api/v2/tts`；段缓存键不含 seed（复测必须用新文本）；`_SEG_CACHE`/`tts_cache` 为进程级
 
+**批次 68 落地记录（2026-10-31，分支 main）：8 维审计 P0 修复**（审计全文 `docs/audit-2026-10-31.md`，57 条去重 → 3 视角投票 3/3 保留 11 条）：
+
+- **P0-1 Docker 暴露面收敛**：`docker/docker-compose.yml` ports 改 `127.0.0.1:9881:9881`（注释给出对外发布改法与 API Key 前置条件）；`docker/README.md`、`README.md` 的 `docker run` 示例同步回环；`docker/Dockerfile` 补注释说明容器内 `0.0.0.0` 是端口映射必需、暴露面由 publish 地址决定。**镜像 CMD 与 `--addr` 默认不变**（原审计建议"镜像内改 127.0.0.1"在验证阶段被纠正：容器内监听回环会完全不可达）
+- **P0-2 OpenAI 兼容层对齐官方 SDK**：`adr/server/openai_compat.py` 的 `stream` 默认 `True → False`（官方语义，N.E.K.O 流式需显式传 true）；新增 `_OPENAI_MODELS` / `_OPENAI_VOICES` 白名单与 `_archive_name()`——`tts-1`/`tts-1-hd`/`gpt-4o-mini-tts` 与 `alloy`/`nova` 等标准名不再当 ADR 档案，回退 `app.state.default_profile`；自定义名照旧解析，加载失败仍 400（名称笔误不静默换默认人声）；req 中删除冗余 `voice` 键
+- **P0-3 打包单一路径**：`desktop/src-tauri/tauri.conf.json` bundle 改 `{active: false, icon: [icons/icon.ico]}`，删除仅对 bundler 生效的 `targets`/`windows.nsis`/`licenseFile`；Tauri 只产 `adr-desktop.exe`，Inno Setup 为唯一安装器（`scripts/build_installer.ps1` 头注释固化该约定）。`scripts/installer/installer.iss` 不动——CPU/GPU 共用 AppId 的原地升级语义是刻意设计，原审计"拆分 AppId"建议已作废
+- **测试**：`tests/test_audit_server_compat.py` 新增 4 项（标准 `tts-1`+`alloy` 走默认档案 / `stream` 默认非流式有 Content-Length / 自定义档案仍解析 / 未知名仍 400）；`tests/test_server_api.py` 流式用例 docstring 去掉"默认"表述
+- **验证**：全量 **713 passed, 1 skipped（392.19s，exit 0）**，较批次 67 +5；`check_versions` 9 项 OK、`check_compliance` 7 组 OK；`tauri.conf.json` JSON 解析通过；`build_installer.ps1` 误删的 UTF-8 BOM 已修回（PS 5.1 读含中文脚本必需）
+- **遗留**：P1-4（`externalBin`/`resources` 声明让 `tauri build` 产物自洽）与 P1/P2 其余项未动，见审计报告第 6 节
+
 ---
 
 ## 总体 Review — v1.3.1 实测与画像分档（2026-10-23 ~ 10-25）

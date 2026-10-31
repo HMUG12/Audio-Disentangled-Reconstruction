@@ -327,3 +327,41 @@ def test_import_under_cap_still_works(client, monkeypatch):
                     data={"name": "v", "overwrite": "true"})
     assert r.status_code == 200 and r.json() == {"imported": {"name": "v"}}
     assert got == [("v", True)]
+
+
+# ─── P0-2 OpenAI 兼容层与官方 SDK 对齐 ───
+
+def test_openai_standard_model_voice_uses_default_profile(client, voice_dir):
+    # tts-1 / alloy 是 OpenAI 标准名, 不当作 ADR 档案, 回退默认档案
+    client.app.state.default_profile = "demo"
+    r = client.post("/v1/audio/speech", json={
+        "model": "tts-1", "voice": "alloy", "input": "hi",
+        "response_format": "wav"})
+    assert r.status_code == 200
+    assert r.content[:4] == b"RIFF"
+
+
+def test_openai_stream_default_false(client, voice_dir):
+    # 官方 SDK 默认非流式: 整段音频 (有 Content-Length); stream=true 才流式
+    body = {"input": "hi", "model": "demo", "response_format": "wav"}
+    r = client.post("/v1/audio/speech", json=body)
+    assert r.status_code == 200 and "content-length" in r.headers
+    r2 = client.post("/v1/audio/speech", json=dict(body, stream=True))
+    assert r2.status_code == 200
+    assert "content-length" not in {k.lower() for k in r2.headers}
+
+
+def test_openai_custom_profile_still_resolves(client, voice_dir):
+    r = client.post("/v1/audio/speech", json={
+        "model": "demo", "input": "hi", "response_format": "wav"})
+    assert r.status_code == 200
+    assert r.content[:4] == b"RIFF"
+
+
+def test_openai_unknown_profile_keeps_error(client, voice_dir):
+    # 自定义档案名笔误不能被静默换成默认人声
+    client.app.state.default_profile = "demo"
+    r = client.post("/v1/audio/speech", json={
+        "model": "typo-voice", "input": "hi", "response_format": "wav"})
+    assert r.status_code == 400
+    assert "error" in r.json()

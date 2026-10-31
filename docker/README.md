@@ -61,9 +61,13 @@ docker pull ghcr.io/hmug12/adr-server:cpu
 直接运行（环境变量与数据卷语义同本地构建，见下文）：
 
 ```bash
-docker run -d --name adr-server -p 9881:9881 -v adr-data:/data \
+docker run -d --name adr-server -p 127.0.0.1:9881:9881 -v adr-data:/data \
   ghcr.io/hmug12/adr-server:1.2.0-cpu
 ```
+
+默认只发布到宿主机回环 (仅本机可达)。需要局域网/公网访问时改为
+`-p 0.0.0.0:9881:9881` 或直接 `-p 9881:9881`, 并**必须**同时设置
+`ADR_TTS_API_KEY` (见下文安全说明)。
 
 ## 数据卷
 
@@ -89,7 +93,8 @@ docker run -d --name adr-server -p 9881:9881 -v adr-data:/data \
 ## 端口与鉴权
 
 容器监听 `0.0.0.0:9881` 且无鉴权时, 启动日志会打警告——容器场景这是预期行为。
-仅本机使用可改端口映射为 `127.0.0.1:9881:9881`; 对外暴露务必设置 API key:
+端口映射默认只发布到宿主机回环 (`127.0.0.1:9881:9881`), 仅本机可达; 对外暴露
+务必改为 `0.0.0.0:9881:9881` 并设置 API key:
 
 ```yaml
 # 追加到 docker-compose.yml 的 services.adr 下

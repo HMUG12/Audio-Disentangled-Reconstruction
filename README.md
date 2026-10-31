@@ -101,10 +101,10 @@ cd "C:\Users\you\AppData\Local\Programs\ADR Studio"
 容器版镜像已发布至 GitHub Container Registry（cpu / cuda 双变体）：
 
 ```powershell
-# CPU
-docker run -d --name adr-server -p 9881:9881 -v adr-data:/data ghcr.io/hmug12/adr-server:1.2.0-cpu
+# CPU（默认只发布到本机回环；对外暴露改用 -p 9881:9881 并设 ADR_TTS_API_KEY）
+docker run -d --name adr-server -p 127.0.0.1:9881:9881 -v adr-data:/data ghcr.io/hmug12/adr-server:1.2.0-cpu
 # GPU（需 NVIDIA Container Toolkit）
-docker run -d --name adr-server --gpus all -p 9881:9881 -v adr-data:/data ghcr.io/hmug12/adr-server:1.2.0-cuda
+docker run -d --name adr-server --gpus all -p 127.0.0.1:9881:9881 -v adr-data:/data ghcr.io/hmug12/adr-server:1.2.0-cuda
 ```
 
 常青 tag：`ghcr.io/hmug12/adr-server:cpu` / `:cuda` 始终指向最新发布版；容器版详细用法见 [docker/README.md](docker/README.md)。

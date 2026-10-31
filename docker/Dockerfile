@@ -121,6 +121,9 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
 
 # 设备走向由引擎 auto 自检 (ADR_TTS_DEVICE 可覆盖):
 #   cpu 镜像 -> 自动 cpu; cuda 镜像有 GPU -> cuda, 无 GPU 环境回退 cpu
+# 容器内必须监听 0.0.0.0 才能被端口映射访问 (0.0.0.0 是容器自身命名空间,
+# 非对外暴露); 暴露面由 compose/`docker run -p` 的发布地址决定, 对外发布
+# 必须同时设 ADR_TTS_API_KEY (启动告警见 adr/server/__main__.py)。
 ENTRYPOINT ["python", "-m", "adr.server"]
 CMD ["--addr", "0.0.0.0", "--port", "9881"]
 
