@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 # =====================================================================
 # ADR portable runtime builder (batch 44; batch 52 dual-variant)
 #
@@ -6,6 +6,8 @@
 #   python\               CPython 3.13 (python-build-standalone, win64)
 #                         + torch stack + pinned deps
 #   adr\                  adr package source (PYTHONPATH-friendly flat copy)
+#   configs\              训练 preset yaml (adr.core.config 按 REPO/configs 加载)
+#   scripts\              训练/门禁脚本 (gsv_finetune.py / train_gate.py, 子进程调用)
 #   third_party\gpt_sovits\  GSV source tree
 #
 # Variants (双包拍板, docs/m10-plan.md G 节):
@@ -21,7 +23,11 @@
 [CmdletBinding()]
 param(
     # GPU 包构建: 安装 CUDA torch, 供 GPU 用户开箱即用 (CPU 包为默认线)
-    [switch]$AllowCuda
+    [switch]$AllowCuda,
+    # 离线/内网构建: 本地 wheel 目录 (需含 torch/torchaudio 及 torch 自身依赖
+    # filelock/sympy/networkx/jinja2/fsspec/setuptools/typing-extensions 等)。
+    # 提供时 torch 栈改走 --no-index 只从该目录解析, 避免重复下载 ~1.9GB。
+    [string]$TorchWheelDir
 )
 
 $ErrorActionPreference = "Stop"
@@ -155,17 +161,31 @@ Set-Content -Path $ReqFile -Value $requirements -Encoding ASCII
 Log ("requirements written: {0}" -f $ReqFile)
 
 Step "4/6 pip install (this downloads ~1 GB, progress bars below)"
+# torch 栈来源: 默认走官方索引; -TorchWheelDir 时完全离线 (--no-index),
+# 由本地 wheel 目录唯一解析, 不会退回网络重下。
+$torchSrc = @()
+if ($TorchWheelDir) {
+    $wheelAbs = (Resolve-Path -LiteralPath $TorchWheelDir -ErrorAction Stop).Path
+    if (-not (Test-Path $wheelAbs)) { throw "TorchWheelDir not found: $wheelAbs" }
+    $torchSrc = @("--no-index", "--find-links", $wheelAbs)
+    Log ("offline torch source: {0}" -f $wheelAbs)
+}
 # 4a. torch 栈先行: 后续 requirements 中的 pytorch-lightning 等看到已装即满足
 if ($AllowCuda) {
     Log "GPU variant: torch/torchaudio 2.10.0+cu130 from download.pytorch.org (~2.5 GB)"
-    & $py -m pip install --prefer-binary --cache-dir $PipCache --no-warn-script-location `
-        --index-url https://download.pytorch.org/whl/cu130 `
-        torch==2.10.0+cu130 torchaudio==2.10.0+cu130
+    $torchArgs = @("--prefer-binary", "--cache-dir", $PipCache, "--no-warn-script-location")
+    if ($torchSrc.Count -gt 0) {
+        $torchArgs += $torchSrc
+    } else {
+        $torchArgs += "--index-url", "https://download.pytorch.org/whl/cu130"
+    }
+    & $py -m pip install @torchArgs torch==2.10.0+cu130 torchaudio==2.10.0+cu130
     if ($LASTEXITCODE -ne 0) { throw "pip install torch cu130 failed" }
 } else {
     Log "CPU variant: torch/torchaudio 2.10.0 from PyPI (Windows PyPI wheels are CPU builds)"
-    & $py -m pip install --prefer-binary --cache-dir $PipCache --no-warn-script-location `
-        torch==2.10.0 torchaudio==2.10.0
+    $torchArgs = @("--prefer-binary", "--cache-dir", $PipCache, "--no-warn-script-location")
+    if ($torchSrc.Count -gt 0) { $torchArgs += $torchSrc }
+    & $py -m pip install @torchArgs torch==2.10.0 torchaudio==2.10.0
     if ($LASTEXITCODE -ne 0) { throw "pip install torch failed" }
 }
 # 4b. 其余钉版依赖 (torch 已满足, 不会重复解析)
@@ -179,6 +199,11 @@ if ($LASTEXITCODE -ge 8) { throw "robocopy adr failed ($LASTEXITCODE)" }
 # 缺失会静默回落内置默认值 (安装机上 doctor 报 preset yaml 缺失, v1.0.1 前实装)
 robocopy (Join-Path $RepoRoot "configs") (Join-Path $OutDir "configs") /E /NFL /NDL /NJH /NJS /NP /XF *.pyc | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy configs failed ($LASTEXITCODE)" }
+# 训练/门禁脚本必须随包: 运行时按 REPO/scripts/*.py 以子进程拉起
+# (console.py train_start → scripts/gsv_finetune.py + scripts/train_gate.py),
+# 缺了安装版点 "训练/声音克隆" 直接 500 缺少训练脚本 (v1.0.1 缺口)
+robocopy (Join-Path $RepoRoot "scripts") (Join-Path $OutDir "scripts") /E /NFL /NDL /NJH /NJS /NP /XD __pycache__ /XF *.pyc | Out-Null
+if ($LASTEXITCODE -ge 8) { throw "robocopy scripts failed ($LASTEXITCODE)" }
 $gsvSrc = Join-Path $RepoRoot "third_party\gpt_sovits"
 $gsvDst = Join-Path $OutDir "third_party\gpt_sovits"
 robocopy $gsvSrc $gsvDst /E /NFL /NDL /NJH /NJS /NP `
