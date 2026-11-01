@@ -97,6 +97,21 @@
   #tip.ok { color: var(--ok); }
   #tip.warn { color: var(--warn); }
 
+  /* 批次73: 失败详情 (traceback 摘要 + 复制诊断) — 默认收起, 不吓人但可查 */
+  #errbox { display: none; flex-direction: column; gap: 8px;
+    width: min(480px, 88vw); }
+  #errbox details { background: var(--card-grad); border: 1px solid var(--failed-line);
+    border-radius: 10px; padding: 9px 12px; }
+  #errbox summary { font-size: 12px; color: var(--err-soft); cursor: pointer; }
+  #errbox pre { margin: 8px 0 2px; max-height: 180px; overflow: auto;
+    font-family: Consolas, monospace; font-size: 11px; line-height: 1.55;
+    color: var(--muted); white-space: pre-wrap; word-break: break-all;
+    user-select: text; }
+  #btnCopyErr { align-self: flex-end; font: inherit; font-size: 11.5px; cursor: pointer;
+    border-radius: 8px; padding: 5px 12px; color: var(--dot-txt);
+    border: 1px solid var(--dot-line); background: transparent; }
+  #btnCopyErr:hover { border-color: var(--brand); color: var(--brand); }
+
   #acts { display: none; gap: 12px; justify-content: center; margin-top: 6px; }
   #acts button {
     font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
@@ -162,6 +177,13 @@
   </div>
 
   <div id="tip">准备中…</div>
+  <div id="errbox">
+    <details>
+      <summary>失败详情</summary>
+      <pre id="errtx"></pre>
+    </details>
+    <button id="btnCopyErr">复制诊断</button>
+  </div>
   <div id="acts">
     <button id="btnRetry">重试预热</button>
     <button id="btnSkip">仍要进入</button>
@@ -207,11 +229,25 @@ function setStep(idx, cls) {
 }
 
 // 壳 (Rust) 通过 eval 驱动: window.__adrPrewarm(stage, text)
+const errBox = document.getElementById("errbox");
+const errTx = document.getElementById("errtx");
+let lastErr = "";
+function hideErr() { errBox.style.display = "none"; }
+
+// 批次73: 失败原因摘要 (壳的 fetch_engine_stage_info → engine_error 推送)
+window.__adrPrewarmError = function (text) {
+  lastErr = String(text || "");
+  if (!lastErr.trim()) { hideErr(); return; }
+  errTx.textContent = lastErr;
+  errBox.style.display = "flex";
+};
+
 window.__adrPrewarm = function (stage, text) {
   if (stage === "ready") {
     steps.forEach(s => (s.className = "step done"));
     setTip(text || "预热完成, 正在进入启动器…", "ok");
     acts.style.display = "none";
+    hideErr();
     return;
   }
   if (stage === "failed") {
@@ -223,6 +259,8 @@ window.__adrPrewarm = function (stage, text) {
     acts.style.display = "flex";
     return;
   }
+  hideErr();   // 重试一旦进入正常阶段就收起上一轮的失败详情
+  lastErr = "";
   const idx = MAP[stage] ?? 0;
   setStep(idx, "active");
   setTip(text || "预热中…");
@@ -242,6 +280,18 @@ document.getElementById("btnRetry").addEventListener("click", async () => {
 document.getElementById("btnSkip").addEventListener("click", () => {
   window.__TAURI__.core.invoke("skip_prewarm")
     .catch(e => setTip("强制进入失败: " + e, "warn"));
+});
+// 批次73: 复制诊断 (版本 + 系统 + 失败摘要), 用户直接贴给开发者
+document.getElementById("btnCopyErr").addEventListener("click", async () => {
+  const btn = document.getElementById("btnCopyErr");
+  let ver = "";
+  try { ver = "ADR Studio " + await window.__TAURI__.app.getVersion(); } catch (_) { /* 版本读不到就不带 */ }
+  const txt = [ver, navigator.userAgent, "", lastErr].join("\n").trim();
+  try {
+    await navigator.clipboard.writeText(txt);
+    btn.textContent = "已复制";
+  } catch (_) { btn.textContent = "复制失败, 请手动选择"; }
+  setTimeout(() => { btn.textContent = "复制诊断"; }, 2000);
 });
 
 // 批次61: 首启条款流 — 加载即查标记, 未同意则切条款视图; 引擎预热照常在后台进行

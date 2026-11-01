@@ -50,6 +50,12 @@ function Step([string]$msg) {
 
 Step "0/7 prepare directories"
 New-Item -ItemType Directory -Force -Path $OutDir, $DlDir, $PipCache | Out-Null
+# 批次73: 包型标记 — 桌面壳据此判断"CPU 包 / GPU 包", 与显卡存在性互校后
+# 在启动器顶部提示换包。安装器 Source: {#RuntimeDir}\* → {app}\runtime,
+# 故该文件最终落在 <安装目录>\runtime\BUILD_VARIANT.txt。
+$variantTag = if ($AllowCuda) { "gpu" } else { "cpu" }
+Set-Content -Path (Join-Path $OutDir "BUILD_VARIANT.txt") -Value $variantTag -Encoding ASCII
+Log ("build variant: {0}" -f $variantTag)
 
 Step "1/7 fetch python-build-standalone (CPython 3.13 win64)"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12

@@ -518,6 +518,8 @@ def test_auth_health_has_engine_stage_for_desktop(auth_client):
     assert r.status_code == 200
     body = r.json()
     assert "engine_stage" in body and "engine_stage_text" in body
+    # 批次73: 失败原因摘要随 /health 下发 (壳预热页展开区)
+    assert "engine_error" in body
 
 
 def test_auth_system_stats_still_requires_key(auth_client):

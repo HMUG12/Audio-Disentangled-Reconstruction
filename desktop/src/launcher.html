@@ -132,7 +132,49 @@
   #eng.loading { color: var(--warn); }
   #eng.stopped { color: var(--err); }
 
-  /* 关于模态框 */
+  /* 批次73: 顶部横幅 (更新可用 / 包型不匹配; 均可关闭) */
+  .bn { position: fixed; left: 0; right: 0; top: 0; z-index: 45; display: none;
+    align-items: center; gap: 12px; padding: 9px 16px; font-size: 12.5px;
+    background: var(--tag-bg); border-bottom: 1px solid var(--tag-line); color: var(--tag-txt); }
+  .bn.on { display: flex; top: 0; }
+  .bn.warn { background: var(--warn-bg); border-bottom-color: var(--warn-line); color: var(--warn); }
+  /* 两条横幅同时出现时纵向排开 (后一条让位) */
+  .bn.on + .bn.on { top: 38px; }
+  .bn .bn-tx { flex: 1; min-width: 0; line-height: 1.5; }
+  .bn .bn-act { color: var(--brand); cursor: pointer; font-weight: 600; white-space: nowrap; }
+  .bn .bn-act:hover { text-decoration: underline; }
+  .bn .bn-x { border: none; background: none; color: inherit; opacity: .6;
+    cursor: pointer; font-size: 14px; line-height: 1; padding: 2px 4px; }
+  .bn .bn-x:hover { opacity: 1; }
+
+  /* 批次73: 更新模态框 (下载进度 + 立即安装) */
+  #upd-ov { position: fixed; inset: 0; z-index: 50; display: none;
+    place-items: center; background: var(--overlay); }
+  #upd-ov.on { display: grid; }
+  #upd { width: min(480px, 90vw); background: var(--modal-grad); position: relative;
+    border: 1px solid var(--modal-line); border-radius: 18px; padding: 28px 28px 22px;
+    box-shadow: var(--modal-shadow); }
+  #upd .upd-title { font-size: 16.5px; font-weight: 650; margin-bottom: 10px; }
+  #upd .upd-title em { font-style: normal; color: var(--brand); }
+  #upd .upd-notes { font-size: 12.5px; line-height: 1.7; color: var(--muted);
+    white-space: pre-wrap; max-height: 132px; overflow-y: auto; margin-bottom: 16px; }
+  #upd .upd-bar { height: 8px; border-radius: 999px; background: var(--tag-bg);
+    border: 1px solid var(--tag-line); overflow: hidden; }
+  #upd .upd-bar i { display: block; height: 100%; width: 0; background: var(--brand);
+    transition: width .2s; }
+  #upd .upd-info { font-size: 12px; color: var(--dim); margin: 9px 0 18px; min-height: 17px;
+    line-height: 1.5; }
+  #upd .upd-info.err { color: var(--err); }
+  #upd .upd-acts { display: flex; gap: 10px; justify-content: flex-end; }
+  #upd .upd-acts button { font-size: 12.5px; font-weight: 600; padding: 8px 16px;
+    border-radius: 9px; cursor: pointer; border: 1px solid var(--modal-line);
+    background: var(--field); color: var(--strong); }
+  #upd .upd-acts button:disabled { opacity: .45; cursor: not-allowed; }
+  #upd #upd-inst { background: var(--save-bg); border-color: var(--save-line); color: var(--save-txt); }
+  #upd .upd-note { font-size: 11px; color: var(--faint); margin-top: 14px;
+    border-top: 1px solid var(--sep); padding-top: 12px; line-height: 1.6; }
+
+
   #about-ov { position: fixed; inset: 0; z-index: 50; display: none;
     place-items: center; background: var(--overlay); }
   #about-ov.on { display: grid; }
@@ -152,10 +194,10 @@
     color: var(--code-txt); background: var(--code-bg); border: 1px solid var(--code-line);
     border-radius: 6px; padding: 1px 7px; cursor: pointer; }
   #about dd code:hover { background: var(--code-hover); }
-  #about .ab-close { position: absolute; top: 12px; right: 14px; width: 28px; height: 28px;
+  #about .ab-close, #upd .ab-close { position: absolute; top: 12px; right: 14px; width: 28px; height: 28px;
     display: grid; place-items: center; color: var(--dim); font-size: 18px;
     cursor: pointer; border-radius: 8px; border: none; background: none; }
-  #about .ab-close:hover { color: var(--txt); background: var(--close-hover-bg); }
+  #about .ab-close:hover, #upd .ab-close:hover { color: var(--txt); background: var(--close-hover-bg); }
   #about .ab-note { font-size: 11px; line-height: 1.7; color: var(--faint);
     border-top: 1px solid var(--sep); padding-top: 14px; }
 
@@ -215,6 +257,16 @@
 </style>
 </head>
 <body>
+  <div id="bn-upd" class="bn">
+    <span class="bn-tx"></span>
+    <a class="bn-act">查看更新</a>
+    <button class="bn-x" title="本次启动不再提示">✕</button>
+  </div>
+  <div id="bn-pkg" class="bn warn">
+    <span class="bn-tx"></span>
+    <a class="bn-act">去下载另一包</a>
+    <button class="bn-x" title="关闭">✕</button>
+  </div>
   <div class="logo">ADR <em>Studio</em></div>
   <div class="sub">本地低资源语音克隆 · 选择一个控制台进入</div>
   <div id="eng">● 检测引擎状态…</div>
@@ -292,6 +344,21 @@
 
   <div class="foot">经典控制台按需启动；专业 / 新手复用常驻引擎（启动时已预热），进出秒级切换 · <a id="set-link">设置</a> · <a id="about-link">关于 ADR Studio</a></div>
   <div id="toast"></div>
+
+  <div id="upd-ov">
+    <div id="upd">
+      <button class="ab-close" id="upd-x" title="关闭">✕</button>
+      <div class="upd-title">发现新版本 <em id="upd-ver"></em></div>
+      <div class="upd-notes" id="upd-notes"></div>
+      <div class="upd-bar"><i id="upd-fill"></i></div>
+      <div class="upd-info" id="upd-info">下载并校验通过后才可安装</div>
+      <div class="upd-acts">
+        <button id="upd-dl">下载并校验</button>
+        <button id="upd-inst" disabled>立即安装</button>
+      </div>
+      <div class="upd-note">安装包与校验值来自官网更新清单；安装期间本应用会自动退出，随后静默覆盖安装（声音档案与模型不受影响）。</div>
+    </div>
+  </div>
 
   <div id="about-ov">
     <div id="about">
@@ -496,7 +563,6 @@ document.getElementById("about-qq").addEventListener("click", e => {
 });
 
 // ===== 设置中心 (批次48): shell.json 读写 + 环境变量注入面 =====
-const RELEASES_URL = "https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/latest";
 const setOv = document.getElementById("set-ov");
 const $st = id => document.getElementById(id);
 let stAutostart = false;   // 注册表当前真值 (保存时比对, 避免无谓写注册表)
@@ -632,10 +698,7 @@ $st("st-open-log").addEventListener("click", () => {
   if (!p) { showToast("目录信息暂不可用, 请重开设置面板"); return; }
   window.__TAURI__?.core.invoke("open_path", { path: p }).catch(e => showToast(String(e)));
 });
-$st("st-update").addEventListener("click", () => {
-  window.__TAURI__?.core.invoke("open_path", { path: RELEASES_URL })
-    .catch(e => showToast(String(e)));
-});
+$st("st-update").addEventListener("click", () => runUpdateCheck(true));
 $st("st-copy-url").addEventListener("click", () => {
   const url = $st("st-lan-url").textContent;
   if (url && url !== "引擎未运行") {
@@ -654,6 +717,131 @@ window.__TAURI__ && window.__TAURI__.core.invoke("load_shell_settings")
   .then(cfg => document.querySelectorAll(".exp input")
     .forEach(b => { if (b) b.checked = !!cfg.lan_expose; }))
   .catch(() => {});
+
+// ===== 批次73: 更新链 (检查清单 → 下载校验 → 立即安装) + 包型互提示 =====
+const $upd = id => document.getElementById(id);
+const bnUpd = document.getElementById("bn-upd");
+const bnPkg = document.getElementById("bn-pkg");
+const updOv = document.getElementById("upd-ov");
+let updData = null;   // check_update 结果 (横幅与模态框共用)
+let updPkg = null;    // 清单挑中的包, download_update 原样回传
+let updPath = "";     // 已下载并通过 SHA256 校验的本地安装包
+
+function updInfo(text, isErr) {
+  const el = $upd("upd-info");
+  el.textContent = text;
+  el.className = "upd-info" + (isErr ? " err" : "");
+}
+
+// 下载进度由壳 eval 推回 (download_update → window.__adrUpdate)
+window.__adrUpdate = p => {
+  const pct = Math.max(0, Math.min(100, Number(p?.percent) || 0));
+  $upd("upd-fill").style.width = pct + "%";
+  const mb = n => ((Number(n) || 0) / 1048576).toFixed(1);
+  const src = p?.attempt > 1 ? ` · 备用源 ${p.attempt - 1}` : "";
+  updInfo(Number(p?.total) > 0
+    ? `下载中 ${pct.toFixed(0)}% (${mb(p.got)} / ${mb(p.total)} MB)${src}`
+    : `下载中 ${mb(p?.got)} MB${src}`);
+};
+
+function openUpdateModal() {
+  if (!updData?.available) return;
+  updPkg = updData.package || null;
+  updPath = "";
+  $upd("upd-ver").textContent = "v" + updData.latest;
+  $upd("upd-notes").textContent = (updData.notes || "").trim() || "该版本未提供更新说明。";
+  $upd("upd-fill").style.width = "0";
+  $upd("upd-dl").disabled = !updData.package_ready;
+  $upd("upd-dl").textContent = "下载并校验";
+  $upd("upd-inst").disabled = true;
+  updInfo(updData.package_ready ? "下载并校验通过后才可安装" : "该版本未提供安装包, 请到官网下载");
+  updOv.classList.add("on");
+}
+
+// interactive: 用户主动点「检查更新」(失败要提示, 有新版直接开框);
+// 静默: 启动器加载时后台查一次 (失败不打扰, 有新版只挂横幅)
+async function runUpdateCheck(interactive) {
+  const inv = window.__TAURI__?.core.invoke;
+  if (!inv) { showToast("请在 ADR Studio 桌面应用内使用"); return; }
+  let r;
+  try {
+    r = await inv("check_update", { force: !!interactive });
+  } catch (e) {
+    if (interactive) showToast("检查更新失败: " + e);
+    return;
+  }
+  updData = r;
+  if (!r?.available) {
+    bnUpd.classList.remove("on");
+    if (interactive) showToast(`已是最新版本 (v${r?.current || "-"})`, true);
+    return;
+  }
+  bnUpd.querySelector(".bn-tx").textContent =
+    `发现新版本 v${r.latest}（当前 v${r.current}）` + (r.cached ? " · 离线清单" : "");
+  if (!sessionStorage.getItem("adr.upd.skip")) bnUpd.classList.add("on");
+  if (interactive) openUpdateModal();
+}
+
+bnUpd.querySelector(".bn-act").addEventListener("click", openUpdateModal);
+bnUpd.querySelector(".bn-x").addEventListener("click", () => {
+  bnUpd.classList.remove("on");
+  sessionStorage.setItem("adr.upd.skip", "1");   // 本次会话不再提示
+});
+$upd("upd-x").addEventListener("click", () => updOv.classList.remove("on"));
+updOv.addEventListener("click", e => { if (e.target === updOv) updOv.classList.remove("on"); });
+
+$upd("upd-dl").addEventListener("click", async () => {
+  if (!updPkg) { updInfo("安装包信息缺失, 请重新检查更新", true); return; }
+  const btn = $upd("upd-dl"), inst = $upd("upd-inst");
+  btn.disabled = true; btn.textContent = "下载中…"; inst.disabled = true;
+  updInfo("正在连接更新服务器…");
+  try {
+    const r = await window.__TAURI__.core.invoke("download_update", { pkg: updPkg });
+    updPath = r.path;
+    $upd("upd-fill").style.width = "100%";
+    updInfo("已下载并通过 SHA256 校验, 可立即安装");
+    inst.disabled = false;
+    btn.textContent = "重新下载";
+  } catch (e) {
+    updInfo(String(e), true);
+    btn.textContent = "重试下载";
+  }
+  btn.disabled = false;
+});
+
+$upd("upd-inst").addEventListener("click", async () => {
+  if (!updPath) { updInfo("请先下载并校验安装包", true); return; }
+  const b = $upd("upd-inst");
+  b.disabled = true; b.textContent = "安装中…";
+  updInfo("应用即将退出, 随后静默覆盖安装（声音档案与模型不受影响）");
+  try {
+    await window.__TAURI__.core.invoke("install_update", { path: updPath });
+  } catch (e) {
+    updInfo(String(e), true);
+    b.disabled = false; b.textContent = "立即安装";
+  }
+});
+
+// 包型互提示 (GPU 包装到无 N 卡 / CPU 包装到有 N 卡): 只读本地, 不联网
+(async () => {
+  if (!window.__TAURI__) return;
+  try {
+    const h = await window.__TAURI__.core.invoke("package_hint");
+    if (!h?.kind) return;
+    bnPkg.querySelector(".bn-tx").textContent = h.kind === "gpu_pkg_no_gpu"
+      ? "当前是 GPU 版安装包, 但未检测到 NVIDIA 显卡 — 引擎将无法启动, 建议换 CPU 版"
+      : "当前是 CPU 版安装包, 但本机有 NVIDIA 显卡 — 合成会明显变慢, 建议换 GPU 版";
+    bnPkg.querySelector(".bn-act").addEventListener("click", () => {
+      window.__TAURI__.core.invoke("open_path", { path: h.other_url })
+        .catch(e => showToast(String(e)));
+    });
+    bnPkg.querySelector(".bn-x").addEventListener("click", () => bnPkg.classList.remove("on"));
+    bnPkg.classList.add("on");
+  } catch (_) { /* 旧壳无该命令 → 不提示 */ }
+})();
+
+// 启动器加载: 静默查一次 (24h 缓存, 不打扰)
+runUpdateCheck(false);
 // 主题切换控件: 右上角 (启动器无页头)
 if (window.adrTheme) window.adrTheme.mountSwitch();
 </script>
