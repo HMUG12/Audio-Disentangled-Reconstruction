@@ -32,7 +32,12 @@ from adr.core.exceptions import (
     SynthesisParamsError,
     error_code,
 )
-from adr.models.gsv_engine import handle_cuda_oom, is_cuda_oom
+from adr.models.gsv_engine import (
+    NLTK_MISSING_MESSAGE,
+    handle_cuda_oom,
+    is_cuda_oom,
+    is_nltk_missing,
+)
 from adr.server import tts_cache
 from adr.server.audio_codec import pack_audio, to_int16
 from adr.server.param_norm import env_num, normalize_params
@@ -224,6 +229,9 @@ def _stream_generator(engine, req: dict, media_type: str):
             handle_cuda_oom(e)  # 释放碎片显存 + 友好警告日志 (批次57)
             # 批次66: OOM 截断同样记一条可定位的服务端日志 (wire 行为不变)
             logger.warning("streaming tts truncated by CUDA OOM")
+        elif is_nltk_missing(e):
+            # 批次74: 英文依赖缺失 — 流已开始只能断流, 记可定位日志
+            logger.warning("streaming tts truncated: nltk data missing (%s)", e)
         else:
             logger.exception("streaming tts failed: %s", e)
 
@@ -319,6 +327,12 @@ async def tts_handle(req: dict, request: Request) -> Response:
             return JSONResponse(status_code=503,
                                 content={"message": handle_cuda_oom(e),
                                          "code": "cuda_oom"})
+        if is_nltk_missing(e):
+            # 批次74: 英文依赖缺失 (无外网机器 nltk 补下载失败) — 503 可定位
+            logger.warning("tts rejected: nltk data missing (%s)", e)
+            return JSONResponse(status_code=503,
+                                content={"message": NLTK_MISSING_MESSAGE,
+                                         "code": "nltk_missing"})
         # 批次66: 服务端留堆栈; 400 状态码为 GSV wire 兼容保留 (code 区分 internal_error)
         logger.exception("tts failed")
         return JSONResponse(status_code=400,

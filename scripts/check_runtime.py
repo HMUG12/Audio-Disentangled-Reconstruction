@@ -25,6 +25,8 @@ runtime 1.78GB。本脚本固化排除规则, 防止垃圾再混入。
    settings.ensure_runtime_bins_on_path 注入 runtime\bin)
 10. redist/vc_redist.x64.exe 必须随包 (批次71: PBS Python 的 CRT 依赖,
     精简系统缺它装完 python.exe 起不来; installer.iss [Run] 静默安装)
+11. python/nltk_data 必须随包 (批次74: g2p-en 的 cmudict + nltk
+    PerceptronTagger; 缺失时英文合成 LookupError — 无外网机器无法补下载)
 
 用法:
   python scripts/check_runtime.py                 # 自动探测 build/runtime-cpu|gpu
@@ -174,6 +176,25 @@ def main() -> int:
     if not (rt / "redist" / "vc_redist.x64.exe").is_file():
         fails.append("redist/vc_redist.x64.exe 缺失 "
                      "(精简系统无 VC++ CRT 时装完 runtime 起不来)")
+
+    # 11) nltk_data 随包 (批次74: g2p-en 的 cmudict + nltk PerceptronTagger,
+    #    缺失时英文文本触发在线下载, 无外网/被墙机器 → LookupError → 英文合成挂;
+    #    build_runtime Step4c 下载到 python/nltk_data, nltk.data.path 自动命中)
+    nltk_dir = rt / "python" / "nltk_data"
+    for res in ("corpora/cmudict", "taggers/averaged_perceptron_tagger_eng"):
+        if not (nltk_dir / res).exists():
+            fails.append(f"nltk_data 缺失: python/nltk_data/{res} (英文合成将失败)")
+    if py.is_file() and not fails:
+        import subprocess
+        # 目录在还不够: 实跑 runtime python 确认 nltk 能解析到 (路径/损坏双保险)
+        probe = subprocess.run(
+            [str(py), "-c",
+             "import nltk; nltk.data.find('corpora/cmudict'); "
+             "nltk.data.find('taggers/averaged_perceptron_tagger_eng')"],
+            capture_output=True, text=True, timeout=120)
+        if probe.returncode != 0:
+            fails.append(f"nltk_data 无法被 runtime python 解析 (英文合成将失败): "
+                         f"{probe.stderr.strip().splitlines()[-1] if probe.stderr.strip() else probe.returncode}")
 
     for w in warns:
         print(f"[WARN] {w}")
