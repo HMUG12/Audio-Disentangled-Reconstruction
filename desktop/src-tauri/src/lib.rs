@@ -43,6 +43,9 @@ use tauri::{
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
+/// 批次73: 客户端更新链 (清单检查 / 下载校验 / 静默安装) + 包型互提示
+mod update;
+
 /// 服务 (重) 启动失败上限
 const MAX_FAILURES: u32 = 4;
 /// 单次启动健康探活超时 (首次导入 torch/CUDA 较慢)
@@ -476,7 +479,11 @@ pub fn run() {
             autostart_get,
             autostart_set,
             open_path,
-            cpu_compat_auto
+            cpu_compat_auto,
+            update::check_update,
+            update::download_update,
+            update::install_update,
+            update::package_hint
         ])
         .on_window_event(|window, event| {
             // 关窗 = 隐藏到托盘; 真正退出走托盘菜单 (保证 sidecar 被清理)
@@ -1147,8 +1154,9 @@ fn eval_prewarm(window: &Option<WebviewWindow>, stage: &str, text: &str) {
     }
 }
 
-/// 从 stats 拉引擎预热阶段 + 实时进度文案 (批次44: 下载进度透传, 不触发加载)。
-fn fetch_engine_stage_info(base: &str) -> Option<(String, String)> {
+/// 从 stats 拉引擎预热阶段 + 实时进度文案 + 失败原因摘要
+/// (批次44: 下载进度透传; 批次73: failed 附带 traceback 摘要, 不触发加载)。
+fn fetch_engine_stage_info(base: &str) -> Option<(String, String, String)> {
     // 读 /health 而非 /system/stats: 两者都含 engine_stage/engine_stage_text,
     // 但启用 ADR_TTS_API_KEY 后 /system/stats 要鉴权, 壳轮询不带 key → 401 →
     // 预热永久卡住; /health 在 auth 豁免名单内, 永远可达。
@@ -1166,7 +1174,43 @@ fn fetch_engine_stage_info(base: &str) -> Option<(String, String)> {
         .and_then(|x| x.as_str())
         .unwrap_or("")
         .to_string();
-    Some((stage, text))
+    let error = v
+        .get("engine_error")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    Some((stage, text, error))
+}
+
+/// 驱动预热页失败详情 (展开区 / 复制诊断, 批次73)。
+fn eval_prewarm_error(window: &Option<WebviewWindow>, error: &str) {
+    if error.trim().is_empty() {
+        return;
+    }
+    if let Some(w) = window {
+        let _ = w.eval(&format!(
+            "window.__adrPrewarmError && window.__adrPrewarmError({});",
+            js_quote(error)
+        ));
+    }
+}
+
+/// traceback 摘要取末行当标题 (通常是 "XxxError: 具体原因"), 过长截断。
+fn error_headline(error: &str) -> String {
+    let last = error
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .next_back()
+        .unwrap_or("");
+    if last.is_empty() {
+        return "引擎预热失败".into();
+    }
+    if last.chars().count() > 200 {
+        let t: String = last.chars().take(200).collect();
+        return format!("{t}…");
+    }
+    last.to_string()
 }
 
 /// 启动预热主流程: 拉服务 → 轮询引擎阶段 → ready 后自动放行进启动器。
@@ -1207,12 +1251,15 @@ fn prewarm_flow(app: AppHandle) {
             return;
         }
         match fetch_engine_stage_info(&base) {
-            Some((st, _)) if st == "ready" => break,
-            Some((st, _)) if st == "failed" => {
-                eval_prewarm(&window, "failed", "引擎预热失败, 请查看日志或重试");
+            Some((st, _, _)) if st == "ready" => break,
+            Some((st, _, err)) if st == "failed" => {
+                // 批次73: 失败不再只显示固定文案 — 带上 traceback 末行做标题,
+                // 完整摘要推给预热页展开区 (含"复制诊断")
+                eval_prewarm(&window, "failed", &format!("引擎预热失败: {}", error_headline(&err)));
+                eval_prewarm_error(&window, &err);
                 return;
             }
-            Some((st, text)) if !st.is_empty() => {
+            Some((st, text, _)) if !st.is_empty() => {
                 let changed = st != last;
                 // 批次44: downloading 阶段文案为实时下载进度, 每次轮询都刷新;
                 // 其余阶段仅阶段变化时 eval 一次 (文案固定)

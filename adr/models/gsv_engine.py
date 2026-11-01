@@ -21,6 +21,7 @@ import os
 import pickle
 import sys
 import threading
+import traceback
 import zipfile
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -966,6 +967,9 @@ _ENGINE: Optional[GSVEngine] = None
 _ENGINE_LOCK = threading.Lock()  # 批次41a: 单例创建锁 (多线程首次并发防多实例)
 _LOADING = False   # 后台预热进行中 (服务启动期, 供控制台显示引擎三态)
 _STAGE = ""        # 预热细分阶段: queued/importing/loading/kernel/failed (供前端实时显示)
+# 批次73: 预热失败原因摘要 (traceback 末几行, 最多 1200 字)。原实现 failed 只
+# log.warning, 前端与壳只见"失败"二字, 用户无从判断是缺权重 / 显存不足 / 依赖坏。
+_STAGE_ERROR = ""
 
 
 def is_loading() -> bool:
@@ -983,6 +987,26 @@ def stage() -> str:
     if is_ready():
         return "ready"
     return _STAGE
+
+
+def stage_error() -> str:
+    """预热失败原因摘要 (批次73; 非 failed 阶段返回空串, 不触发加载)。
+
+    取 traceback 末几行 (异常类型 + 消息 + 最后两帧), 截断到 1200 字:
+    过长的栈在预热页展开区反而看不清, 用户要的是"哪一步因为什么炸了"。
+    """
+    return _STAGE_ERROR if _STAGE == "failed" else ""
+
+
+def _error_summary(exc: BaseException) -> str:
+    """把异常整理成人读摘要 (纯函数, 单测覆盖)。"""
+    lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
+    # 末 6 行足以覆盖 "xxxError: msg" + 关键两帧, 首行(File 链)也留
+    tail = [ln.rstrip() for ln in lines[-6:] if ln.strip()]
+    txt = "\n".join(tail) if tail else f"{type(exc).__name__}: {exc}"
+    if len(txt) > 1200:
+        txt = "…" + txt[-1200:]
+    return txt
 
 
 def stage_text() -> str:
@@ -1045,9 +1069,10 @@ def prewarm(default_profile: str | None = None) -> None:
     服务端 (server/app.py) 启动线程调用; 桌面壳 prewarm 页面轮询 stage() 显示。
     失败不致命 (首次合成时仍会按需加载), 只打日志。
     """
-    global _LOADING, _STAGE
+    global _LOADING, _STAGE, _STAGE_ERROR
     log = logging.getLogger("adr.models.gsv_engine")
     _LOADING = True
+    _STAGE_ERROR = ""  # 批次73: 重试时清掉上一轮失败原因
     _STAGE = "queued"
     try:
         _STAGE = "importing"  # import torch + GSV 模块 (最耗时可达 20s)
@@ -1095,7 +1120,11 @@ def prewarm(default_profile: str | None = None) -> None:
         _schedule_idle_profile()
     except Exception as e:
         _STAGE = "failed"
-        log.warning("[prewarm] GSV 预热失败 (首次合成时将现场加载): %s", e)
+        # 批次73: 保留失败摘要并经 stage_error() → health → 预热页展示,
+        # 不再只落一行 warning 让用户对着"预热失败"猜原因。
+        _STAGE_ERROR = _error_summary(e)
+        log.warning("[prewarm] GSV 预热失败 (首次合成时将现场加载): %s\n%s",
+                    e, _STAGE_ERROR)
     finally:
         _LOADING = False
 

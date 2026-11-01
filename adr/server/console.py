@@ -179,6 +179,8 @@ def system_stats():
         "engine_stage": gsv_engine.stage(),
         # 批次44: downloading 阶段的实时下载进度文案 (其余阶段空串)
         "engine_stage_text": gsv_engine.stage_text(),
+        # 批次73: failed 阶段的原因摘要 (traceback 末几行, 其余阶段空串)
+        "engine_error": gsv_engine.stage_error(),
         # 批次23: 并发排队可视化 (排队等待数 / 合成中数)
         "queue_depth": gsv_engine.queue_depth(),
         "synth_busy": gsv_engine.synth_busy(),

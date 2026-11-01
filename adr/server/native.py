@@ -49,6 +49,8 @@ async def health(request: Request):
         "engine_loading": _gsv.is_loading(),
         "engine_stage": _gsv.stage(),
         "engine_stage_text": _gsv.stage_text(),
+        # 批次73: failed 阶段的原因摘要 (traceback 末几行), 桌面壳预热页展开显示
+        "engine_error": _gsv.stage_error(),
         # 批次23: 并发排队可视化 (排队等待数 / 合成中数)
         "queue_depth": _gsv.queue_depth(),
         "synth_busy": _gsv.synth_busy(),

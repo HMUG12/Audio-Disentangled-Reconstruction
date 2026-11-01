@@ -302,7 +302,7 @@ def test_health_no_absolute_paths(client, tmp_path):
     body = client.get("/api/adr/v1/health").json()
     assert body["weights"] == {"t2s": "x.ckpt", "vits": "x.ckpt"}
     assert "secret_user" not in json.dumps(body)
-    for k in ("engine_ready", "engine_stage", "engine_stage_text",
+    for k in ("engine_ready", "engine_stage", "engine_stage_text", "engine_error",
               "queue_depth", "synth_busy"):
         assert k in body
 
