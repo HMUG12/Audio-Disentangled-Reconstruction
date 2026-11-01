@@ -360,7 +360,15 @@ def main():
             failed += 1
             continue
         src = fp.read_text(encoding="utf-8", errors="replace")
-        if marker in src:
+        # 幂等判定必须按"单条补丁"而非按文件: text/chinese.py / chinese2.py
+        # 各有 2 条补丁且共用同一 marker ("ADR 兼容补丁"), 只看 marker in src
+        # 会把第 2 条误判成"已打过"直接跳过 (v1.0.1/v1.2.0 容器版漏打
+        # jieba.posseg 回退的根因 — 容器无 jieba_fast, 中文合成 import 即崩)。
+        # 也不能用 old not in src 判: 多条补丁的 old 是 new 的子串 (新文本原样
+        # 保留了旧行) 或 old 在文件里有多个副本 (replace 只换第 1 处), 打完 old
+        # 仍在 → 会被判成"没打过"反复插入, 直到把文件打成语法错。
+        # 唯一可靠的判据: 本补丁的 new 文本已原样存在 == 本条确实作用过。
+        if new in src:
             print(f"[skip] {rel} (已打过)")
             skipped += 1
             continue
