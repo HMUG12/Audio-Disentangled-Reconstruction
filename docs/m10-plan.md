@@ -378,6 +378,20 @@
 - **测试**：新增 8 项——v2 语言白名单 400（`text_lang`/`prompt_lang` 参数化 2 项）、v3 overrides 采样叠加生效、v3 非法 overrides（`top_k=0`/`text_lang`/`speed_factor=0` 参数化 3 项）错误帧且会话可恢复、合批「1 坏 2 好」隔离（显式 `ValueError`，两条合法请求照常出音频）、缓存旧版本/裸 hex 文件扫描丢弃；既有缓存用例改用 `_fname()` 生成断言文件名
 - **验证**：定向 pytest 56 passed（3 文件 + 新增用例）；全量 **721 passed, 1 skipped（351.76s，exit 0）**，较批次 68 +8；`check_versions` → `all faces = 1.3.1 (16 checks OK)`、`check_compliance` → 7 组 OK
 
+**批次 70 落地记录（2026-11-01，分支 main）：8 维审计 P2 清理（第 11–13 项）**（审计全文 `docs/audit-2026-10-31.md` §7.3）：
+
+- **D5 参数归一收口**：新增 `adr/server/param_norm.py`（`SUPPORTED_LANGS` / `env_num` / `num_bounds` / `bad_number` / `normalize_params`），固定「类型转换 → 区间/有限性 → 语言白名单」单一顺序；`v2_compat._check_params` 与 `v3_compat._normalize_overrides` 改为共用同一函数（v3 只负责挑 override 字段），删除 v2 内的 `_env_num`/`SUPPORTED_LANGS`/`_FIXED_BOUNDS`/`_bad_number` 副本。wire 文案逐字保留（`"<field> out of range: ..."` 被 `test_openai_speed_bound` 断言），语言错误文案统一带合法值列表
+- **D3 extra 补齐**：`pyproject.toml` 的 `all = ["adr-clone[m1,m2]"]` → `[m1,m2,multilang]`（此前装 `all` 会漏掉日/粤/韩 G2P 链）
+- **D4 整机 freeze 隔离**：`requirements-lock.txt` → `requirements-freeze-dev.txt`（`git mv` 保留历史），文件头注明「`pip freeze` 整机快照，仅本机参考、不是可复现基线」（含 `fairseq @ file:///E:/rvc/...` 与来源不明包）；可复现路径指向 `build_runtime.ps1` / `docker/requirements-linux.txt`；`scripts/apply_compat_patches.py` 复装流程同步改名
+- **Q4 容器 pandas**：`docker/requirements-linux.txt` 钉 `pandas==2.3.3`（AR 训练数据路径 `third_party/gpt_sovits .../AR/data/dataset.py` 的隐式依赖；容器已含 pytorch-lightning/tensorboard 即训练可用形态，故补齐而非声明不可用；组合与本机 numpy 2.4.3 实测一致），顺带把批次 69 遗留的裸 `chardet` 钉为 `7.7.0`（与 runtime 清单一致）
+- **测试缺口 4 组（第 5 节余项）**：
+  - `tests/test_audit_origin_guard.py`（29 条）：`host_allowed`/`origin_allowed` 边界参数化（缺 Host / IP / 单段名 / 尾点域名 / 白名单 / 同源 / `Origin: null`）+ 中间件 scope 级（纯 ASGI 直驱：缺 Host 放行、DNS 重绑定 403、WS close 4403、`enabled=False`、两个逃生阀）+ TestClient 集成（真实中间件栈下 403/200）
+  - `tests/test_audit_server_compat.py` 末节 2 条：`openai.AsyncOpenAI` + `httpx.ASGITransport` 官方 SDK 端到端（不占端口），断言 `tts-1`/`alloy` 回退默认档案、默认非流式返回完整 WAV、`speed=0` 得到 `BadRequestError` 且文案含 `speed_factor out of range`
+  - `tests/test_audit_packaging.py`：容器清单钉版静态断言（`pandas` / `chardet`）、`pandas × numpy` 构造冒烟、`build_installer.ps1 -DryRun` subprocess 端到端
+- **`-DryRun` 干跑开关**：`scripts/build_installer.ps1` 增 `[switch]$DryRun` — 版本/合规门禁仍硬失败，前置缺失（ISCC / runtime python / tauri CLI / `check_runtime`）降为 WARN，成功结尾 `DRY RUN OK` 并 `exit 0`，不编译不签名。落地时发现该脚本文件头有两个 BOM（PS 5.1 会把首行当命令执行 → `param` 不识别、`-Gpu`/`-DryRun` 全部失效并直接编译），已归一为单 BOM
+- **验证**：全量 **756 passed, 1 skipped（506.88s，exit 0）**，较批次 69 +35（29 + 2 + 4）；`check_versions` → `all faces = 1.3.1 (16 checks OK)`、`check_compliance` → 7 组 OK；`build_installer.ps1 -DryRun` 实跑 exit 0（门禁 + runtime 体检通过，未编译）
+- **遗留（不进本轮）**：审计附录 A 的 14 条 2/3 票备案项仍保持「不改」状态；批 70 后审计第 6 节清单 P0/P1/P2 全部收口
+
 ---
 
 ## 总体 Review — v1.3.1 实测与画像分档（2026-10-23 ~ 10-25）

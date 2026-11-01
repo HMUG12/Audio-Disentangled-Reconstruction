@@ -53,4 +53,8 @@ tensorboard==2.21.0
 tensorboardX==2.6.5
 x-transformers==2.25.5
 sentencepiece==0.2.2
-chardet
+chardet==7.7.0
+# 批次70 (Q4): AR 训练数据路径隐式依赖 (third_party/gpt_sovits .../AR/data/dataset.py
+# `import pandas as pd`), 容器含 pytorch-lightning/tensorboard 即训练可用形态,
+# 故钉版补齐而非声明"训练不可用"。组合与本机实测一致 (numpy 2.4.3 + pandas 2.3.3)。
+pandas==2.3.3

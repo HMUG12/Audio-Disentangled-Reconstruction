@@ -64,7 +64,7 @@ multilang = [
 ]
 # 全量
 all = [
-    "adr-clone[m1,m2]",
+    "adr-clone[m1,m2,multilang]",
 ]
 # 开发
 dev = [

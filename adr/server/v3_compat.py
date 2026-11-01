@@ -34,12 +34,8 @@ from adr.core.exceptions import (
 )
 from adr.models import voice_library
 from adr.models.gsv_engine import handle_cuda_oom, is_cuda_oom
-from adr.server.v2_compat import (
-    SUPPORTED_LANGS,
-    _bad_number,
-    engine_busy,
-    max_text_chars,
-)
+from adr.server.param_norm import normalize_params
+from adr.server.v2_compat import engine_busy, max_text_chars
 from adr.services import SynthesisService
 
 logger = logging.getLogger(__name__)
@@ -120,28 +116,12 @@ _OVERRIDE_FIELDS = (
 def _normalize_overrides(data: dict) -> tuple[dict, Optional[str]]:
     """批次69: overrides 收口 — 类型归一 + 区间/有限性/语言校验。
 
-    返回 (overrides, 错误文案|None); 错误由 init 分支回 invalid_params 错误帧,
-    不再静默忽略 (审计 Q6/Q8)。
+    批次70 (D5): 规则与 v2 HTTP 面共用 param_norm.normalize_params,
+    此处只负责挑出 override 字段。返回 (overrides, 错误文案|None),
+    错误由 init 分支回 invalid_params 错误帧, 不再静默忽略 (审计 Q6/Q8)。
     """
     ov = {k: data.get(k) for k in _OVERRIDE_FIELDS if data.get(k) is not None}
-    msg = _bad_number(ov)
-    if msg:
-        return ov, msg
-    for k in ("text_lang", "prompt_lang"):
-        if k in ov:
-            ov[k] = str(ov[k]).lower()
-            if ov[k] not in SUPPORTED_LANGS:
-                return ov, f"{k} unsupported: {ov[k]!r}"
-    for k in ("top_k", "seed", "batch_size"):
-        if k in ov:
-            try:
-                ov[k] = int(ov[k])
-            except (TypeError, ValueError):
-                return ov, f"{k} must be an integer: {ov[k]!r}"
-    for k in ("top_p", "temperature", "speed_factor", "fragment_interval"):
-        if k in ov:
-            ov[k] = float(ov[k])
-    return ov, None
+    return normalize_params(ov)
 
 
 @router.get("/voices", summary="音色列表 (N.E.K.O 自定义音色源)")
