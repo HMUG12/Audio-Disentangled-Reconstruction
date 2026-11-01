@@ -18,6 +18,13 @@ runtime 1.78GB。本脚本固化排除规则, 防止垃圾再混入。
    安装机 preset 全部静默回落内置默认值, 日志报 default.yaml 缺失)
 7. 多语言 G2P 包必须随包 (批次53: pyopenjtalk/jamo/ToJyutping/ko_pron —
    日/韩/粤合成的 import 链, 缺失则 text_lang=ja/ko/yue 请求 400)
+8. 训练脚本必须随包 (批次71, 复盘§一: v1.0.1/v1.3.1 双包漏拷 scripts/,
+   console.py:386 / webui 以子进程调 REPO/scripts/*.py → 训练 500)
+9. bin/ffmpeg.exe + ffprobe.exe 必须随包 (批次71 依赖自包含, 闭审计附录
+   A-1: GSV 训练切片与 uvr5 裸调 "ffmpeg" 只认 PATH, server 启动时
+   settings.ensure_runtime_bins_on_path 注入 runtime\bin)
+10. redist/vc_redist.x64.exe 必须随包 (批次71: PBS Python 的 CRT 依赖,
+    精简系统缺它装完 python.exe 起不来; installer.iss [Run] 静默安装)
 
 用法:
   python scripts/check_runtime.py                 # 自动探测 build/runtime-cpu|gpu
@@ -149,6 +156,24 @@ def main() -> int:
         if probe.returncode != 0:
             fails.append(f"多语言 G2P 包缺失 (ja/ko/yue 合成将 400): "
                          f"{probe.stderr.strip().splitlines()[-1] if probe.stderr.strip() else probe.returncode}")
+
+    # 8) 训练脚本随包 (批次71, 复盘§一: 双包漏拷 scripts/, 用户点训练即
+    #    500「缺少训练脚本」— console.py:386 / webui 以子进程调 REPO/scripts/)
+    for s in ("gsv_finetune.py", "train_gate.py",
+              "smoke_train_opencpop.py", "rvc_train.py"):
+        if not (rt / "scripts" / s).is_file():
+            fails.append(f"训练脚本缺失: scripts/{s} (训练子进程按 REPO/scripts/ 调用)")
+
+    # 9) ffmpeg/ffprobe 随包 (批次71 依赖自包含, 闭审计附录 A-1:
+    #    GSV 训练切片与 uvr5 裸调 "ffmpeg" 只认 PATH — build_runtime Step6)
+    for exe in ("ffmpeg.exe", "ffprobe.exe"):
+        if not (rt / "bin" / exe).is_file():
+            fails.append(f"bin/{exe} 缺失 (训练切片/音频编码/音频探测将失败)")
+
+    # 10) VC++ redist 随包 (批次71: PBS Python 的 CRT 依赖)
+    if not (rt / "redist" / "vc_redist.x64.exe").is_file():
+        fails.append("redist/vc_redist.x64.exe 缺失 "
+                     "(精简系统无 VC++ CRT 时装完 runtime 起不来)")
 
     for w in warns:
         print(f"[WARN] {w}")

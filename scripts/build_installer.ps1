@@ -61,6 +61,36 @@ if (-not (Test-Path $tauriCli)) {
   else { throw "tauri CLI missing - 先执行: cd desktop && npm ci (版本见 package.json)" }
 }
 
+# 批次71 (复盘§二缺陷2): MAX_PATH 预检 — ISCC 编译期 (源侧) 与安装机写盘
+# (装机侧) 均受 260 字符限制, 相对路径时代实测 12 个文件超限 (最长 269)。
+# 阈值 250 (留 10 字符余量: 装机侧用户名长度不可控), 超限即拦并给中文报错。
+$rtRoot = Join-Path $root "build\$rtDirName"
+if (Test-Path $rtRoot) {
+  $rtAbs = (Resolve-Path $rtRoot).Path
+  # 装机侧前缀近似 (per-user 安装): 构建机用户名近似装机机用户名
+  $dstPrefix = Join-Path $env:LOCALAPPDATA "Programs\ADR Studio\runtime"
+  $tooLong = New-Object System.Collections.Generic.List[string]
+  try {
+    Get-ChildItem $rtAbs -Recurse -File | ForEach-Object {
+      $rel = $_.FullName.Substring($rtAbs.Length)
+      if ($_.FullName.Length -gt 250) {
+        $tooLong.Add(("源侧 {0}: {1}" -f $_.FullName.Length, $_.FullName))
+      } elseif (($dstPrefix + $rel).Length -gt 250) {
+        $tooLong.Add(("装机侧 {0}: {1}" -f ($dstPrefix + $rel).Length, $rel))
+      }
+    }
+  } catch {
+    throw "MAX_PATH 预检: runtime 内存在超出 260 字符的路径, 枚举即失败 ($($_.Exception.Message)) — 清理超长文件或缩短构建根后重试"
+  }
+  if ($tooLong.Count -gt 0) {
+    $tooLong | Select-Object -First 5 | ForEach-Object { Write-Host "  $_" -ForegroundColor Red }
+    throw ("MAX_PATH 预检: {0} 个文件路径 >250 字符 (最多列 5 个, 阈值 250/上限 260) — 修复后再打包" -f $tooLong.Count)
+  }
+  Write-Host "[build_installer] MAX_PATH 预检通过 (源侧+装机侧, 阈值 250)" -ForegroundColor Green
+} elseif ($DryRun) {
+  Write-Warning "DryRun: build\$rtDirName 不存在 - 跳过 MAX_PATH 预检"
+}
+
 if ($DryRun) {
   Write-Output "DRY RUN OK"
   exit 0
@@ -78,6 +108,9 @@ $isccArgs = @()
 if ($Gpu) {
   $isccArgs += "/DGPU_BUILD", "/DRUNTIME_DIR_NAME=runtime-gpu"
 }
+# 批次71 (复盘§二缺陷2): 绝对路径传 ISCC — 相对路径在 ISCC 侧不归一化,
+# 构建根较深时实测 12 个文件超 MAX_PATH 260 (最长 269)。配合上面的预检块。
+$isccArgs += "/DRUNTIME_DIR_ABS=" + (Resolve-Path $rtRoot).Path
 $isccArgs += (Join-Path $PSScriptRoot "installer\installer.iss")
 & $iscc @isccArgs
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }

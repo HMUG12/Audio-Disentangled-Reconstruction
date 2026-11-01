@@ -75,16 +75,27 @@ patch(
         world_size=n_gpus,
         rank=rank,
     )''',
-    '''    # ADR 兼容补丁: 本机 gloo 不可用 (hosts 劫持+多网卡), 单卡直通
+    '''    # ADR 兼容补丁: 本机 gloo 彻底不可用 (hosts 劫持 + 多网卡),
+    # 单卡训练跳过分布式: 不 init_process_group, 不包 DDP
     _single_gpu_no_dist = (n_gpus == 1)
     if not _single_gpu_no_dist:
+        # ADR 兼容补丁: 本机 hosts 把 localhost 劫持到 kubernetes.docker.internal,
+        # gloo 连不上 MASTER_ADDR → 单卡改用 file store 初始化;
+        # 且 gloo makeDeviceForHostname 在多网卡 Windows 上失败 → 指定物理网卡
+        import tempfile
+        os.environ.setdefault("GLOO_SOCKET_IFNAME", "以太网 2")
+        _store_path = os.path.join(tempfile.gettempdir(), f"gsv_ddp_{os.getpid()}")
         dist.init_process_group(
             backend="gloo" if os.name == "nt" or not torch.cuda.is_available() else "nccl",
-            init_method="env://?use_libuv=False",
+            init_method=f"file:///{_store_path}",
             world_size=n_gpus,
             rank=rank,
         )''',
 )
+# 批次71 注: 上面 new 文本 2026-11 与 third_party 实态对齐 (旧措辞的
+# 简单 env:// 包装版已被手工升级为 file store 版 — 判据改 `new in src`
+# 后如实暴露漂移, 现按实态回写定义; "以太网 2" 仅多卡 Windows gloo 分支
+# 生效, ADR 训练恒单卡不触发)。
 patch(
     GSV_S2, "net_g = net_g.cuda(rank)   # 单卡直通",
     '''    if torch.cuda.is_available():
@@ -117,7 +128,7 @@ patch(
     '''        strategy=DDPStrategy(process_group_backend="nccl" if platform.system() != "Windows" else "gloo")
         if torch.cuda.is_available()
         else "auto",''',
-    '''        strategy=(  # ADR 兼容补丁: 本机 gloo 不可用, 单卡用 auto
+    '''        strategy=(  # ADR 兼容补丁: 本机 gloo 不可用 (hosts 劫持+多网卡), 单卡用 auto
             DDPStrategy(process_group_backend="nccl" if platform.system() != "Windows" else "gloo")
             if torch.cuda.is_available() and torch.cuda.device_count() > 1
             else "auto"
@@ -501,7 +512,13 @@ def main():
             failed += 1
             continue
         src = fp.read_text(encoding="utf-8", errors="replace")
-        if marker in src:
+        # 批次71 (复盘§二缺陷1): 幂等判据必须是 new 而非 marker — marker 在
+        # 补丁打上后通常仍在文件中 (new 文本一般包含 marker), 对同一文件的
+        # 第 2 条补丁, 第 1 条应用后 marker 判定错乱 → 静默跳过 (v1.0.1 实测
+        # 漏打 bucket_sampler.py rank 守卫, s1 训练启动即崩)。
+        # 前提: 每条补丁的 new 文本互不重复且各自唯一可辨识; 若未来出现两条
+        # new 相同/互为子串, 判据失效, 需升级为 (rel, marker, new) 三元组指纹。
+        if new in src:
             print(f"[skip] {rel} (已打过)")
             skipped += 1
             continue

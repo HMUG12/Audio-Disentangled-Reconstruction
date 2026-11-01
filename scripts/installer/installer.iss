@@ -24,7 +24,16 @@
 #ifndef RUNTIME_DIR_NAME
 #define RUNTIME_DIR_NAME "runtime-cpu"
 #endif
+; 批次71 (复盘§二缺陷2): 构建侧可用 /DRUNTIME_DIR_ABS=<绝对路径> 覆盖 —
+; 相对路径 ..\..\build\ 在 ISCC 内不归一化, 每条文件路径多占字符, 构建根
+; 较深时实测 12 个文件超 MAX_PATH 260 (最长 269) → 编译报"找不到指定的路径"。
+; build_installer.ps1 现默认经 Resolve-Path 传绝对路径, 并在 tauri 构建前
+; 加 >250 预检 (源侧 + 装机侧)。
+#ifdef RUNTIME_DIR_ABS
+#define RuntimeDir RUNTIME_DIR_ABS
+#else
 #define RuntimeDir "..\..\build\" + RUNTIME_DIR_NAME
+#endif
 
 ; GPU 变体: ISCC /DGPU_BUILD → 文件名带 -gpu 后缀 (runtime 内容由
 ; build_runtime.ps1 -AllowCuda 产出, 本脚本只负责命名区分)
@@ -78,10 +87,26 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; \
     Tasks: desktopicon
 
 [Run]
+; 批次71: VC++ 2015-2022 x64 静默安装 (PBS Python 的 CRT 依赖, 缺它精简
+; 系统装完 runtime 起不来; 已装则微软安装器秒过)。shellexec: 该 exe 清单
+; 要求提权, 走 CreateProcess 会直接失败, ShellExecute 才能触发 UAC。
+; 注意 redist 是机器级安装 — per-user 安装器这里会弹一次 UAC 属预期。
+Filename: "{app}\runtime\redist\vc_redist.x64.exe"; \
+    Parameters: "/install /quiet /norestart"; \
+    WorkingDir: "{app}\runtime\redist"; \
+    Flags: shellexec runhidden waituntilterminated; Check: VCRedistNeedsInstall
 Filename: "{app}\{#MyAppExe}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; \
     Flags: nowait postinstall skipifsilent
 
 [Code]
+// 批次71: VC++ 2015-2022 x64 是否已装 (注册表 Runtimes\x64 键存在即装过;
+// redist 机器级, 本安装器 per-user 只读 HKLM 无权限问题; 64 位安装模式
+// 下无 WOW6432Node 重定向)
+function VCRedistNeedsInstall(): Boolean;
+begin
+  Result := not RegKeyExists(HKLM, 'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64');
+end;
+
 // WebView2 runtime check (Tauri 2 needs it; Win10/11 usually ships it).
 // Mirrors what the old NSIS bootstrap did, minus the silent installer.
 function InitializeSetup(): Boolean;

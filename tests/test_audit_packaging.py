@@ -64,3 +64,95 @@ def test_build_installer_dry_run():
     assert "DRY RUN OK" in out
     # 干跑不得进入编译阶段
     assert "Compiling" not in out
+
+
+# ===== 批次71: 打包链修复移植 + 依赖自包含 (复盘 v1.0.1 §一/§二/§六) =====
+
+CHECK_RUNTIME = REPO / "scripts" / "check_runtime.py"
+
+# 训练子进程实际调用的脚本 (console.py:386/439 + webui/__init__.py)
+TRAIN_SCRIPTS = ("gsv_finetune.py", "train_gate.py",
+                 "smoke_train_opencpop.py", "rvc_train.py")
+
+
+def _make_runtime_skeleton(rt: Path) -> None:
+    """最小可通过骨架: configs preset (第 6 项)。无 python.exe 时第 7 项跳过。"""
+    (rt / "configs").mkdir(parents=True)
+    (rt / "configs" / "default.yaml").write_text("train: {}\n", encoding="utf-8")
+
+
+def _run_check_runtime(rt: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(CHECK_RUNTIME), "--runtime", str(rt)],
+        capture_output=True, text=True, encoding="utf-8",
+        errors="replace", timeout=120,
+    )
+
+
+def test_check_runtime_flags_missing_train_scripts(tmp_path):
+    """§一防复发: runtime 缺 scripts/ → 体检必须 FAIL (v1.0.1/v1.3.1 双包漏拷)。"""
+    rt = tmp_path / "rt"
+    _make_runtime_skeleton(rt)
+    proc = _run_check_runtime(rt)
+    assert proc.returncode == 1
+    out = proc.stdout + proc.stderr
+    assert "训练脚本缺失" in out
+    for s in TRAIN_SCRIPTS:
+        assert s in out
+
+
+def test_check_runtime_flags_missing_bundled_ffmpeg_redist(tmp_path):
+    """依赖自包含: 缺 bin/ffmpeg.exe、ffprobe.exe、redist/vc_redist.x64.exe → FAIL。"""
+    rt = tmp_path / "rt"
+    _make_runtime_skeleton(rt)
+    (rt / "scripts").mkdir()
+    for s in TRAIN_SCRIPTS:
+        (rt / "scripts" / s).write_text("# stub\n", encoding="utf-8")
+    proc = _run_check_runtime(rt)
+    assert proc.returncode == 1
+    out = proc.stdout + proc.stderr
+    assert "bin/ffmpeg.exe 缺失" in out
+    assert "bin/ffprobe.exe 缺失" in out
+    assert "redist/vc_redist.x64.exe 缺失" in out
+
+
+def test_check_runtime_passes_with_bundled_deps(tmp_path):
+    """训练脚本 + ffmpeg + redist 齐备 → 体检通过 (正向路径)。"""
+    rt = tmp_path / "rt"
+    _make_runtime_skeleton(rt)
+    (rt / "scripts").mkdir()
+    for s in TRAIN_SCRIPTS:
+        (rt / "scripts" / s).write_text("# stub\n", encoding="utf-8")
+    for exe in ("ffmpeg.exe", "ffprobe.exe"):
+        (rt / "bin").mkdir(exist_ok=True)
+        (rt / "bin" / exe).write_bytes(b"MZ stub")
+    (rt / "redist").mkdir()
+    (rt / "redist" / "vc_redist.x64.exe").write_bytes(b"MZ stub")
+    proc = _run_check_runtime(rt)
+    assert proc.returncode == 0, (proc.stdout + proc.stderr)[-1500:]
+    assert "体检通过" in proc.stdout
+
+
+def test_compat_patches_idempotency_uses_new_text():
+    """§二缺陷1防复发: main() 的幂等判据必须是 `new in src` 而非 `marker in src`
+    (marker 打补丁后仍在文件中 → 同文件第 2 条补丁被静默跳过, v1.0.1 实测
+    漏打 bucket_sampler.py rank 守卫致 s1 启动即崩)。"""
+    src = CHECK_RUNTIME.with_name("apply_compat_patches.py").read_text(encoding="utf-8")
+    assert "if new in src:" in src
+    assert "if marker in src:" not in src
+
+
+def test_runtime_bins_path_injection(tmp_path, monkeypatch):
+    """settings.ensure_runtime_bins_on_path: REPO_ROOT/bin 存在时前置 PATH, 幂等。"""
+    import os
+
+    from adr.core import settings
+    (tmp_path / "bin").mkdir()
+    monkeypatch.setattr(settings, "REPO_ROOT", tmp_path)
+    monkeypatch.setenv("PATH", r"C:\Windows\System32")
+    settings.ensure_runtime_bins_on_path()
+    expected = str(tmp_path / "bin")
+    assert os.environ["PATH"].startswith(expected + os.pathsep)
+    # 幂等: 重复注入不叠加
+    settings.ensure_runtime_bins_on_path()
+    assert os.environ["PATH"].count(expected + os.pathsep) == 1

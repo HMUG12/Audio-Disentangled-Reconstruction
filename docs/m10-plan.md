@@ -392,6 +392,17 @@
 - **验证**：全量 **756 passed, 1 skipped（506.88s，exit 0）**，较批次 69 +35（29 + 2 + 4）；`check_versions` → `all faces = 1.3.1 (16 checks OK)`、`check_compliance` → 7 组 OK；`build_installer.ps1 -DryRun` 实跑 exit 0（门禁 + runtime 体检通过，未编译）
 - **遗留（不进本轮）**：审计附录 A 的 14 条 2/3 票备案项仍保持「不改」状态；批 70 后审计第 6 节清单 P0/P1/P2 全部收口
 
+**批次 71 落地记录（2026-11-01，分支 main）：打包链修复移植 + 依赖自包含**（复盘源 `打包问题复盘-v1.0.1.md` §六 5 项移植 + 会议拍板 ffmpeg/VC redist 随包）：
+
+- **§一 scripts/ 随包**：`build_runtime.ps1` Step5 新增 `scripts/` robocopy + 退出码校验（v1.0.1/v1.3.1 双包漏拷，console.py:386 训练子进程调 `REPO/scripts/gsv_finetune.py` → 用户点训练即 500「缺少训练脚本」）；`check_runtime.py` 新增第 8 项体检（gsv_finetune / train_gate / smoke_train_opencpop / rvc_train 四脚本存在性）
+- **§二缺陷1 补丁幂等判据**：`apply_compat_patches.py` `marker in src` → `new in src` + 陷阱注释（marker 打补丁后仍在文件中，同文件第 2 条补丁被静默跳过；v1.0.1 曾漏打 bucket_sampler rank 守卫致 s1 启动即崩）。按复盘「打满后逐条识别」推演实跑，暴露 2 条定义漂移（本机 third_party 的 s2_train/s1_train 已被手工升级为 file store 初始化版 / hosts 劫持注释版，旧判据一直在掩盖），已按实态回写定义 → 30 条全 skip、exit 0
+- **§二缺陷2 MAX_PATH**：`installer.iss` `#ifdef RUNTIME_DIR_ABS` 三分支 + `build_installer.ps1` `Resolve-Path` 绝对路径传 `/DRUNTIME_DIR_ABS=`，tauri 构建前新增 MAX_PATH 预检（源侧 + 装机侧双测，>250 拦截给中文报错；相对路径时代实测 12 文件超 260、最长 269）；mini iss 实测中文路径宏传递 + 递归 Source 编译通过（ISCC 6.7.1）
+- **依赖自包含（2026-11-01 会议拍板，闭审计附录 A-1）**：`build_runtime.ps1` 新增 Step6 — ffmpeg 8.1.2 essentials（gyan.dev 钉版直链 + SHA256，抽取 ffmpeg.exe/ffprobe.exe 至 `runtime\bin\`，各 ~97MB）+ VC++ 2015-2022 x64 redist（微软直链钉版，URL 路径内嵌 SHA256，落 `runtime\redist\`，~24MB）；`installer.iss` [Run] 静默安装（`shellexec` + `Check:VCRedistNeedsInstall` 注册表判重；redist 是机器级安装，per-user 安装器会弹一次 UAC 属预期）；`adr/core/settings.py` 新增 `ensure_runtime_bins_on_path()` 并模块级执行（覆盖 server.bat / 壳 / webui 全部入口 — GSV 训练切片 tools/my_utils.py 与 uvr5 裸调 "ffmpeg" 只认 PATH，不注入则随包 ffmpeg 对所有调用点不可见）；`check_runtime.py` 新增第 9/10 项（bin/ffmpeg.exe+ffprobe.exe、redist/vc_redist.x64.exe 随包检查）
+- **BOM 规范顺带收口**：`build_runtime.ps1` 历史无 BOM（作者靠 here-string 纯 ASCII 规避 PS 5.1 ANSI 误读），本批新增中文注释较多，已补单 UTF-8 BOM 对齐批次 70 规范
+- **测试**：`tests/test_audit_packaging.py` +5 条（缺训练脚本 FAIL / 缺 ffmpeg+redist FAIL / 齐备正向 PASS / 幂等判据静态断言 / PATH 注入+幂等）；旧 `build/runtime-cpu` 实跑 check_runtime 正确拦截 7 项 FAIL（门禁生效证明，DryRun 链路 WARN 放行不炸）
+- **验证**：全量 **761 passed, 1 skipped（621.63s，exit 0）**，较批次 70 +5；`check_versions` → 16 checks OK、`check_compliance` → 7 组 OK；`build_installer.ps1 -DryRun` exit 0（含 MAX_PATH 预检对真实 runtime 实跑）；`apply_compat_patches.py` 30 条全 skip
+- **遗留**：runtime 需按新脚本重建才含 scripts/bin/redist（存量 runtime-cpu/gpu 会被新体检拦下——预期行为，防坏包流出）；ffmpeg+redist 体积增量 ~218MB（CPU 包 ~2.0GB，仍在 2.2GB 告警线内无需调线）
+
 ---
 
 ## 总体 Review — v1.3.1 实测与画像分档（2026-10-23 ~ 10-25）
