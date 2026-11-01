@@ -105,11 +105,32 @@ def _print_banner(addr: str, port: int) -> None:
     )
 
 
+def _hold_app_mutex() -> None:
+    """批次72 (卸载体验): 创建命名互斥体, 供安装器/卸载器 (Inno AppMutex) 检测
+    "服务正在运行" — 覆盖 server.bat / 直接 ``python -m adr.server`` 的无壳场景。
+
+    名字与 desktop/src-tauri/src/lib.rs (壳) / scripts/installer/installer.iss
+    三端**逐字一致** (tests/test_audit_packaging.py 有防漂移断言)。
+
+    句柄故意不关: 随进程退出 (含 taskkill /F) 由 OS 回收释放。
+    创建失败静默 — 不阻断服务启动, 只是安装器少一道运行中拦截。
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ctypes.windll.kernel32.CreateMutexW(None, False, "ADR-Studio-Running")
+    except Exception:  # noqa: BLE001 - 沙箱策略拦截等, 卸载拦截是尽力而为
+        pass
+
+
 def main():
     # 批次57: native 层崩溃 (如 Intel 13/14 代 AVX-512 缺陷触发 oneDNN/MKL 段错误)
     # 通常无 Python traceback、stderr 零输出 — faulthandler 在崩溃瞬间把 Python 侧
     # 调用栈写到 stderr, 随桌面壳泵入 server.log, 是"闪退无痕"的最后兜底。
     faulthandler.enable(file=sys.stderr, all_threads=True)
+    # 批次72: 尽早持锁 — 卸载器在服务进程存活期间不得动 runtime 文件
+    _hold_app_mutex()
     ap = argparse.ArgumentParser(
         description="ADR TTS 服务 (GSV api_v2 兼容层 + ADR 原生档案 API)")
     ap.add_argument("-p", "--port", type=int, default=9881,

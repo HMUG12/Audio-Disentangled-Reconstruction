@@ -403,6 +403,16 @@
 - **验证**：全量 **761 passed, 1 skipped（621.63s，exit 0）**，较批次 70 +5；`check_versions` → 16 checks OK、`check_compliance` → 7 组 OK；`build_installer.ps1 -DryRun` exit 0（含 MAX_PATH 预检对真实 runtime 实跑）；`apply_compat_patches.py` 30 条全 skip
 - **遗留**：runtime 需按新脚本重建才含 scripts/bin/redist（存量 runtime-cpu/gpu 会被新体检拦下——预期行为，防坏包流出）；ffmpeg+redist 体积增量 ~218MB（CPU 包 ~2.0GB，仍在 2.2GB 告警线内无需调线）
 
+**批次 72 落地记录（2026-11-01，分支 main）：卸载体验（运行互斥体 + 卸载清理 + 档案保留询问 + kill 竞态三分类）**：
+
+- **不检查程序关闭 → 三端同名互斥体 `ADR-Studio-Running`**：壳 `lib.rs` 新增 `APP_MUTEX_NAME` / `create_app_mutex()`（`CreateMutexW` 裸名 = 会话命名空间，句柄故意不关，随进程退出由 OS 回收），在 `run()` 开头持锁；服务 `adr/server/__main__.py` 新增 `_hold_app_mutex()`（覆盖 `server.bat` / `python -m adr.server` 无壳场景），紧随 `faulthandler.enable` 调用；`installer.iss` `[Setup] AppMutex=ADR-Studio-Running` 让安装器与卸载器启动即检测。跨语言无法编译期共享 → 用 `tests/test_audit_packaging.py` 读三份源文件做**逐字防漂移断言**，Rust 侧另有 `app_mutex_name_matches_spec` 单测
+- **卸不干净 → 分层清理**：`[UninstallDelete]` 无条件清**可再生成**产物（`runtime\data\tts_cache`、`third_party\gpt_sovits\{output,logs,TEMP}`，Inno 默认只删安装清单文件，这些目录此前必然残留）；用户资产不在此段
+- **用户资产 → 卸载询问页默认保留**：`[Code]` 新增 `CurUninstallStepChanged(usUninstall)` + `DirHasContent()`，检测 `runtime\data\voices`（声音档案）、`SoVITS_weights_v2`/`GPT_weights_v2`（GSV 微调权重）、`third_party\rvc\{assets\weights,logs}`（RVC 模型/检索索引）非空才弹一次汇总询问，`MB_DEFBUTTON2` 默认「否」=保留；`UninstallSilent`（`/SILENT` 免打扰安装）直接跳过不弹窗、按保留处理；选删则 `DelTree` 递归清 + `dirifempty` 收尾空目录（保留时无副作用）
+- **kill_current 「Access denied / 已退出」误报**（待修清单同族收口）：`kill_tree` 由 `bool` 改 `KillOutcome{Killed,AlreadyGone,Failed}`，`classify_taskkill_code` 把 taskkill 退出码 **128（进程不存在）归 AlreadyGone**——swap→taskkill 窗口内进程自然退出属竞态、目标已达成，此前与真实失败混记同一条"失败"日志；`reap_orphans` 同步三分类留痕
+- **测试**：`tests/test_audit_packaging.py` +3 条（三端互斥体名一致性 / `[UninstallDelete]` 覆盖清单 / 卸载询问页含静默默认保留）；`cargo test --lib` 8 passed（含 taskkill 三分类、互斥体名单测）。顺带修掉 `env_overrides_maps_all_fields` 因批次 62 新增 `safety_audit`/`wav_metadata` 字段未补而无法编译的既有测试断点（补 `..Default::default()`）
+- **验证**：mini iss（抽取 `[UninstallDelete]`+[Run]+[Code] 段）ISCC 6.7.1 编译通过（Pascal 语法实校）；定向 pytest 12 passed；全量 **764 passed, 1 skipped（477.54s，exit 0）**，较批次 71 +3；`check_versions` → 16 checks OK、`check_compliance` → 7 组 OK
+- **已知约束（交批次 73 更新客户端）**：Inno 的 `AppMutex` 在静默安装时遇到互斥体会直接中止（不弹窗），自动更新器必须**先退壳再拉起安装包**；本批只保证交互式安装/卸载的"先关程序"语义
+
 ---
 
 ## 总体 Review — v1.3.1 实测与画像分档（2026-10-23 ~ 10-25）
@@ -505,7 +515,7 @@
 - [ ] **容器版 GPU 切 CPU 后合成报 400**（2026-10-25 用户报告）：切换后 `/api/adr/v1/health` 返回 200，但 `POST /api/adr/v1/tts` 返回 400 Bad Request。日志中的 onnxruntime `GPU device discovery failed: /sys/class/drm/card0/device/vendor` 是容器内无 DRM 节点导致的告警，大概率与 400 无关。根因未查：400 是请求校验层返回的，需要抓 response body 确认是哪个参数被拒（怀疑方向：设备切换后档案/权重绑定或 device 参数校验）
 - [ ] **用户机 import torch 即崩：WinError 1114 c10.dll DLL 初始化例程失败**（2026-11-01 截图报告，`seewo` 账户 = 希沃一体机特征）：`runtime\...\torch\__init__.py _load_dll_libraries` 加载 `torch\lib\c10.dll` 或其依赖失败，server 陷入 stream open → Traceback → closed 重启循环，桌面端只看到反复重启看不到原因。**已回访确认：CPU 包装在 Intel Xe 核显机**（排除 GPU 包/驱动假设）→ 根因锁定 **缺 VC++ 2015-2022 x64 redist**（精简教育系统；批次 71 已随包 redist 静默安装，重打包后装该机验证根治）。配套缺口：「修复和检查太弱」——启动失败应把 Python traceback 摘要透出到桌面壳弹窗而非静默重启循环（并入批次 73 更新客户端范畴）
 - [ ] **nltk_data 下载失败 → 英文合成挂**（2026-11-01 `server (1).log`，`gjgf` 账户机）：g2p-en 首次处理英文文本时触发 nltk 下载 `averaged_perceptron_tagger` + `cmudict`，无外网/被墙环境下载失败（WinError，非 WARNING），此后英文 G2P 直接抛错。修法方向（择一）：nltk_data 随包（~35MB，走 build_runtime 钉版）或首启 bootstrap 走 hf-mirror 缓存 + 失败降级提示
-- [ ] **kill_current taskkill 报 Access denied**（2026-11-01 `server (1).log`，3 次）：`taskkill /T /F` 对已退出进程的竞态（"已退出"仍算失败）+ 杀软/权限拦截场景无兜底，进程生命周期管理弱——与「卸载时不检查程序是否关闭」同族，并入批次 72 卸载体验（AppMutex + 进程检查 + 杀进程兜底）一并收口
+- [x] **kill_current taskkill 报 Access denied**（2026-11-01 `server (1).log`，3 次）：`taskkill /T /F` 对已退出进程的竞态（"已退出"仍算失败）+ 杀软/权限拦截场景无兜底，进程生命周期管理弱——**批次 72 已收口**：`KillOutcome` 三分类（退出码 128 = 已退出，不再记失败）+ 三端运行互斥体 `ADR-Studio-Running`（安装/卸载前检测程序是否在跑）
 
 **2026-11-01 新增需求（用户拍板，未排批次）**：
 

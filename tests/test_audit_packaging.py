@@ -156,3 +156,49 @@ def test_runtime_bins_path_injection(tmp_path, monkeypatch):
     # 幂等: 重复注入不叠加
     settings.ensure_runtime_bins_on_path()
     assert os.environ["PATH"].count(expected + os.pathsep) == 1
+
+
+# ===== 批次72: 卸载体验 (运行互斥体 + 清理清单 + 档案保留询问) =====
+
+INSTALLER_ISS = REPO / "scripts" / "installer" / "installer.iss"
+SHELL_MAIN = REPO / "adr" / "server" / "__main__.py"
+SHELL_RS = REPO / "desktop" / "src-tauri" / "src" / "lib.rs"
+
+APP_MUTEX = "ADR-Studio-Running"
+
+
+def test_app_mutex_name_consistent_across_three_sides():
+    """防漂移: 壳 (lib.rs) / 服务 (__main__.py) / 安装器 ([Setup] AppMutex)
+    三端名字必须逐字一致 — 跨语言无法编译期共享, 只能靠本断言锁死。
+    名字不一致 = 卸载器检测不到运行中的程序, "先关程序再卸载"直接失效。"""
+    assert APP_MUTEX in SHELL_RS.read_text(encoding="utf-8")
+    assert APP_MUTEX in SHELL_MAIN.read_text(encoding="utf-8")
+    iss = INSTALLER_ISS.read_text(encoding="utf-8")
+    assert f"AppMutex={APP_MUTEX}" in iss
+
+
+def test_installer_uninstall_delete_covers_regenerable_dirs():
+    """卸载清理: 运行期可再生成产物必须进 [UninstallDelete] (否则残留)。"""
+    iss = INSTALLER_ISS.read_text(encoding="utf-8")
+    head, _, tail = iss.partition("[Run]")
+    section = head.partition("[UninstallDelete]")[2]
+    assert section, "installer.iss 缺 [UninstallDelete] 段"
+    for rel in (r"runtime\data\tts_cache",
+                r"runtime\third_party\gpt_sovits\output",
+                r"runtime\third_party\gpt_sovits\logs",
+                r"runtime\third_party\gpt_sovits\TEMP"):
+        assert rel in section, f"[UninstallDelete] 缺 {rel}"
+
+
+def test_installer_asks_before_deleting_user_assets():
+    """卸载询问页: 用户资产 (声音档案/训练权重) 默认保留, 静默卸载不弹窗。"""
+    iss = INSTALLER_ISS.read_text(encoding="utf-8")
+    code = iss.partition("[Code]")[2]
+    assert "CurUninstallStepChanged" in code
+    assert "usUninstall" in code
+    # 静默卸载必须跳过询问 (无人可答, 默认保留)
+    assert "UninstallSilent" in code
+    assert "MB_DEFBUTTON2" in code, "默认按钮必须是「否」(保留)"
+    assert r"runtime\data\voices" in code
+    assert r"SoVITS_weights_v2" in code
+    assert r"GPT_weights_v2" in code

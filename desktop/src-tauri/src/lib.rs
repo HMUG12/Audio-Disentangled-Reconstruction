@@ -320,7 +320,38 @@ const RUN_VALUE: &str = "ADR Studio";
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// 批次72 (卸载体验): 运行标记互斥体名 — 与 installer.iss 的 [Setup] AppMutex /
+/// adr/server/__main__.py 三端**逐字一致** (tests/test_audit_packaging.py 防漂移)。
+/// 裸名 = 会话命名空间 (Local\), 与 per-user 安装语义匹配。安装器/卸载器启动时
+/// 检测到即提示"关闭程序后再继续", 治"卸载时不检查程序是否关闭"。
+#[cfg(windows)]
+const APP_MUTEX_NAME: &str = "ADR-Studio-Running";
+
+/// 创建运行标记互斥体 (批次72)。句柄故意不 CloseHandle: 随进程退出 (含被
+/// taskkill /F) 由 OS 回收释放。创建失败静默 — 不阻断壳启动, 只是安装器
+/// 少一道运行中拦截 (沙箱策略等极端环境)。
+#[cfg(windows)]
+fn create_app_mutex() {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn CreateMutexW(lpMutexAttributes: *const core::ffi::c_void,
+                        bInitialOwner: i32,
+                        lpName: *const u16) -> *mut core::ffi::c_void;
+    }
+    use std::os::windows::ffi::OsStrExt;
+    let name: Vec<u16> = std::ffi::OsStr::new(APP_MUTEX_NAME)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe {
+        CreateMutexW(std::ptr::null(), 0, name.as_ptr());
+    }
+}
+
 pub fn run() {
+    // 批次72: 尽早持锁 — 安装器/卸载器 (AppMutex) 据此提示先关闭程序
+    #[cfg(windows)]
+    create_app_mutex();
     tauri::Builder::default()
         .setup(|app| {
             app.manage(ServerState {
@@ -1313,16 +1344,18 @@ fn supervise(app: AppHandle, mode: String, mut child: Child, mut started: Instan
 fn kill_current(state: &State<ServerState>) {
     let pid = state.pid.swap(0, Ordering::Relaxed);
     if pid != 0 {
-        // 日志留痕 (批次40): 被杀 pid 与 taskkill 结果落服务日志, 排障可查
-        let ok = kill_tree(pid);
-        proc_log(
-            "kill",
-            &if ok {
-                format!("kill_current: taskkill /T /F pid={pid} 成功")
-            } else {
-                format!("kill_current: taskkill /T /F pid={pid} 失败 (Access denied / 已退出)")
-            },
-        );
+        // 日志留痕 (批次40): 被杀 pid 与 taskkill 结果落服务日志, 排障可查。
+        // 批次72: 三分类 — 杀成 / 已退出 (竞态, 目标已达成) / 失败 (Access denied 等)
+        let note = match kill_tree(pid) {
+            KillOutcome::Killed =>
+                format!("kill_current: taskkill /T /F pid={pid} 成功"),
+            KillOutcome::AlreadyGone =>
+                format!("kill_current: taskkill /T /F pid={pid} 进程已退出 (无需杀)"),
+            KillOutcome::Failed =>
+                format!("kill_current: taskkill /T /F pid={pid} 失败 (Access denied / 驱动挂死), \
+                         可能遗留孤儿, 下次启动由收编逻辑处理"),
+        };
+        proc_log("kill", &note);
         *state.base_url.lock().unwrap() = None;
         // 不变式 (批次37): pid 清零 → Stopped
         state.set_phase(Phase::Stopped);
@@ -1336,15 +1369,38 @@ fn shutdown_server(app: &AppHandle) {
     kill_current(&state);
 }
 
+/// taskkill 结果三分类 (批次72): 杀成 / 进程已退出 / 失败。
+enum KillOutcome {
+    Killed,
+    /// taskkill 退出码 128 = 进程不存在 — kill_current 的 swap→taskkill 窗口内
+    /// 进程自然退出 (探活失败自愈 / supervise 抢先收割) 的竞态, 目标已达成,
+    /// 不算失败 (此前与 Access denied 混记一条"失败"日志, 误导排障)。
+    AlreadyGone,
+    /// Access denied (驱动挂死/提权进程, 批次37 实测) 或其他非 0 退出码。
+    Failed,
+}
+
+/// taskkill 退出码 → 结果分类 (纯函数, 单测覆盖)。
+/// None (理论上 Windows taskkill 不出现) 保守归 Failed。
+fn classify_taskkill_code(code: Option<i32>) -> KillOutcome {
+    match code {
+        Some(0) => KillOutcome::Killed,
+        Some(128) => KillOutcome::AlreadyGone,
+        _ => KillOutcome::Failed,
+    }
+}
+
 /// Windows 下杀整棵进程树 (uvicorn/gradio 可能带子进程)。
-/// 返回 taskkill 是否成功 — 驱动挂死/提权进程会 Access denied (批次37 实测),
+/// 返回 taskkill 结果分类 — 驱动挂死/提权进程会 Access denied (批次37 实测),
 /// 收编方据此记日志, 不静默吞掉。
-fn kill_tree(pid: u32) -> bool {
+fn kill_tree(pid: u32) -> KillOutcome {
     let mut cmd = Command::new("taskkill");
     cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
-    cmd.output().map(|o| o.status.success()).unwrap_or(false)
+    cmd.output()
+        .map(|o| classify_taskkill_code(o.status.code()))
+        .unwrap_or(KillOutcome::Failed)
 }
 
 // ---------------------------------------------------------------------------
@@ -1368,12 +1424,17 @@ fn reap_orphans() {
         if !mine {
             continue;
         }
-        if kill_tree(pid) {
-            killed += 1;
-            reap_log(&format!("收编孤儿 pid={pid}: {cmdline}"));
-        } else {
-            // 驱动挂死 (CUDA 卡死) / admin 提权进程: 用户态杀不掉, 记日志放行
-            reap_log(&format!("收编失败 (taskkill Access denied) pid={pid}: {cmdline}"));
+        match kill_tree(pid) {
+            KillOutcome::Killed => {
+                killed += 1;
+                reap_log(&format!("收编孤儿 pid={pid}: {cmdline}"));
+            }
+            KillOutcome::AlreadyGone =>
+                // 批次72: 枚举→taskkill 窗口内自然退出, 目标已达成, 不算失败
+                reap_log(&format!("孤儿已自行退出 pid={pid}: {cmdline}")),
+            KillOutcome::Failed =>
+                // 驱动挂死 (CUDA 卡死) / admin 提权进程: 用户态杀不掉, 记日志放行
+                reap_log(&format!("收编失败 (taskkill Access denied) pid={pid}: {cmdline}")),
         }
     }
     if killed > 0 {
@@ -1569,6 +1630,8 @@ mod tests {
             device: Some(" cpu ".into()),    // 批次49 低配预设
             torch_threads: Some(4),
             compat_cpu: Some(true),          // 批次57 13/14 代兼容模式
+            // 批次62 声音安全字段 (默认开 = 不注入, 本用例不断言)
+            ..Default::default()
         };
         let m: std::collections::HashMap<String, String> = env_overrides(&c, false).into_iter().collect();
         assert_eq!(m.get("ADR_TTS_API_KEY").unwrap(), "k1,k2");
@@ -1653,5 +1716,22 @@ mod tests {
             autostart_cmd_value(std::path::Path::new("C:/Program Files/ADR/adr-desktop.exe")),
             r#""C:/Program Files/ADR/adr-desktop.exe""#
         );
+    }
+
+    /// 批次72: taskkill 退出码三分类 — 128 (进程不存在) 是竞态不是失败。
+    #[test]
+    fn taskkill_exit_code_classification() {
+        assert!(matches!(classify_taskkill_code(Some(0)), KillOutcome::Killed));
+        assert!(matches!(classify_taskkill_code(Some(128)), KillOutcome::AlreadyGone));
+        assert!(matches!(classify_taskkill_code(Some(1)), KillOutcome::Failed));
+        assert!(matches!(classify_taskkill_code(None), KillOutcome::Failed));
+    }
+
+    /// 批次72: 互斥体名单源常量 — 与 installer.iss AppMutex / __main__.py 一致
+    /// (跨语言无法编译期共享, 靠名字常量 + Python 侧防漂移测试双重锁定)。
+    #[cfg(windows)]
+    #[test]
+    fn app_mutex_name_matches_spec() {
+        assert_eq!(APP_MUTEX_NAME, "ADR-Studio-Running");
     }
 }

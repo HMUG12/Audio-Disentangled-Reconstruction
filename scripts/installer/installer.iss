@@ -64,6 +64,11 @@ UninstallDisplayIcon={app}\{#MyAppExe}
 ; setup.exe can exceed 2GB safely with Inno
 Compression=lzma2/max
 SolidCompression=no
+; 批次72 (卸载体验): 安装器与卸载器启动时检测该命名互斥体 — 壳
+; (lib.rs create_app_mutex) 与服务 (adr/server/__main__.py _hold_app_mutex)
+; 两端任一在跑即弹窗提示关闭, 治"卸载时不检查程序是否关闭"。
+; 三端名字逐字一致 (tests/test_audit_packaging.py 防漂移)。
+AppMutex=ADR-Studio-Running
 
 [Languages]
 Name: "chinesesimplified"; MessagesFile: "ChineseSimplified.isl"
@@ -85,6 +90,27 @@ Source: "{#RuntimeDir}\*"; DestDir: "{app}\runtime"; \
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; \
     Tasks: desktopicon
+
+[UninstallDelete]
+; 批次72 (卸载体验): 运行期生成的**可再生成**产物无条件清 (Inno 默认只删
+; 安装清单文件, 这些目录会残留 = "卸载不干净"主因之一)。用户资产
+; (声音档案/训练权重) 不在此段 — 走 [Code] 询问页, 默认保留。
+; TTS 结果缓存 (settings.tts_cache_dir = REPO_ROOT/data/tts_cache)
+Type: filesandordirs; Name: "{app}\runtime\data\tts_cache"
+; GSV 训练中间产物 (gsv_finetune.py: 切片/asr/list/bind_ref, 可再生成)
+Type: filesandordirs; Name: "{app}\runtime\third_party\gpt_sovits\output"
+; GSV 训练日志 (tensorboard/配置, 排障用, 卸载后无意义)
+Type: filesandordirs; Name: "{app}\runtime\third_party\gpt_sovits\logs"
+; GSV resume 合并临时文件 (gsv_finetune.py TEMP/resume_init_*.pth)
+Type: filesandordirs; Name: "{app}\runtime\third_party\gpt_sovits\TEMP"
+; 用户数据被用户选择删除后 (见 [Code] CurUninstallStepChanged), 这些目录
+; 会变成空壳 — 补 dirifempty 收尾, 否则 {app}\runtime 整体残留 (dirifempty
+; 仅在目录为空时删除, 用户选择保留时无副作用)。
+Type: dirifempty; Name: "{app}\runtime\data"
+Type: dirifempty; Name: "{app}\runtime\third_party\gpt_sovits\SoVITS_weights_v2"
+Type: dirifempty; Name: "{app}\runtime\third_party\gpt_sovits\GPT_weights_v2"
+Type: dirifempty; Name: "{app}\runtime\third_party\rvc\assets\weights"
+Type: dirifempty; Name: "{app}\runtime\third_party\rvc\logs"
 
 [Run]
 ; 批次71: VC++ 2015-2022 x64 静默安装 (PBS Python 的 CRT 依赖, 缺它精简
@@ -124,5 +150,84 @@ begin
       ShellExec('open', 'https://developer.microsoft.com/microsoft-edge/webview2/',
                 '', '', SW_SHOWNORMAL, ewNoWait, R);
     Result := False;
+  end;
+end;
+
+// ---------------------------------------------------------------------------
+// 批次72 (卸载体验): 卸载询问页 — 用户资产默认保留
+// ---------------------------------------------------------------------------
+// 背景: Inno 默认只删安装清单里的文件, 运行期生成的用户数据留在 {app} 内
+// → 既"卸不干净"也"重装得备份"。这里只问**真正的用户数据**:
+//   - 声音档案 (data/voices: ref.wav + meta.json, 手录音 + 手工填的词)
+//   - 训练权重 (GSV SoVITS/GPT 微调产物) 与 RVC 转换模型/检索索引
+// 可再生成产物 (tts_cache / output / logs / TEMP) 已在 [UninstallDelete]
+// 无条件清理, 不在此询问。静默卸载 (/SILENT 等) 一律按默认保留, 不弹窗。
+
+// 目录存在且非空 ('.' '..' 不算内容)
+function DirHasContent(const Dir: String): Boolean;
+var
+  FindRec: TFindRec;
+begin
+  Result := False;
+  if not DirExists(Dir) then
+    Exit;
+  if FindFirst(AddBackslash(Dir) + '*', FindRec) then
+  begin
+    try
+      repeat
+        if (FindRec.Name <> '.') and (FindRec.Name <> '..') then
+          Result := True;
+      until Result or (not FindNext(FindRec));
+    finally
+      FindClose(FindRec);
+    end;
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  VoicesDir, VitsDir, GptDir, RvcWeights, RvcLogs: String;
+  HasVoices, HasWeights: Boolean;
+  Msg: String;
+begin
+  if CurUninstallStep <> usUninstall then
+    Exit;
+  // 静默卸载: 无人可答 → 按默认 (保留) 走, 绝不擅自删用户数据
+  if UninstallSilent then
+    Exit;
+
+  VoicesDir  := ExpandConstant('{app}\runtime\data\voices');
+  VitsDir    := ExpandConstant('{app}\runtime\third_party\gpt_sovits\SoVITS_weights_v2');
+  GptDir     := ExpandConstant('{app}\runtime\third_party\gpt_sovits\GPT_weights_v2');
+  RvcWeights := ExpandConstant('{app}\runtime\third_party\rvc\assets\weights');
+  RvcLogs    := ExpandConstant('{app}\runtime\third_party\rvc\logs');
+
+  HasVoices  := DirHasContent(VoicesDir);
+  HasWeights := DirHasContent(VitsDir) or DirHasContent(GptDir) or
+                DirHasContent(RvcWeights) or DirHasContent(RvcLogs);
+  if not (HasVoices or HasWeights) then
+    Exit;
+
+  Msg := '检测到你的用户数据：' #13#10#13#10;
+  if HasVoices then
+    Msg := Msg + '  · 声音档案（参考音频、档案配置）' #13#10;
+  if HasWeights then
+    Msg := Msg + '  · 训练权重 / RVC 转换模型' #13#10;
+  Msg := Msg + #13#10 +
+         '是否在卸载时一并删除？' #13#10 +
+         '默认保留（推荐）：重装后可直接继续使用。' #13#10 +
+         '选择「是」将永久删除，无法恢复。';
+
+  if MsgBox(Msg, mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
+  begin
+    if HasVoices then
+      DelTree(VoicesDir, True, True, True);
+    if HasWeights then
+    begin
+      DelTree(VitsDir, True, True, True);
+      DelTree(GptDir, True, True, True);
+      DelTree(RvcWeights, True, True, True);
+      DelTree(RvcLogs, True, True, True);
+    end;
   end;
 end;
