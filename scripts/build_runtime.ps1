@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 # =====================================================================
 # ADR portable runtime builder (batch 44; batch 52 dual-variant)
 #
@@ -7,6 +7,14 @@
 #                         + torch stack + pinned deps
 #   adr\                  adr package source (PYTHONPATH-friendly flat copy)
 #   third_party\gpt_sovits\  GSV source tree
+#   scripts\              训练脚本随包 (批次71, 复盘§一: console.py/webui 以
+#                         子进程调 REPO/scripts/*.py, v1.0.1/v1.3.1 双包漏拷
+#                         → 用户点训练即 500「缺少训练脚本」)
+#   bin\                  ffmpeg.exe + ffprobe.exe (gyan 8.1.2, 批次71 依赖
+#                         自包含; 启动时 settings.ensure_runtime_bins_on_path
+#                         把本目录注入 PATH — GSV 训练切片裸调 "ffmpeg")
+#   redist\               VC++ 2015-2022 x64 (批次71: PBS Python 的 CRT 依赖,
+#                         installer.iss [Run] 静默安装)
 #
 # Variants (双包拍板, docs/m10-plan.md G 节):
 #   CPU (default): torch 2.10.0 from PyPI (Windows PyPI wheels are CPU builds)
@@ -40,10 +48,10 @@ function Step([string]$msg) {
     Write-Host ("================ {0} ================" -f $msg) -ForegroundColor Yellow
 }
 
-Step "0/6 prepare directories"
+Step "0/7 prepare directories"
 New-Item -ItemType Directory -Force -Path $OutDir, $DlDir, $PipCache | Out-Null
 
-Step "1/6 fetch python-build-standalone (CPython 3.13 win64)"
+Step "1/7 fetch python-build-standalone (CPython 3.13 win64)"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 # 批次69 (Q1): 钉死发布标签 + 资产名 + SHA256。原先查 releases/latest 每次
 # 解析结果都可能不同 (构建不可复现), 且 GitHub 匿名 API 限流 60/h 会让构建
@@ -88,7 +96,7 @@ $env:PYTHONNOUSERSITE = "1"
 $env:PIP_DISABLE_PIP_VERSION_CHECK = "1"
 $env:PIP_NO_WARN_SCRIPT_LOCATION = "1"
 
-Step "2/6 bootstrap pip"
+Step "2/7 bootstrap pip"
 $prevEap = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
 & $py -m pip --version 2>$null | Out-Null
@@ -102,7 +110,7 @@ if (-not $hasPip) {
     Log "pip present"
 }
 
-Step "3/6 write pinned requirements"
+Step "3/7 write pinned requirements"
 $requirements = @"
 numpy==2.4.3
 PyYAML==6.0.3
@@ -171,7 +179,7 @@ foreach ($pin in "pyopenjtalk==", "jamo==", "ToJyutping==", "ko_pron==") {
 }
 Log ("requirements written: {0}" -f $ReqFile)
 
-Step "4/6 pip install (this downloads ~1 GB, progress bars below)"
+Step "4/7 pip install (this downloads ~1 GB, progress bars below)"
 # 4a. torch 栈先行: 后续 requirements 中的 pytorch-lightning 等看到已装即满足
 if ($AllowCuda) {
     Log "GPU variant: torch/torchaudio 2.10.0+cu130 from download.pytorch.org (~2.5 GB)"
@@ -189,13 +197,19 @@ if ($AllowCuda) {
 & $py -m pip install --prefer-binary --cache-dir $PipCache --no-warn-script-location -r $ReqFile
 if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
 
-Step "5/6 copy adr + GSV sources (excluding models / artifacts / caches)"
+Step "5/7 copy adr + scripts + GSV sources (excluding models / artifacts / caches)"
 robocopy (Join-Path $RepoRoot "adr") (Join-Path $OutDir "adr") /E /NFL /NDL /NJH /NJS /NP /XD __pycache__ /XF *.pyc | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy adr failed ($LASTEXITCODE)" }
 # 训练 preset yaml 必须随包: adr.core.config 按 REPO/configs/*.yaml 加载,
 # 缺失会静默回落内置默认值 (安装机上 doctor 报 preset yaml 缺失, v1.0.1 前实装)
 robocopy (Join-Path $RepoRoot "configs") (Join-Path $OutDir "configs") /E /NFL /NDL /NJH /NJS /NP /XF *.pyc | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy configs failed ($LASTEXITCODE)" }
+# 训练脚本必须随包 (批次71, 复盘§一: v1.0.1/v1.3.1 双包漏拷 scripts/,
+# console.py:386 / webui 以子进程调 REPO/scripts/gsv_finetune.py —
+# 缺失即用户点训练 500「缺少训练脚本」, check_runtime 第 8 项防复发)。
+# 构建脚本 (build_*.ps1 等) 一并随包: 体积可忽略, 排障时可用。
+robocopy (Join-Path $RepoRoot "scripts") (Join-Path $OutDir "scripts") /E /NFL /NDL /NJH /NJS /NP /XD __pycache__ /XF *.pyc | Out-Null
+if ($LASTEXITCODE -ge 8) { throw "robocopy scripts failed ($LASTEXITCODE)" }
 $gsvSrc = Join-Path $RepoRoot "third_party\gpt_sovits"
 $gsvDst = Join-Path $OutDir "third_party\gpt_sovits"
 robocopy $gsvSrc $gsvDst /E /NFL /NDL /NJH /NJS /NP `
@@ -206,7 +220,74 @@ robocopy $gsvSrc $gsvDst /E /NFL /NDL /NJH /NJS /NP `
 if ($LASTEXITCODE -ge 8) { throw "robocopy gpt_sovits failed ($LASTEXITCODE)" }
 Log "sources copied"
 
-Step "6/6 smoke test"
+Step "6/7 fetch bundled ffmpeg + VC++ redist (批次71 依赖自包含)"
+# 2026-11-01 会议拍板 (依赖自包含): 精简系统缺 ffmpeg / VC++ CRT 时装完即坏。
+#   ffmpeg → bin\ffmpeg.exe + ffprobe.exe (GSV 训练切片 my_utils.py 与 uvr5
+#             裸调 "ffmpeg" 只认 PATH; settings.ensure_runtime_bins_on_path
+#             在 server 启动时把 runtime\bin 注入 PATH)
+#   redist  → redist\vc_redist.x64.exe (PBS Python 的 CRT 依赖, 精简系统
+#             缺它 python.exe 直接起不来; installer.iss [Run] 静默安装,
+#             已装则微软安装器自行秒过)
+# 钉版直链 + SHA256 (与 Step1 PBS 同口径, 缓存命中同样校验):
+#   - ffmpeg: gyan.dev 8.1.2 essentials (两个 exe 各 ~97MB, 闭审计附录 A-1)
+#   - VC redist: 微软 download 直链, URL 路径内嵌 SHA256 (aka.ms/vs/17 是
+#     滚动指针, 每次解析都可能换文件 — 不可钉; 此直链长期有效)
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$FfVer    = "8.1.2"
+$FfZip    = "ffmpeg-$FfVer-essentials_build.zip"
+$FfUrl    = "https://www.gyan.dev/ffmpeg/builds/packages/$FfZip"
+$FfSha256 = "DB580001CAA24AC104C8CB856CD113A87B0A443F7BDF47D8C12B1D740584A2EC"
+$VcUrl    = "https://download.visualstudio.microsoft.com/download/pr/990c720a-46ce-4dc7-87b9-c2eb615d34b9/CC0FF0EB1DC3F5188AE6300FAEF32BF5BEEBA4BDD6E8E445A9184072096B713B/VC_redist.x64.exe"
+$VcSha256 = "CC0FF0EB1DC3F5188AE6300FAEF32BF5BEEBA4BDD6E8E445A9184072096B713B"
+
+function Get-VerifiedFile([string]$Url, [string]$OutFile, [string]$Sha256) {
+    # 缓存命中即校验哈希, 损坏/换文件重下 (与 Step1 PBS 逻辑同口径)
+    $need = $true
+    if (Test-Path $OutFile) {
+        if ((Get-FileHash $OutFile -Algorithm SHA256).Hash -eq $Sha256) {
+            Log ("cached+verified: {0} — skip download" -f (Split-Path -Leaf $OutFile))
+            $need = $false
+        } else {
+            Log ("cache SHA256 mismatch ({0}) — re-download" -f (Split-Path -Leaf $OutFile))
+            Remove-Item -Force $OutFile
+        }
+    }
+    if ($need) {
+        Log ("downloading {0} ..." -f (Split-Path -Leaf $OutFile))
+        Invoke-WebRequest -Uri $Url -OutFile $OutFile
+        $h = (Get-FileHash $OutFile -Algorithm SHA256).Hash
+        if ($h -ne $Sha256) {
+            throw "SHA256 mismatch for $(Split-Path -Leaf $OutFile): $h (expected $Sha256)"
+        }
+        Log "download verified (SHA256 ok)"
+    }
+}
+$FfZipPath = Join-Path $DlDir $FfZip
+$VcPath    = Join-Path $DlDir "vc_redist.x64.exe"
+Get-VerifiedFile $FfUrl $FfZipPath $FfSha256
+Get-VerifiedFile $VcUrl $VcPath $VcSha256
+
+# ffmpeg: 只抽取 bin\ffmpeg.exe + ffprobe.exe (zip 内其余载荷不随包)
+$binDir = Join-Path $OutDir "bin"
+New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$zip = [System.IO.Compression.ZipFile]::OpenRead($FfZipPath)
+try {
+    foreach ($exe in @("ffmpeg.exe", "ffprobe.exe")) {
+        $entry = $zip.Entries | Where-Object { $_.Name -eq $exe } | Select-Object -First 1
+        if (-not $entry) { throw "ffmpeg zip missing entry: $exe" }
+        [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, (Join-Path $binDir $exe), $true)
+        Log ("extracted: bin\{0} ({1:N0} MB)" -f $exe, ($entry.Length / 1MB))
+    }
+} finally { $zip.Dispose() }
+
+# VC redist: 整文件落 redist\ (installer.iss [Run] 从这里静默安装)
+$redistDir = Join-Path $OutDir "redist"
+New-Item -ItemType Directory -Force -Path $redistDir | Out-Null
+Copy-Item $VcPath (Join-Path $redistDir "vc_redist.x64.exe") -Force
+Log "redist staged: redist\vc_redist.x64.exe"
+
+Step "7/7 smoke test"
 Push-Location $OutDir
 try {
     $env:PYTHONPATH = $OutDir

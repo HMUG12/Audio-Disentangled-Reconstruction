@@ -33,6 +33,30 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _log = logging.getLogger("adr.settings")
 
+
+def ensure_runtime_bins_on_path() -> None:
+    """批次71 (依赖自包含): 把 ``REPO_ROOT/bin`` 前置进 PATH。
+
+    安装环境 REPO_ROOT = runtime 根, bin\\ 随包带 ffmpeg.exe / ffprobe.exe
+    (build_runtime.ps1 Step6)。GSV 训练切片 (tools/my_utils.py) 与 uvr5 裸调
+    ``"ffmpeg"`` 只认 PATH; audio_codec / doctor / console._probe_audio 也经
+    shutil.which 定位 — 不注入则随包 ffmpeg 对所有调用点不可见。
+
+    幂等 (PATH 精确条目比对); 开发/容器环境无 bin\\ 时 no-op。
+    """
+    b = REPO_ROOT / "bin"
+    if not b.is_dir():
+        return
+    bs = str(b)
+    parts = os.environ.get("PATH", "").split(os.pathsep)
+    if bs not in parts:
+        os.environ["PATH"] = bs + os.pathsep + os.pathsep.join(parts)
+
+
+# 模块级执行: server / webui / doctor 等所有入口最终都 import 本模块,
+# 收口在这里才能覆盖全部启动路径 (python -m adr.server、server.bat、壳拉起)
+ensure_runtime_bins_on_path()
+
 # ===== 默认值 (原散布点的字面常量, 就地收编) =====
 DEFAULT_TTS_CACHE_MAX_ENTRIES = 32
 DEFAULT_TTS_CACHE_MAX_BYTES = 256 * 1024 * 1024
