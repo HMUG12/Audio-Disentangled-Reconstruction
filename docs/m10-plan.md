@@ -503,6 +503,14 @@
 ## 待修问题（有空再修）
 
 - [ ] **容器版 GPU 切 CPU 后合成报 400**（2026-10-25 用户报告）：切换后 `/api/adr/v1/health` 返回 200，但 `POST /api/adr/v1/tts` 返回 400 Bad Request。日志中的 onnxruntime `GPU device discovery failed: /sys/class/drm/card0/device/vendor` 是容器内无 DRM 节点导致的告警，大概率与 400 无关。根因未查：400 是请求校验层返回的，需要抓 response body 确认是哪个参数被拒（怀疑方向：设备切换后档案/权重绑定或 device 参数校验）
+- [ ] **用户机 import torch 即崩：WinError 1114 c10.dll DLL 初始化例程失败**（2026-11-01 截图报告，`seewo` 账户 = 希沃一体机特征）：`runtime\...\torch\__init__.py _load_dll_libraries` 加载 `torch\lib\c10.dll` 或其依赖失败，server 陷入 stream open → Traceback → closed 重启循环，桌面端只看到反复重启看不到原因。**已回访确认：CPU 包装在 Intel Xe 核显机**（排除 GPU 包/驱动假设）→ 根因锁定 **缺 VC++ 2015-2022 x64 redist**（精简教育系统；批次 71 已随包 redist 静默安装，重打包后装该机验证根治）。配套缺口：「修复和检查太弱」——启动失败应把 Python traceback 摘要透出到桌面壳弹窗而非静默重启循环（并入批次 73 更新客户端范畴）
+- [ ] **nltk_data 下载失败 → 英文合成挂**（2026-11-01 `server (1).log`，`gjgf` 账户机）：g2p-en 首次处理英文文本时触发 nltk 下载 `averaged_perceptron_tagger` + `cmudict`，无外网/被墙环境下载失败（WinError，非 WARNING），此后英文 G2P 直接抛错。修法方向（择一）：nltk_data 随包（~35MB，走 build_runtime 钉版）或首启 bootstrap 走 hf-mirror 缓存 + 失败降级提示
+- [ ] **kill_current taskkill 报 Access denied**（2026-11-01 `server (1).log`，3 次）：`taskkill /T /F` 对已退出进程的竞态（"已退出"仍算失败）+ 杀软/权限拦截场景无兜底，进程生命周期管理弱——与「卸载时不检查程序是否关闭」同族，并入批次 72 卸载体验（AppMutex + 进程检查 + 杀进程兜底）一并收口
+
+**2026-11-01 新增需求（用户拍板，未排批次）**：
+
+- [ ] **新手控制台增加音色模型导入/导出**：打包档案+权重为单一音色包文件，方便新手备份/迁移/分享（新手控制台向）
+- [ ] **稳定性与自检自修复能力加强**（用户定调「软件稳定性还要加强，修复和检查太弱」）：方向含 doctor 启动环境预检覆盖面（VC redist/ffmpeg/GPU 适配/磁盘/依赖完整性）、启动失败原因透出 UI、错误上报与一键修复引导
 
 ## 原则
 
