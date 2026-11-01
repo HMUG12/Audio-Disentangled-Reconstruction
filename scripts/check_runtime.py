@@ -18,6 +18,8 @@ runtime 1.78GB。本脚本固化排除规则, 防止垃圾再混入。
    安装机 preset 全部静默回落内置默认值, 日志报 default.yaml 缺失)
 7. 多语言 G2P 包必须随包 (批次53: pyopenjtalk/jamo/ToJyutping/ko_pron —
    日/韩/粤合成的 import 链, 缺失则 text_lang=ja/ko/yue 请求 400)
+8. scripts/ 训练脚本必须随包 (v1.0.1 缺口: build_runtime.ps1 未拷 scripts/,
+   安装版点 "训练/声音克隆" 直接 500 "缺少训练脚本: <runtime>/scripts/gsv_finetune.py")
 
 用法:
   python scripts/check_runtime.py                 # 默认 build/runtime, CPU 包
@@ -137,6 +139,17 @@ def main() -> int:
         if probe.returncode != 0:
             fails.append(f"多语言 G2P 包缺失 (ja/ko/yue 合成将 400): "
                          f"{probe.stderr.strip().splitlines()[-1] if probe.stderr.strip() else probe.returncode}")
+
+    # 8) 训练/门禁脚本必须随包 (运行时按 REPO/scripts/*.py 以子进程拉起:
+    #    console.py train_start → gsv_finetune.py + train_gate.py, 缺失即 500
+    #    "缺少训练脚本" — v1.0.1/v1.2.0 安装机实锤的打包缺口)
+    script_dir = rt / "scripts"
+    if not (script_dir / "gsv_finetune.py").is_file():
+        fails.append("打包缺 scripts/gsv_finetune.py "
+                     "(安装版训练直接 500, v1.0.1 缺口)")
+    if not (script_dir / "train_gate.py").is_file():
+        fails.append("打包缺 scripts/train_gate.py "
+                     "(训练质量门禁无法启动, v1.0.1 缺口)")
 
     for w in warns:
         print(f"[WARN] {w}")
