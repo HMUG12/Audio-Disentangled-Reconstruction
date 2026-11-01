@@ -24,7 +24,17 @@
 #ifndef RUNTIME_DIR_NAME
 #define RUNTIME_DIR_NAME "runtime-cpu"
 #endif
+; 载荷根: 优先取 build_installer.ps1 传入的归一化绝对路径。
+; 相对路径 "..\..\build\..." 在 ISCC 打开源文件时不被折叠, 字面多带
+; "scripts\installer\..\..\" (24 字符) 会放大 MAX_PATH 溢出 → ISCC 报
+; "系统找不到指定的路径" (v1.0.1 实测: 归一化前缀 93, 未归一化 117;
+; 12 个文件按未归一化超 258, 最长 269, 按归一化最长仅 245)。
+; 无 /D 时仍回落到原来的相对路径 (手工直跑 ISCC 的兜底)。
+#ifdef RUNTIME_DIR_ABS
+#define RuntimeDir RUNTIME_DIR_ABS
+#else
 #define RuntimeDir "..\..\build\" + RUNTIME_DIR_NAME
+#endif
 
 ; GPU 变体: ISCC /DGPU_BUILD → 文件名带 -gpu 后缀 (runtime 内容由
 ; build_runtime.ps1 -AllowCuda 产出, 本脚本只负责命名区分)
