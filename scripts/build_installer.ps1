@@ -30,6 +30,24 @@ Write-Host "[build_installer] runtime check: $py $checkArgs" -ForegroundColor Cy
 & $py @checkArgs
 if ($LASTEXITCODE -ne 0) { throw "check_runtime failed - 修复 runtime 后再打包" }
 
+# MAX_PATH 预检: ISCC 用源文件的完整路径去 open, >260 就报 "系统找不到指定的路径"
+# 这种报错完全看不出是路径问题 (v1.0.1 踩过), 所以提前用可读中文拦下。
+# 阈值 250 留 10 字符余量给 ISCC 内部临时后缀。
+$rtDir = Join-Path $root "build\$rtDirName"
+$tooLong = @()
+try {
+  $tooLong = @(Get-ChildItem -LiteralPath $rtDir -Recurse -File -Force -ErrorAction Stop |
+               Where-Object { $_.FullName.Length -gt 250 })
+} catch {
+  throw "runtime 路径扫描失败 (目录内可能已有超长路径): $($_.Exception.Message)"
+}
+if ($tooLong.Count -gt 0) {
+  $mx = ($tooLong | ForEach-Object { $_.FullName.Length } | Measure-Object -Maximum).Maximum
+  throw ("runtime 有 {0} 个文件全路径超过 250 字符 (最长 {1}), ISCC 压缩阶段会报 " -f $tooLong.Count, $mx) +
+        "'系统找不到指定的路径' 而中止。请把构建根目录换到更短的路径 (如 C:\adr) 后重试。`n" +
+        ("最长示例: {0}" -f $tooLong[0].FullName)
+}
+
 Push-Location (Join-Path $root "desktop\src-tauri")
 try {
   $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
@@ -42,6 +60,11 @@ $isccArgs = @()
 if ($Gpu) {
   $isccArgs += "/DGPU_BUILD", "/DRUNTIME_DIR_NAME=runtime-gpu"
 }
+# 传归一化绝对路径给 installer.iss 的 RUNTIME_DIR_ABS: 相对路径 "..\..\build\..."
+# 不会被 ISCC 折叠, 字面多 24 字符会把 MAX_PATH 顶穿 (见 installer.iss 处注释)。
+$rtAbs = (Resolve-Path -LiteralPath (Join-Path $root "build\$rtDirName")).Path
+Write-Host "[build_installer] runtime payload: $rtAbs" -ForegroundColor Cyan
+$isccArgs += "/DRUNTIME_DIR_ABS=$rtAbs"
 $isccArgs += (Join-Path $PSScriptRoot "installer\installer.iss")
 & $iscc @isccArgs
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
