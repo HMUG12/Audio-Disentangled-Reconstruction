@@ -1,3 +1,8 @@
+## 整机 freeze (`pip freeze`) — 仅本机参考, 不是可复现基线 (批次70, 审计 D4)
+## 含本机路径依赖 (`fairseq @ file:///E:/rvc/...`) 与来源不明的包
+## (`## !! Could not determine repository location`), 在干净机器上不可安装。
+## 可复现环境请用 scripts/build_runtime.ps1 的钉版清单 (Windows) 或
+## docker/requirements-linux.txt (Linux 容器)。
 absl-py==2.5.0
 accelerate==1.12.0
 ## !! Could not determine repository location

@@ -2,6 +2,7 @@
 
 FakeEngine 不加载真模型; 档案库 / 缓存目录全部 tmp_path 隔离。
 """
+import asyncio
 import json
 import logging
 
@@ -426,3 +427,54 @@ def test_openai_unknown_profile_keeps_error(client, voice_dir):
         "model": "typo-voice", "input": "hi", "response_format": "wav"})
     assert r.status_code == 400
     assert "error" in r.json()
+
+
+# ─── 批次70: OpenAI 官方 SDK 端到端 (不再只手搓 HTTP 请求体) ───
+
+def _sdk_call(app, call):
+    """用 openai 官方 SDK 打 ASGI 应用 (不占端口), 返回 call(sdk) 的结果。"""
+    openai = pytest.importorskip("openai")
+    httpx = pytest.importorskip("httpx")
+
+    async def run():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport,
+                                     base_url="http://test") as hc:
+            async with openai.AsyncOpenAI(api_key="sk-test",
+                                          base_url="http://test/v1",
+                                          http_client=hc) as sdk:
+                return await call(sdk)
+
+    return asyncio.run(run())
+
+
+def test_openai_sdk_non_streaming_default(client, engine, voice_dir):
+    """官方 SDK 默认参数 (model=tts-1 / voice=alloy / 不传 stream):
+    回退默认档案 + 整段 WAV (非流式)。"""
+    client.app.state.default_profile = "demo"
+
+    async def call(sdk):
+        return await sdk.audio.speech.create(
+            model="tts-1", voice="alloy", input="hi", response_format="wav")
+
+    resp = _sdk_call(client.app, call)
+    audio = resp.content
+    assert audio[:4] == b"RIFF"
+    # 完整 WAV: data 段长度 == 总长 - 8 字节头 (流式则是首块 + 裸 PCM)
+    assert int.from_bytes(audio[4:8], "little") == len(audio) - 8
+    assert engine.synth_calls == 1
+
+
+def test_openai_sdk_error_shell(client, voice_dir):
+    """标准 SDK 的 BadRequestError 外壳: 错误体可被官方异常正常解析。"""
+    openai = pytest.importorskip("openai")
+    client.app.state.default_profile = "demo"
+
+    async def call(sdk):
+        return await sdk.audio.speech.create(
+            model="tts-1", voice="alloy", input="hi",
+            response_format="wav", speed=0)
+
+    with pytest.raises(openai.BadRequestError) as ei:
+        _sdk_call(client.app, call)
+    assert "speed_factor out of range" in str(ei.value)

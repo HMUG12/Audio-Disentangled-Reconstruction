@@ -18,8 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
-import os
 from io import BytesIO
 from pathlib import Path
 from typing import Union
@@ -37,6 +35,7 @@ from adr.core.exceptions import (
 from adr.models.gsv_engine import handle_cuda_oom, is_cuda_oom
 from adr.server import tts_cache
 from adr.server.audio_codec import pack_audio, to_int16
+from adr.server.param_norm import env_num, normalize_params
 from adr.services import SynthesisService
 
 logger = logging.getLogger(__name__)
@@ -114,64 +113,20 @@ def _resolve_profile(request: Request, req: dict):
     return None
 
 
-def _env_num(name: str, default, cast=int):
-    """批次66: 资源上限 env 读取; 非法/非正值回落默认 (正常使用碰不到的宽松值)。"""
-    try:
-        v = cast(os.environ.get(name, default))
-    except ValueError:
-        return default
-    return v if v > 0 and math.isfinite(v) else default
-
-
 def max_text_chars() -> int:
     """ADR_TTS_MAX_TEXT_CHARS — 单次合成文本字数上限 (批次66, 默认 20000; v3 WS 共用)。"""
-    return _env_num("ADR_TTS_MAX_TEXT_CHARS", 20000)
+    return env_num("ADR_TTS_MAX_TEXT_CHARS", 20000)
 
 
 def max_queue() -> int:
     """ADR_TTS_MAX_QUEUE — 引擎排队数上限, 超出回 503 busy (批次66, 默认 32; v3 WS 共用)。"""
-    return _env_num("ADR_TTS_MAX_QUEUE", 32)
+    return env_num("ADR_TTS_MAX_QUEUE", 32)
 
 
 def engine_busy(engine) -> bool:
     """批次66: 软准入 — 引擎排队数达上限即拒绝 (测试假引擎无 queue_depth 视为不忙)。"""
     qd = getattr(engine, "queue_depth", None)
     return callable(qd) and qd() >= max_queue()
-
-
-# 批次69: 入口语言白名单 (GSV v2_languages; 合批层不再依赖 assert)。
-# 与 third_party/gpt_sovits TTS.py v2_languages 对齐, v1 模型为其子集。
-SUPPORTED_LANGS = frozenset({
-    "auto", "auto_yue", "en", "zh", "ja", "yue", "ko",
-    "all_zh", "all_ja", "all_yue", "all_ko",
-})
-
-
-# 批次66: 数值参数合法闭区间 (None = 未传不校验; speed 区间可 env 调)
-_FIXED_BOUNDS = {
-    "top_k": (1, 1000),
-    "top_p": (0.0, 1.0),
-    "temperature": (0.0, 10.0),
-    "fragment_interval": (0.0, 10.0),
-}
-
-
-def _bad_number(req: dict):
-    """返回第一个越界/非数值参数的错误文案, 全部合法返回 None。"""
-    bounds = dict(_FIXED_BOUNDS, speed_factor=(
-        _env_num("ADR_TTS_SPEED_MIN", 0.1, float),
-        _env_num("ADR_TTS_SPEED_MAX", 10.0, float)))
-    for key, (lo, hi) in bounds.items():
-        v = req.get(key)
-        if v is None:
-            continue
-        try:
-            ok = lo <= float(v) <= hi   # NaN 比较恒 False → 拒绝
-        except (TypeError, ValueError):
-            ok = False
-        if not ok:
-            return f"{key} out of range: {v!r}, must be within [{lo}, {hi}]"
-    return None
 
 
 def _check_ref_audio(path: str):
@@ -185,7 +140,7 @@ def _check_ref_audio(path: str):
             return None
         if not p.is_file():
             return f"ref_audio_path is not a regular file: {path}"
-        cap_mb = _env_num("ADR_TTS_REF_MAX_MB", 100)
+        cap_mb = env_num("ADR_TTS_REF_MAX_MB", 100)
         if p.stat().st_size > cap_mb * 1024 * 1024:
             return f"ref_audio_path exceeds {cap_mb}MB limit: {path}"
     except (OSError, ValueError) as e:
@@ -197,6 +152,8 @@ def _check_params(req: dict):
     """必填项 + media_type 白名单 (批次34 收口至 SynthesisService)。
 
     批次66: 追加文本长度上限 (413) 与数值参数区间校验 (400)。
+    批次70 (D5): 数值/语言归一收敛到 param_norm.normalize_params — 与 v3
+    overrides 同一条路径, 不再各写一套。
     返回错误 Response 或 None。
     """
     try:
@@ -212,19 +169,14 @@ def _check_params(req: dict):
             content={"message": f"text too long: {len(req['text'])} chars, "
                                 f"limit {cap} (ADR_TTS_MAX_TEXT_CHARS)",
                      "code": "payload_too_large"})
-    msg = _bad_number(req)
+    norm, msg = normalize_params({
+        k: req.get(k) for k in (
+            "top_k", "top_p", "temperature", "speed_factor",
+            "fragment_interval", "text_lang", "prompt_lang")})
     if msg:
         return JSONResponse(status_code=400,
                             content={"message": msg, "code": "invalid_params"})
-    # 批次69: 语言在入口收敛 (此前非法值穿到合批层 assert, 同组请求连坐)
-    for key in ("text_lang", "prompt_lang"):
-        v = req.get(key)
-        if v is not None and str(v).lower() not in SUPPORTED_LANGS:
-            return JSONResponse(
-                status_code=400,
-                content={"message": f"{key} unsupported: {v!r}, "
-                                    f"must be one of {sorted(SUPPORTED_LANGS)}",
-                         "code": "invalid_params"})
+    req.update(norm)   # 归一结果回写 (语言小写 / 数值类型), 后续分支直接用
     return None
 
 

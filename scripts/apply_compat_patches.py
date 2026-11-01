@@ -2,7 +2,8 @@
 
 新机器复装流程:
     1. clone 三个 third_party 仓库 (见各 scripts/*_train.py 头部注释)
-    2. pip install -r requirements-lock.txt
+    2. pip install -r requirements-freeze-dev.txt (整机 freeze, 仅本机参考;
+       可复现基线走 scripts/build_runtime.ps1 的钉版清单)
     3. python scripts/apply_compat_patches.py
     4. 下载各引擎权重 (scripts 目录下的下载逻辑 / hf-mirror)
 

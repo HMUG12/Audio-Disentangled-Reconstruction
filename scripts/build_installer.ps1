@@ -1,4 +1,4 @@
-﻿﻿# Batch 44: build the ADR Studio installer (Inno Setup).
+﻿# Batch 44: build the ADR Studio installer (Inno Setup).
 # NSIS (tauri bundle) hit the hard ~2GB data limit on our 3.89GB runtime,
 # so the installer is produced by Inno Setup from the no-bundle output.
 #
@@ -11,21 +11,31 @@
 # Usage (from repo root):
 #   powershell -File scripts\build_installer.ps1           # CPU 包
 #   powershell -File scripts\build_installer.ps1 -Gpu      # GPU 包
+#   powershell -File scripts\build_installer.ps1 -DryRun   # 只跑门禁 + 前置预检 (批次70)
 # Output:  desktop\src-tauri\target\release\bundle\inno\ADR-Studio-<ver>-x64[-gpu]-setup.exe
 param(
     # 打 GPU 包: 文件名加 -gpu 后缀 + 体检按 --allow-cuda 放行 nvidia_* 库
-    [switch]$Gpu
+    [switch]$Gpu,
+    # 批次70 (Q2): 干跑 — 只验版本/合规门禁与前置 (ISCC / tauri CLI / runtime),
+    # 不编译不签名; 门禁必须过 (硬失败), 前置缺失仅 WARN。成功结尾输出 DRY RUN OK。
+    [switch]$DryRun
 )
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
 $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-if (-not (Test-Path $iscc)) { throw "Inno Setup 6 not found at: $iscc" }
+if (-not (Test-Path $iscc)) {
+  if ($DryRun) { Write-Warning "DryRun: Inno Setup 6 not found at $iscc - 真打包会失败" }
+  else { throw "Inno Setup 6 not found at: $iscc" }
+}
 
 # 打包前 runtime 体检 (批次 49b 固化规则, 防垃圾权重/个人数据面/底模混入)
 $rtDirName = if ($Gpu) { "runtime-gpu" } else { "runtime-cpu" }
 $rtPy = Join-Path $root "build\$rtDirName\python\python.exe"
 if (Test-Path $rtPy) { $py = $rtPy } else { $py = "python" }
+if ((-not (Test-Path $rtPy)) -and $DryRun) {
+  Write-Warning "DryRun: $rtDirName runtime python not found - 门禁用系统 python ($py)"
+}
 
 # 批次69 (Q2): 版本面单源 + 合规门禁前置 — 漂移/缺口在出包前失败, 不产出坏包
 foreach ($gate in @("check_versions.py", "check_compliance.py")) {
@@ -39,12 +49,21 @@ $checkArgs = @((Join-Path $PSScriptRoot "check_runtime.py"),
 if ($Gpu) { $checkArgs += "--allow-cuda" }
 Write-Host "[build_installer] runtime check: $py $checkArgs" -ForegroundColor Cyan
 & $py @checkArgs
-if ($LASTEXITCODE -ne 0) { throw "check_runtime failed - 修复 runtime 后再打包" }
+if ($LASTEXITCODE -ne 0) {
+  if ($DryRun) { Write-Warning "DryRun: check_runtime 未通过 - 真打包会失败" }
+  else { throw "check_runtime failed - 修复 runtime 后再打包" }
+}
 
 # 批次69 (Q1): 固定版本 Tauri CLI (desktop/package.json 钉死), 不再 npx @2 动态解析
 $tauriCli = Join-Path $root "desktop\node_modules\.bin\tauri.cmd"
 if (-not (Test-Path $tauriCli)) {
-  throw "tauri CLI missing - 先执行: cd desktop && npm ci (版本见 package.json)"
+  if ($DryRun) { Write-Warning "DryRun: tauri CLI missing - 真打包前需 cd desktop; npm ci" }
+  else { throw "tauri CLI missing - 先执行: cd desktop && npm ci (版本见 package.json)" }
+}
+
+if ($DryRun) {
+  Write-Output "DRY RUN OK"
+  exit 0
 }
 
 Push-Location (Join-Path $root "desktop\src-tauri")
