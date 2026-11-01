@@ -77,6 +77,40 @@ def handle_cuda_oom(e: BaseException) -> str:
             "建议缩短合成文本、避免并发请求, 或在 设置 → 高级 → 设备 改为 cpu 后重试。")
 
 
+# 批次74: 英文 G2P 离线依赖 (build_runtime 4c 随包到 python/nltk_data)
+_NLTK_RESOURCES = ("corpora/cmudict", "taggers/averaged_perceptron_tagger_eng")
+
+NLTK_MISSING_MESSAGE = (
+    "英文合成依赖的 NLTK 语料缺失 (cmudict / averaged_perceptron_tagger): "
+    "安装包未随附且当前离线、无法自动下载。请联网后重启应用自动补齐, "
+    "或改用完整版安装包; 中文 / 日文 / 粤语合成不受影响。")
+
+
+def nltk_missing_reason() -> str:
+    """英文 G2P 依赖的 nltk 语料是否随包 (批次74)。齐全返回 "", 否则返回缺失清单。
+    只查本地 nltk_data — 不联网、不抛异常 (供启动期体检与 API 层复用)。"""
+    try:
+        import nltk
+    except Exception:
+        return "nltk 未安装"
+    missing = []
+    for res in _NLTK_RESOURCES:
+        try:
+            nltk.data.find(res)
+        except Exception:
+            missing.append(res)
+    return ", ".join(missing)
+
+
+def is_nltk_missing(e: BaseException) -> bool:
+    """异常是否由 nltk 语料缺失导致 (批次74)。按类型名 + 资源名判定,
+    不 import nltk — 供 API 层零成本分流。"""
+    if type(e).__name__ != "LookupError":
+        return False
+    msg = str(e).lower()
+    return any(k in msg for k in ("cmudict", "averaged_perceptron", "nltk"))
+
+
 def _nvidia_driver_version() -> Optional[str]:
     """nvidia-smi 查驱动版本 (批次57, 零依赖): 驱动未装/不在 PATH → None。
     排障关键: "驱动已装但 CUDA 不可用" = 驱动版本低于 torch 轮子所需。"""
@@ -485,6 +519,17 @@ class GSVEngine:
         # 收紧到 5s 快速失败走内置回退发音
         import socket
         socket.setdefaulttimeout(5)
+        # 批次74: 英文 G2P 离线依赖体检 — 缺 cmudict/标注器时英文文本会在
+        # g2p_en 抛 LookupError (无外网机器无法自动补下载), 这里提前落日志 +
+        # 审计事件, 便于排障; 不影响启动, 中/日/粤合成照常。
+        _nltk_missing = nltk_missing_reason()
+        if _nltk_missing:
+            logging.getLogger("adr").warning(
+                "[nltk] 英文合成依赖缺失: %s — 英文文本将合成失败 "
+                "(中文 / 日文 / 粤语不受影响)", _nltk_missing)
+            log_event("nltk", ready=False, missing=_nltk_missing)
+        else:
+            log_event("nltk", ready=True)
         with self._gsv_context():
             import torch
             # Track E (批次33): AR 解码 tqdm 每句 1500 迭代渲染 stderr,

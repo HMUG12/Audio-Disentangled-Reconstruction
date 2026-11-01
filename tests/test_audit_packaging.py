@@ -76,9 +76,12 @@ TRAIN_SCRIPTS = ("gsv_finetune.py", "train_gate.py",
 
 
 def _make_runtime_skeleton(rt: Path) -> None:
-    """最小可通过骨架: configs preset (第 6 项)。无 python.exe 时第 7 项跳过。"""
+    """最小可通过骨架: configs preset (第 6 项) + nltk_data (第 11 项, 批次74)。
+    无 python.exe 时第 7/11 项的 runtime python 探针跳过。"""
     (rt / "configs").mkdir(parents=True)
     (rt / "configs" / "default.yaml").write_text("train: {}\n", encoding="utf-8")
+    for res in ("corpora/cmudict", "taggers/averaged_perceptron_tagger_eng"):
+        (rt / "python" / "nltk_data" / res).mkdir(parents=True, exist_ok=True)
 
 
 def _run_check_runtime(rt: Path) -> subprocess.CompletedProcess:

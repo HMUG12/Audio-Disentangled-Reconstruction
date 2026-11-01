@@ -33,7 +33,12 @@ from adr.core.exceptions import (
     error_code,
 )
 from adr.models import voice_library
-from adr.models.gsv_engine import handle_cuda_oom, is_cuda_oom
+from adr.models.gsv_engine import (
+    NLTK_MISSING_MESSAGE,
+    handle_cuda_oom,
+    is_cuda_oom,
+    is_nltk_missing,
+)
 from adr.server.param_norm import normalize_params
 from adr.server.v2_compat import engine_busy, max_text_chars
 from adr.services import SynthesisService
@@ -254,6 +259,11 @@ async def tts_ws_stream_input(websocket: WebSocket):
                     if is_cuda_oom(e):
                         loop.call_soon_threadsafe(
                             _put, ("__err__", handle_cuda_oom(e), "cuda_oom"))
+                    elif is_nltk_missing(e):
+                        # 批次74: 英文依赖缺失 — 错误帧给稳定 code
+                        logger.warning("v3 stream synth: nltk data missing (%s)", e)
+                        loop.call_soon_threadsafe(
+                            _put, ("__err__", NLTK_MISSING_MESSAGE, "nltk_missing"))
                     else:
                         loop.call_soon_threadsafe(
                             _put, ("__err__", str(e), error_code(e)))
@@ -401,6 +411,9 @@ async def tts_ws_stream_input(websocket: WebSocket):
         logger.exception("v3 stream-input error")
         if is_cuda_oom(e):
             msg, code = handle_cuda_oom(e), "cuda_oom"
+        elif is_nltk_missing(e):
+            logger.warning("v3 stream-input: nltk data missing (%s)", e)
+            msg, code = NLTK_MISSING_MESSAGE, "nltk_missing"
         else:
             msg, code = str(e), error_code(e)
         try:

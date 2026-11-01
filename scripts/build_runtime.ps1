@@ -141,6 +141,7 @@ pypinyin==0.55.0
 jieba==0.42.1
 cn2an==0.5.24
 g2p-en==2.1.0
+nltk==3.10.3
 split-lang==2.1.1
 wordsegment==1.3.1
 fast-langdetect==1.0.1
@@ -180,7 +181,7 @@ Remove-Item -Force $ReqFile -ErrorAction SilentlyContinue
 Set-Content -Path $ReqFile -Value $requirements -Encoding ASCII
 # Write-back check: v1.3.1 build once ran pip against a stale file missing the G2P pins
 $written = Get-Content -Raw $ReqFile
-foreach ($pin in "pyopenjtalk==", "jamo==", "ToJyutping==", "ko_pron==") {
+foreach ($pin in "pyopenjtalk==", "jamo==", "ToJyutping==", "ko_pron==", "nltk==") {
     if ($written -notmatch [regex]::Escape($pin)) { throw "requirements file missing $pin (stale write?)" }
 }
 Log ("requirements written: {0}" -f $ReqFile)
@@ -202,6 +203,20 @@ if ($AllowCuda) {
 # 4b. 其余钉版依赖 (torch 已满足, 不会重复解析)
 & $py -m pip install --prefer-binary --cache-dir $PipCache --no-warn-script-location -r $ReqFile
 if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
+
+# 4c. nltk_data 随包 (批次74): g2p-en 首次处理英文文本时 G2p.__init__ 调
+#     cmudict.dict(), nltk.pos_tag 首次调用加载 PerceptronTagger — 两条都会
+#     触发 nltk 在线下载。无外网/被墙机器下载失败后英文合成直接抛 LookupError
+#     (2026-11-01 server.log 实锤)。目标目录固定为 <runtime>\python\nltk_data:
+#     nltk.data.path 默认含 sys.prefix/nltk_data, 运行时零代码命中。
+#     新旧标注器名都下 (nltk>=3.9 用 _eng, 旧版用原名), 体积合计 ~3MB。
+$nltkDir = Join-Path $OutDir "python\nltk_data"
+& $py -m nltk.downloader -d $nltkDir cmudict averaged_perceptron_tagger_eng averaged_perceptron_tagger
+if ($LASTEXITCODE -ne 0) { throw "nltk data download failed" }
+foreach ($res in @("corpora\cmudict", "taggers\averaged_perceptron_tagger_eng")) {
+    if (-not (Test-Path (Join-Path $nltkDir $res))) { throw "nltk data missing: $res" }
+}
+Log ("nltk_data bundled: {0}" -f $nltkDir)
 
 Step "5/7 copy adr + scripts + GSV sources (excluding models / artifacts / caches)"
 robocopy (Join-Path $RepoRoot "adr") (Join-Path $OutDir "adr") /E /NFL /NDL /NJH /NJS /NP /XD __pycache__ /XF *.pyc | Out-Null
