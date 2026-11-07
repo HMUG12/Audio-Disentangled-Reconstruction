@@ -52,9 +52,33 @@ class PipelineConfig:
     g2p: G2PConfig = field(default_factory=G2PConfig)
     f0: F0Config = field(default_factory=F0Config)
 
+    # 批次88 (DATA-01): mel 帧格单源 — 与 DataConfig/推理同名字段对齐。
+    # 旧实现取 self.f0.hop_length, 改 F0 hop 提速时会静默改变训练 mel 帧格,
+    # 而推理仍用 DataConfig.hop_length, 声码器域错位且无报错。
+    hop_length: int = 256
+    n_mels: int = 80
+
     # 输出
     output_dir: str = "./output/processed"
     save_format: str = "npz"  # npz / wav
+
+
+def _align_f0_to_mel(f0: np.ndarray, n_mel_frames: int,
+                     mel_hop: int, f0_hop: int) -> np.ndarray:
+    """把 F0 重采样到 mel 帧格 (批次88 / DATA-02)。
+
+    F0 帧中心在 ``t*f0_hop``; ``compute_mel_bigvgan`` 的 mel 第 i 帧中心
+    在 ``i*mel_hop + mel_hop/2`` (left pad + n_fft 居中)。两者 hop 不一致
+    时按帧中心重采样, 保证下游 f0/mel 逐帧对齐; 输出长度与 mel 一致,
+    collate 不再依赖"截断到较短者"。
+    """
+    if n_mel_frames <= 0:
+        return np.zeros(0, dtype=np.float32)
+    if f0 is None or len(f0) == 0:
+        return np.zeros(n_mel_frames, dtype=np.float32)
+    src = np.arange(len(f0), dtype=np.float64) * f0_hop
+    dst = (np.arange(n_mel_frames, dtype=np.float64) + 0.5) * mel_hop
+    return np.interp(dst, src, f0).astype(np.float32)
 
 
 @dataclass
@@ -265,13 +289,24 @@ class DataPipeline:
                 try:
                     s.mel = compute_mel_bigvgan(
                         s.waveform, sample_rate=s.sample_rate,
-                        n_mels=80, hop_length=self.config.f0.hop_length,
+                        n_mels=self.config.n_mels,
+                        hop_length=self.config.hop_length,
                     )
                 except Exception as e:
                     result.errors.append(f"Mel slice {s.index}: {e}")
                     self.log.warning(
                         f"  Mel 提取失败, 跳过切片 {s.index}: {e}")
                     failed.add(s.index)
+
+        # 批次88 (DATA-02): F0 对齐到 mel 帧格 (hop 不同时按帧中心重采样)
+        if self.config.enable_f0 and self.config.enable_mel:
+            for s in slices:
+                mel = getattr(s, "mel", None)
+                if mel is None or s.f0 is None:
+                    continue
+                s.f0 = _align_f0_to_mel(
+                    s.f0, mel.shape[-1],
+                    self.config.hop_length, self.config.f0.hop_length)
 
         # Build TrainSample list
         # 批次41b: sample_id 加入源文件路径哈希 — 不同目录同名文件

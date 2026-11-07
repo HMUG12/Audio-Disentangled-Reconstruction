@@ -286,6 +286,8 @@ async def tts_handle(req: dict, request: Request) -> Response:
     elif streaming_mode == 2:
         streaming, return_fragment = True, False
     elif streaming_mode == 3:
+        # 批次88 (API-01): 官方语义是"真流式 + 定长块", ADR 不做定长切块 —
+        # 明确定义为 mode 2 的别名 (同按句切块), 文档同步声明。
         streaming, return_fragment = True, False
     else:
         return JSONResponse(

@@ -31,6 +31,8 @@ pub const RELEASES_URL: &str =
 const CACHE_TTL_SECS: u64 = 24 * 3600;
 /// 单个安装包下载进度回调粒度 (字节)
 const PROGRESS_STEP: u64 = 1 << 20;
+/// 无 Content-Length / 清单未给 size 时的下载硬上限 (批次88 / SEC-07)。
+const MAX_DOWNLOAD_BYTES: u64 = 8 << 30;
 
 // ---------------------------------------------------------------------------
 // 清单结构
@@ -328,18 +330,28 @@ fn fetch_manifest_text(force: bool) -> Result<(String, bool), String> {
             }
         }
     }
+    // 批次88 (SEC-07): 清单同样加读超时, 且最多只读 512KB —
+    // 旧实现 into_string() 会把恶意/异常源的响应全量读进内存。
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(10))
+        .timeout_read(Duration::from_secs(20))
         .build();
     match agent.get(MANIFEST_URL).call() {
-        Ok(resp) => match resp.into_string() {
-            Ok(body) if !body.trim().is_empty() => {
-                write_cache(&body);
-                Ok((body, false))
+        Ok(resp) => {
+            let mut body = String::new();
+            let read = resp
+                .into_reader()
+                .take(512 * 1024)
+                .read_to_string(&mut body);
+            match read {
+                Ok(_) if !body.trim().is_empty() => {
+                    write_cache(&body);
+                    Ok((body, false))
+                }
+                Ok(_) => Err("更新清单为空".into()),
+                Err(e) => Err(format!("读取更新清单失败: {e}")),
             }
-            Ok(_) => Err("更新清单为空".into()),
-            Err(e) => Err(format!("读取更新清单失败: {e}")),
-        },
+        }
         Err(e) => {
             if let Some(c) = cache.filter(|c| !c.manifest.trim().is_empty()) {
                 return Ok((c.manifest, true));
@@ -455,8 +467,11 @@ fn download_one(
     attempt: usize,
 ) -> Result<u64, String> {
     let window = app.get_webview_window("main");
+    // 批次88 (SEC-07): 只设连接超时挡不住"连上后无限慢/无限吐"的源 —
+    // 加读超时 (两次 read 之间的空窗) 与体积上限 (声明 size 的 110%)。
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(15))
+        .timeout_read(Duration::from_secs(60))
         .build();
     let resp = agent
         .get(url)
@@ -467,6 +482,11 @@ fn download_one(
         .and_then(|s| s.parse::<u64>().ok())
         .filter(|n| *n > 0)
         .unwrap_or(total_hint);
+    let cap = if total > 0 {
+        total.saturating_add(total / 10)
+    } else {
+        MAX_DOWNLOAD_BYTES
+    };
     let mut reader = resp.into_reader();
     let mut file = std::fs::File::create(dest).map_err(|e| format!("创建文件失败: {e}"))?;
     let mut buf = vec![0u8; 128 * 1024];
@@ -485,6 +505,13 @@ fn download_one(
         };
         file.write_all(&buf[..n]).map_err(|e| format!("写入文件失败: {e}"))?;
         got += n as u64;
+        if got > cap {
+            drop(file);
+            let _ = std::fs::remove_file(dest);
+            return Err(format!(
+                "下载体积异常 ({got} > {cap} 字节上限), 已中止"
+            ));
+        }
         let pct = if total > 0 { (got * 100 / total) as i64 } else { 0 };
         if got - last_emit >= PROGRESS_STEP || pct != last_pct {
             last_emit = got;

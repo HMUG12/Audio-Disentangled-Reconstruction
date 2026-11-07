@@ -55,44 +55,56 @@ _QUEUE_MAXSIZE = 64
 
 
 class _TextBuffer:
-    """文本缓冲: 累积碎片 → 按标点边界提取完整句子 (照搬 api_neko 实现)。"""
+    """文本缓冲: 累积碎片 → 按标点边界提取完整句子 (照搬 api_neko 实现)。
+
+    批次88 (PERF-04): 碎片用 list 累积, 只在读/提取时 join 一次; 旧实现
+    `self._buf += text` 与 `current += ch` 都是字符串自增, WebSocket 长
+    会话下拼接拷贝随文本长度平方增长。
+    """
 
     def __init__(self):
-        self._buf = ""
+        self._parts: list[str] = []
 
     def append(self, text: str):
-        self._buf += text
+        if text:
+            self._parts.append(text)
+
+    def _value(self) -> str:
+        if len(self._parts) > 1:
+            self._parts = ["".join(self._parts)]
+        return self._parts[0] if self._parts else ""
 
     def extract_sentences(self) -> list[str]:
         sentences: list[str] = []
+        buf = self._value()
         last_split = -1
-        for i, ch in enumerate(self._buf):
-            if ch in _SENTENCE_SPLITS:
-                last_split = i
+        for ch in _SENTENCE_SPLITS:
+            last_split = max(last_split, buf.rfind(ch))
         if last_split < 0:
             return sentences
-        completed = self._buf[: last_split + 1]
-        self._buf = self._buf[last_split + 1:]
-        current = ""
-        for ch in completed:
-            current += ch
+        completed = buf[: last_split + 1]
+        rest = buf[last_split + 1:]
+        self._parts = [rest] if rest else []
+        start = 0
+        for i, ch in enumerate(completed):
             if ch in _SENTENCE_SPLITS:
-                s = current.strip()
+                s = completed[start: i + 1].strip()
                 if s:
                     sentences.append(s)
-                current = ""
-        if current.strip():
-            sentences.append(current.strip())
+                start = i + 1
+        tail = completed[start:].strip()
+        if tail:
+            sentences.append(tail)
         return sentences
 
     def flush(self) -> str:
-        text = self._buf.strip()
-        self._buf = ""
+        text = self._value().strip()
+        self._parts = []
         return text
 
     @property
     def content(self) -> str:
-        return self._buf
+        return self._value()
 
 
 def _resolve_voice(voice_id: str, app) -> Optional[dict]:

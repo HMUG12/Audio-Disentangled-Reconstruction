@@ -58,7 +58,10 @@ class SynthesisService:
             raise ProfileInvalidError(f"invalid profile name: {name}")
         try:
             return voice_library.load_voice(name)
-        except Exception:
+        except FileNotFoundError:
+            # 批次88 (BUG-04): 只把"档案不存在"映射 404; meta.json 损坏/
+            # 权限拒绝/JSON 语法错误等一律上抛, 由错误契约映射 500,
+            # 避免运维把磁盘或数据问题误判成名字写错。
             raise ProfileNotFoundError(f"unknown profile: {name}")
 
     @staticmethod
@@ -107,7 +110,12 @@ class SynthesisService:
                       vits_weights=None, split_method=None, head_seed=-1,
                       top_k=15, top_p=1.0, temperature=1.0, speed_factor=1.0,
                       fragment_interval=None) -> Iterator:
-        """流式合成: 透传引擎 synthesize_stream, yield (chunk, sr)。"""
+        """流式合成: 透传引擎 synthesize_stream, yield (chunk, sr)。
+
+        批次88 (CON-02): 引擎只吐裸 PCM 块; 容器的"头 + 裸块"契约仅对 wav
+        成立。非 wav 由调用侧逐块独立编码成完整容器, 顺序拼接不是合法
+        单流 — API 文档 docs/tts-api-spec.md §2.3 已声明该限制。
+        """
         _audit_synthesis(text, ref_audio_path)
         return engine.synthesize_stream(
             text, ref_audio_path,

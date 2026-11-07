@@ -152,6 +152,9 @@ const I18N_DICT = {
   "pro.toast_exporting": ["档案包下载中 — 含微调权重, 大小可能达数百 MB", "Profile package downloading — includes fine-tuned weights, may be several hundred MB"],
   "pro.toast_importing": ["导入中… (视权重大小可能需要数十秒)", "Importing… (may take tens of seconds depending on weight size)"],
   "pro.confirm_overwrite": ["覆盖导入？", "Overwrite and import?"],
+  "pro.confirm_shared_weights": [
+    "这些权重还被其它档案使用，覆盖后它们的音色也会一起改变。确定继续？",
+    "These weights are also used by other profiles; overwriting changes their voices too. Continue?"],
   "pro.import_fail": ["导入失败", "Import failed"],
   "pro.import_ok": ["导入成功: ", "Imported: "],
   "pro.import_fail_msg": ["导入失败: {msg}", "Import failed: {msg}"],

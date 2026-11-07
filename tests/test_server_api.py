@@ -736,13 +736,13 @@ def test_cache_key_includes_media_type(client, engine):
     assert len(engine.synth_calls) == 2
 
 
-def test_cache_seed_not_in_key(client, engine):
-    """seed 不入 key: 播报一致性优先, 仅 seed 不同 → 复用同一次合成。"""
+def test_cache_key_includes_seed(client, engine):
+    """批次88 (API-02): seed 入 key — 显式不同 seed 不再互相命中。"""
     client.post("/api/v2/tts", json={"text": "hi", "ref_audio_path": "a.wav",
                                      "seed": 1})
     client.post("/api/v2/tts", json={"text": "hi", "ref_audio_path": "a.wav",
                                      "seed": 2})
-    assert len(engine.synth_calls) == 1
+    assert len(engine.synth_calls) == 2
 
 
 def test_cache_stream_bypassed(client, engine):

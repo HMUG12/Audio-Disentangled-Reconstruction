@@ -40,13 +40,20 @@ def _seg_cache_key(seg: str, ref_audio: str, prompt_text: str,
                    top_k: int, top_p: float, temperature: float,
                    speed_factor: float, fragment_interval: float,
                    t2s_weights: Optional[str], vits_weights: Optional[str],
-                   ref_stamp: tuple = (), seed: int = -1) -> str:
+                   ref_stamp: tuple = (), seed: int = -1,
+                   t2s_stamp: tuple = (), vits_stamp: tuple = ()) -> str:
     """段缓存 key。ref_stamp 为参考音频文件指纹 (路径, mtime_ns, size),
-    seed 为该段实际生效的采样种子 (首段 head_seed, 其余段 -1)。"""
+    seed 为该段实际生效的采样种子 (首段 head_seed, 其余段 -1)。
+
+    批次88 (CACHE-01): 权重也带 (路径, mtime_ns, size) 指纹 — 训练产物
+    覆盖同路径权重 / 音色包 overwrite 后 mtime/size 变化即换 key,
+    不再回放旧人声。
+    """
     payload = json.dumps(
         [seg, ref_audio, prompt_text, text_lang, prompt_lang, split_method,
          top_k, top_p, temperature, speed_factor, fragment_interval,
-         t2s_weights, vits_weights, list(ref_stamp), seed],
+         t2s_weights, vits_weights, list(ref_stamp), seed,
+         list(t2s_stamp), list(vits_stamp)],
         ensure_ascii=False)
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 

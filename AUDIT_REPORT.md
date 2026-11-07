@@ -318,6 +318,8 @@
 
 ### SEC-05 · 音色包 `overwrite=true` 会替换全局共享权重
 
+> **状态：已修复（批次88）** — 同 hash 直接复用不落盘；不同 hash 且目标被其它档案引用时，`overwrite` 默认拒绝并报「覆盖 X 将影响 N 个档案: ...」，需 `force`/`--force` 二次确认后提交。
+
 - **位置**：[models/voice_package.py L122-L129](file:///e:/新创意构思/新建文件夹/ADR/adr/models/voice_package.py#L122-L129)、[L243-L266](file:///e:/新创意构思/新建文件夹/ADR/adr/models/voice_package.py#L243-L266)、[server/native.py L233-L235](file:///e:/新创意构思/新建文件夹/ADR/adr/server/native.py#L233-L235)
 - **证据**：`_dst_dir("t2s")` 固定 `GSV_DIR/GPT_weights_v2`、`"vits"` 固定 `SoVITS_weights_v2`（**所有档案共用**）；非 overwrite 时按 `dst.exists() + sha256` 拒绝冲突，`overwrite=true` 时直接在两段式提交里替换目标文件。
 - **影响**：导入一个同名权重的第三方音色包，会把**其它音色正在使用的权重**换掉（音色串台），且不清理 `tts_cache`/段缓存（见 CACHE-01），旧音频继续被命中。恶意包只需与热门权重同名。
@@ -328,6 +330,8 @@
 
 ### SEC-06 · 请求体总大小无上限，文本长度限制在 JSON 解析之后
 
+> **状态：已修复（批次88）** — 新增 ASGI `BodySizeLimitMiddleware`（`ADR_MAX_BODY_MB`，默认 16）：`Content-Length` 预检 + chunked 逐块累计，超限 413 `payload_too_large`；multipart 放行，由导入路由自身上限管控。
+
 - **位置**：[server/v2_compat.py L161-L181](file:///e:/新创意构思/新建文件夹/ADR/adr/server/v2_compat.py#L161-L181)
 - **证据**：`await request.json()` 先完成（Starlette 默认无 body 上限），随后 `cap = max_text_chars()` 才比对 `len(req["text"])`。带 `aux_ref_audio_paths` 等数组字段的请求同样不受体积约束。
 - **影响**：单请求可提交数百 MB JSON，解析峰值内存与 SEC-01 的读文件叠加；属于 DoS 面而非数据泄露。
@@ -337,6 +341,8 @@
 ---
 
 ### SEC-07 · 更新下载只有连接超时，没有总时长/大小上限
+
+> **状态：已修复（批次88）** — 下载 agent 加 `timeout_read(60s)`、清单加 `timeout_read(20s)` 且响应体 `take(512KB)`；下载累计字节超 `content-length*1.1`（缺失时 8GB）即删文件报错。
 
 - **位置**：[desktop/src-tauri/src/update.rs L450-L496](file:///e:/新创意构思/新建文件夹/ADR/desktop/src-tauri/src/update.rs#L450-L496)、[L331-L333](file:///e:/新创意构思/新建文件夹/ADR/desktop/src-tauri/src/update.rs#L331-L333)
 - **证据**
@@ -356,6 +362,8 @@
 
 ### BUG-03 · 训练素材上传按"秒级时间戳 + 文件名"落盘，同秒同名互相覆盖
 
+> **状态：已修复（批次88）** — 落盘名追加 `uuid4().hex[:8]`，同秒同名不再互相截断/回滚误删。
+
 - **位置**：[server/console.py L600-L606](file:///e:/新创意构思/新建文件夹/ADR/adr/server/console.py#L600-L606)
 - **证据**：`fname = f"{datetime.now():%Y%m%d_%H%M%S}_{stem}{ext}"`，直接 `dest.open("wb")` 截断写。100ms 内两次上传 `voice.wav` 即写同一路径。
 - **影响**：并发/批量上传时静默丢素材；由于回滚逻辑会 `unlink`（L617-L620），后一个失败请求还可能删掉前一个成功请求的文件。
@@ -365,6 +373,8 @@
 ---
 
 ### BUG-04 · 档案加载把所有异常统一转成"档案不存在(404)"
+
+> **状态：已修复（批次88）** — `load_profile` 只把 `FileNotFoundError` 映射 404；权限/损坏/JSON 语法错误一律上抛，由错误契约映射 500。
 
 - **位置**：[services/synthesis.py L53-L62](file:///e:/新创意构思/新建文件夹/ADR/adr/services/synthesis.py#L53-L62)
 - **证据**
@@ -385,6 +395,8 @@
 
 ### BUG-05 · 模块级 `is_ready()` / `stage()` 不看降级标记，卡死后仍报 ready
 
+> **状态：已修复（批次88）** — 模块级 `is_ready()` 补 `and not _ENGINE._stalled`，与实例属性判定对齐。
+
 - **位置**：[models/gsv_engine.py L1108-L1117](file:///e:/新创意构思/新建文件夹/ADR/adr/models/gsv_engine.py#L1108-L1117)、对照 [L508-L512](file:///e:/新创意构思/新建文件夹/ADR/adr/models/gsv_engine.py#L508-L512)
 - **证据**
 
@@ -400,6 +412,8 @@
 ---
 
 ### CON-02 · 流式非 WAV 格式"每块一次 ffmpeg"，且每块是独立容器
+
+> **状态：已修复（批次88）** — 选择文档口径（不改编码链）：`docs/tts-api-spec.md` §2.3 明确「头+裸块」仅对 wav 成立，ogg/aac/raw 每块是独立容器、顺序拼接不是合法单流；`stream_chunks` docstring 同步。
 
 - **位置**：[services/synthesis.py L155-L173](file:///e:/新创意构思/新建文件夹/ADR/adr/services/synthesis.py#L155-L173)、[server/audio_codec.py L96-L171](file:///e:/新创意构思/新建文件夹/ADR/adr/server/audio_codec.py#L96-L171)
 - **证据**
@@ -420,6 +434,8 @@
 
 ### PERF-03 · `compute_mel_bigvgan` 每次调用都重建 mel 滤波器组与 Hann 窗
 
+> **状态：已修复（批次88）** — 抽出 `_mel_basis(...)` / `_hann_window(...)` 并按 `(sr, n_fft, n_mels, fmin, fmax, device)` `lru_cache`，逐 slice 复用同一份张量。
+
 - **位置**：[utils/audio.py L332-L336](file:///e:/新创意构思/新建文件夹/ADR/adr/utils/audio.py#L332-L336)、[data/pipeline.py L245-L262](file:///e:/新创意构思/新建文件夹/ADR/adr/data/pipeline.py#L245-L262)
 - **证据**
 
@@ -437,6 +453,8 @@
 
 ### PERF-04 · v3 文本缓冲用字符串自增拼接，O(n²)
 
+> **状态：已修复（批次88）** — `_TextBuffer` 改用 `list[str]` 累积 + 惰性 join；句子提取改为 `rfind` 最后一个标点 + 切片，行为与旧实现一致（新增单测覆盖切分/残留/flush）。
+
 - **位置**：[server/v3_compat.py L57-L86](file:///e:/新创意构思/新建文件夹/ADR/adr/server/v3_compat.py#L57-L86)
 - **证据**：`self._buf += text`（L64）、`current += ch`（L78），且 `extract_sentences()` 每次对**整个缓冲区**重新扫描（L69）后才截断。
 - **影响**：长文本按碎片持续追加时，拼接拷贝与全量重扫都是二次复杂度；WebSocket 长会话下延迟随文本长度平方增长。真实会话通常是短句，故列为中危而非高危。
@@ -446,6 +464,8 @@
 ---
 
 ### DATA-01 · 训练 mel 的 hop 取自 F0 配置，推理取自模型配置；脚本仍用 v1 mel
+
+> **状态：已修复（批次88）** — `PipelineConfig` 新增 `hop_length=256`/`n_mels=80`，mel 提取只读这两个字段，`f0.hop_length` 不再影响帧格。
 
 - **位置**：[data/pipeline.py L252-L256](file:///e:/新创意构思/新建文件夹/ADR/adr/data/pipeline.py#L252-L256)、[inference/pipeline.py L345](file:///e:/新创意构思/新建文件夹/ADR/adr/inference/pipeline.py#L345)、[utils/audio.py L247-L297](file:///e:/新创意构思/新建文件夹/ADR/adr/utils/audio.py#L247-L297)
 - **证据**
@@ -466,6 +486,8 @@
 
 ### API-01 · `streaming_mode=3` 与 `2` 完全等价，与文档约定不一致
 
+> **状态：已修复（批次88）** — 选择文档口径：`docs/tts-api-spec.md` 明确 mode 3 是 mode 2 的别名（按句切块、不做定长切片），`v2_compat.py` 分支加注释固化语义。
+
 - **位置**：[server/v2_compat.py L276-L290](file:///e:/新创意构思/新建文件夹/ADR/adr/server/v2_compat.py#L276-L290)、[docs/call.html L191 附近](file:///e:/新创意构思/新建文件夹/ADR/docs/call.html)
 - **证据**
 
@@ -483,6 +505,8 @@
 
 ### API-02 · `tts_cache` 的 key 有意排除 `seed`，显式不同 seed 返回同一音频
 
+> **状态：已修复（批次88）** — 选择「seed 入 key」：`_KEY_FIELDS` 加 `seed`、`CACHE_VERSION` 升到 2（旧盘缓存自然失效），docstring/注释同步。
+
 - **位置**：[server/tts_cache.py L7](file:///e:/新创意构思/新建文件夹/ADR/adr/server/tts_cache.py#L7)、[L45-L51](file:///e:/新创意构思/新建文件夹/ADR/adr/server/tts_cache.py#L45-L51)、[L79-L83](file:///e:/新创意构思/新建文件夹/ADR/adr/server/tts_cache.py#L79-L83)
 - **证据**：模块 docstring 写明"seed 不入 key — 播报一致性优先"；`_KEY_FIELDS` 不含 `seed`。
 - **影响**：GET `/tts?seed=1` 与 `seed=2` 命中同一条缓存，调用方无法通过 seed 获得可复现的差异输出；而段缓存（`_seg_cache_key`）**包含** seed，两套缓存语义相反，换层时行为会突变。
@@ -492,6 +516,8 @@
 ---
 
 ### CACHE-01 · 段缓存换权后不清空，key 只含权重**路径**不含指纹
+
+> **状态：已修复（批次88）** — `_ensure_weights()` 换权后调 `_seg_cache_clear()`；流式段 key 纳入 `t2s_stamp`/`vits_stamp`（路径+mtime_ns+size），同路径覆盖权重也会自然 miss。
 
 - **位置**：[models/gsv_runtime.py L38-L51](file:///e:/新创意构思/新建文件夹/ADR/adr/models/gsv_runtime.py#L38-L51)、[models/gsv_runtime.py L83-L86](file:///e:/新创意构思/新建文件夹/ADR/adr/models/gsv_runtime.py#L83-L86)、[server/v2_compat.py L476-L478](file:///e:/新创意构思/新建文件夹/ADR/adr/server/v2_compat.py#L476-L478)
 - **证据**
@@ -510,6 +536,8 @@
 ## 七、低危问题
 
 ### DATA-02 · F0 与 mel 的帧格定义不一致，训练时左对齐拼接
+
+> **状态：已修复（批次88）** — 新增 `_align_f0_to_mel()`：按「源帧中心 t*f0_hop → mel 帧中心 (i+0.5)*mel_hop」`np.interp` 重采样，slice 的 F0 长度与 mel 帧数一致。
 
 - **位置**：[data/f0.py L85-L92](file:///e:/新创意构思/新建文件夹/ADR/adr/data/f0.py#L85-L92)、[utils/audio.py L338-L345](file:///e:/新创意构思/新建文件夹/ADR/adr/utils/audio.py#L338-L345)、[training/dataset.py L173-L175](file:///e:/新创意构思/新建文件夹/ADR/adr/training/dataset.py#L173-L175)
 - **证据**：`librosa.pyin(...)` 未传 `center`（默认 `True`，帧中心在 `t*hop`）；`compute_mel_bigvgan` 显式 `center=False` 并左右 reflect pad `(n_fft-hop)//2 = 384`，帧中心相对原信号偏移约 `384 - 512 ≈ 128 samples`（22050Hz 下约 5.8ms）。collate 时 `f0[i,:T] = s.f0[:T]` 直接左对齐，无重采样/移位。
@@ -664,18 +692,20 @@
 
 | # | 条目 |
 |---|---|
-| 10 | CACHE-01：换权分支调用 `_seg_cache_clear()`，并把 `weights_stamp` 纳入段 key |
-| 11 | SEC-05：音色包覆盖前做 sha 比对 + "影响 N 个档案"确认 |
-| 12 | SEC-06：ASGI 层 body 上限 |
-| 13 | SEC-07：`timeout_read` + 下载大小校验 |
-| 14 | BUG-03：上传名加随机后缀 / `O_EXCL` |
-| 15 | BUG-04：只捕获 `FileNotFoundError`，其余映射 500 |
-| 16 | BUG-05：模块级 `is_ready()` 判 `_stalled` |
-| 17 | CON-02：非 WAV 流改用长驻编码器，或文档限定"前缀块可独立播放" |
-| 18 | PERF-03：mel basis/window 缓存 |
-| 19 | PERF-04：`_TextBuffer` 改 `list`/`bytearray` |
-| 20 | DATA-01 + DATA-02：hop 单源化、F0 重采样到 mel 帧格 |
-| 21 | API-01 / API-02：mode 3 实现或改文档；seed 入 key 或删公开语义 |
+| 10 | CACHE-01 ✅ 批次88：换权分支调用 `_seg_cache_clear()`，并把 `weights_stamp` 纳入段 key |
+| 11 | SEC-05 ✅ 批次88：音色包覆盖前做 sha 比对 + "影响 N 个档案"确认 |
+| 12 | SEC-06 ✅ 批次88：ASGI 层 body 上限 |
+| 13 | SEC-07 ✅ 批次88：`timeout_read` + 下载大小校验 |
+| 14 | BUG-03 ✅ 批次88：上传名加随机后缀 / `O_EXCL` |
+| 15 | BUG-04 ✅ 批次88：只捕获 `FileNotFoundError`，其余映射 500 |
+| 16 | BUG-05 ✅ 批次88：模块级 `is_ready()` 判 `_stalled` |
+| 17 | CON-02 ✅ 批次88：非 WAV 流改用长驻编码器，或文档限定"前缀块可独立播放" |
+| 18 | PERF-03 ✅ 批次88：mel basis/window 缓存 |
+| 19 | PERF-04 ✅ 批次88：`_TextBuffer` 改 `list`/`bytearray` |
+| 20 | DATA-01 + DATA-02 ✅ 批次88：hop 单源化、F0 重采样到 mel 帧格 |
+| 21 | API-01 / API-02 ✅ 批次88：mode 3 实现或改文档；seed 入 key 或删公开语义 |
+
+> 批次 88 落地口径：CACHE-01 换权即 `_seg_cache_clear()`，段 key 追加 `t2s_stamp`/`vits_stamp`（mtime_ns+size，防同路径覆盖）；SEC-05 同 hash 复用、异 hash 且被他人引用时限 `force`；SEC-06 用 `ADR_MAX_BODY_MB`（默认 16）做 `Content-Length` 预检 + chunked 累计，413 `payload_too_large`（`_BodyTooLarge` 继承 `BaseException`，避免被 FastAPI 的 body 解析兜底成 400），multipart 放行；SEC-07 下载 `timeout_read(60s)` + 体积 `cap`、清单 `timeout_read(20s)` + 512KB；BUG-03 文件名追加 `uuid4().hex[:8]`；BUG-04 只捕 `FileNotFoundError`；BUG-05 模块级 `is_ready()` 判 `_stalled`；CON-02/API-01 选文档口径（wav 才是"头+裸块"、mode 3 = mode 2 别名）；PERF-03 `lru_cache` 滤波器组/Hann 窗；PERF-04 `list` 累积 + 惰性 join；DATA-01/02 `PipelineConfig.hop_length` 单源 + F0 帧中心重采样；API-02 `seed` 入 key（`CACHE_VERSION=2`）。
 
 ### P3 —— 清理与治理
 

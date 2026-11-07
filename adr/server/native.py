@@ -232,7 +232,8 @@ class _CappedImportRoute(APIRoute):
 
 async def profile_import(package: UploadFile = File(...),
                          name: str = Form(None),
-                         overwrite: bool = Form(False)):
+                         overwrite: bool = Form(False),
+                         force: bool = Form(False)):
     """导入 .adrvoice 包; 权重落位 GSV/RVC 标准目录并过 validate_weights_file。"""
     import asyncio
     import os
@@ -257,8 +258,9 @@ async def profile_import(package: UploadFile = File(...),
                     # 批次66: 二道防线 (主防线在 _CappedImportRoute, 解析前即拦)
                     return _import_too_large(cap)
                 out.write(chunk)
+        # 批次88 (SEC-05): force 仅在覆盖会被其它档案共用时必需
         r = await asyncio.to_thread(voice_package.import_voice, tmp,
-                                    name, overwrite)
+                                    name, overwrite, None, force)
     except (ValueError, _zipfile.BadZipFile) as e:
         return JSONResponse(status_code=400,
                             content={"message": str(e), "code": "import_failed"})

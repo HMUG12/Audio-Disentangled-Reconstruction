@@ -119,6 +119,33 @@ _RESOLVERS = {"t2s": _resolve_t2s_vits, "vits": _resolve_t2s_vits,
               "rvc": _resolve_rvc, "rvc_index": _resolve_index}
 
 
+def _profiles_using(path: Path, exclude: str) -> list[str]:
+    """返回 meta 权重字段指向 path 的其它档案名 (批次88 / SEC-05)。
+
+    换权会影响所有引用同一权重文件的档案, 覆盖前按本机解析口径逐个比对。
+    """
+    target = path.resolve()
+    users: list[str] = []
+    for n in voice_library.list_voices():
+        if n == exclude:
+            continue
+        try:
+            meta = voice_library.load_voice(n)
+        except (OSError, ValueError):
+            continue
+        for kind, field in _FIELDS.items():
+            w = meta.get(field)
+            if not w:
+                continue
+            try:
+                if _RESOLVERS[kind](str(w)).resolve() == target:
+                    users.append(n)
+                    break
+            except (ValueError, OSError):
+                continue
+    return users
+
+
 def _dst_dir(kind: str, profile_name: str) -> Path:
     if kind == "t2s":
         return GSV_DIR / "GPT_weights_v2"
@@ -190,8 +217,14 @@ def export_voice(name: str, out_path: Optional[str] = None,
 # ---------------------------------------------------------------- 导入
 
 def import_voice(pkg_path: str, name: Optional[str] = None,
-                 overwrite: bool = False, progress: Progress = None) -> dict:
-    """导入 .adrvoice 包, 返回 {name, weights, ref}。冲突默认拒绝。"""
+                 overwrite: bool = False, progress: Progress = None,
+                 force: bool = False) -> dict:
+    """导入 .adrvoice 包, 返回 {name, weights, ref}。冲突默认拒绝。
+
+    批次88 (SEC-05): 覆盖同名但内容不同的权重时, 先统计还有哪些档案引用
+    该文件 (``force=False`` 且有其它使用者则报错并列出"影响 N 个档案");
+    ``force=True`` 才允许连带换掉别人正在用的权重。
+    """
     pkg = Path(pkg_path)
     if not pkg.exists():
         raise ValueError(f"包不存在: {pkg}")
@@ -199,11 +232,12 @@ def import_voice(pkg_path: str, name: Optional[str] = None,
     # _IMPORT_LOCK 串行全部导入 (权重目录/暂存名跨档案共享, 同名权重会互相覆盖);
     # held 内再挂 profile_lock(目标名), 与 save/bind/rollback 等同名写者互斥。
     with _IMPORT_LOCK, contextlib.ExitStack() as held:
-        return _import_voice(pkg, name, overwrite, progress, held)
+        return _import_voice(pkg, name, overwrite, progress, held, force)
 
 
 def _import_voice(pkg: Path, name: Optional[str], overwrite: bool,
-                  progress: Progress, held: contextlib.ExitStack) -> dict:
+                  progress: Progress, held: contextlib.ExitStack,
+                  force: bool = False) -> dict:
     created: list[Path] = []   # 本次暂存的临时文件 (失败回滚只删这些, 不碰既有档案)
     try:
         with zipfile.ZipFile(pkg) as zf:
@@ -254,15 +288,35 @@ def _import_voice(pkg: Path, name: Optional[str], overwrite: bool,
                     raise ValueError(f"manifest 权重路径非法或文件缺失: {rel!r}")
                 plan[kind] = rel
 
-            # 冲突预检 (同 hash 视为已存在可复用)
+            # 冲突预检 (批次88 / SEC-05):
+            # - 同 hash → 直接复用, 不做无意义覆盖 (也不再需要 force);
+            # - 不同 hash + overwrite → 统计其它引用档案, 未 force 则拒绝并
+            #   报出"将影响 N 个档案", 避免一次导入静默换掉别人正在用的音色。
             placements: dict[str, Path] = {}
+            reuse: set[str] = set()
             for kind, rel in plan.items():
                 dst = _dst_dir(kind, target) / Path(rel).name
-                if dst.exists() and not overwrite:
-                    if _sha256_file(dst) != _sha256_member(zf, rel):
+                if dst.exists():
+                    if _sha256_file(dst) == _sha256_member(zf, rel):
+                        _log(progress,
+                             f"{kind}: 本机已存在同 hash 权重, 复用 {dst.name}")
+                        reuse.add(kind)
+                    elif not overwrite:
                         raise ValueError(
                             f"权重文件冲突: {dst} (--overwrite 覆盖)")
-                    _log(progress, f"{kind}: 本机已存在同 hash 权重, 复用 {dst.name}")
+                    else:
+                        users = _profiles_using(dst, target)
+                        if users and not force:
+                            raise ValueError(
+                                f"覆盖 {dst.name} 将影响 {len(users)} 个档案: "
+                                f"{', '.join(users)}"
+                                f" (确认后加 force/--force)")
+                        if users:
+                            _log(progress,
+                                 f"{kind}: 覆盖 {dst.name}, 将影响 "
+                                 f"{len(users)} 个档案 ({', '.join(users)})")
+                        else:
+                            _log(progress, f"{kind}: 覆盖 {dst.name}")
                 placements[kind] = dst
 
             # 两段式提交 (批次62): 先把权重/ref/meta 全部写成临时文件并校验,
@@ -272,7 +326,7 @@ def _import_voice(pkg: Path, name: Optional[str], overwrite: bool,
             commits: list[tuple[str, Path, Path]] = []   # (kind, tmp, final)
             for kind, rel in plan.items():
                 dst = placements[kind]
-                if dst.exists() and not overwrite:
+                if kind in reuse:
                     continue   # 同 hash 复用 (前置预检已保证字节一致)
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 tmp = dst.with_name(dst.name + ".adrimport.tmp")

@@ -66,6 +66,77 @@ def _validation_message(errors: list) -> str:
     return text
 
 
+class _BodyTooLarge(BaseException):
+    """ASGI receive 累计超限信号 (批次88 / SEC-06)。
+
+    继承 BaseException 而非 Exception: FastAPI 的 body 解析会用
+    ``except Exception`` 兜底转成 400 "error parsing the body", 普通异常
+    会被吞掉; BaseException 才能穿透到本中间件改写为 413。
+    """
+
+
+class BodySizeLimitMiddleware:
+    """非 multipart 请求体上限 (批次88 / SEC-06)。
+
+    ``await request.json()`` 在参数校验之前完成, 而 Starlette 本身没有 body
+    上限 — 单个数百 MB 的 JSON 即可打爆内存。这里在 ASGI receive 层:
+    1. Content-Length 已声明且超限 → 直接 413 (不读 body);
+    2. 无 Content-Length (chunked) → 逐块累计, 越限抛 ``_BodyTooLarge``。
+
+    multipart 上传 (档案包) 由 ``native._CappedImportRoute`` 按
+    ``ADR_PROFILE_IMPORT_MAX_MB`` 单独限制, 本中间件放行。
+    """
+
+    def __init__(self, app, max_bytes: int):
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        headers = {k.lower(): v for k, v in (scope.get("headers") or [])}
+        ctype = headers.get(b"content-type", b"").lower()
+        if b"multipart/form-data" in ctype:
+            return await self.app(scope, receive, send)
+
+        declared = headers.get(b"content-length", b"")
+        if declared.isdigit() and int(declared) > self.max_bytes:
+            return await self._reject(send)
+
+        seen = 0
+        started = False
+
+        async def _limited_receive():
+            nonlocal seen
+            msg = await receive()
+            if msg["type"] == "http.request":
+                seen += len(msg.get("body", b""))
+                if seen > self.max_bytes:
+                    raise _BodyTooLarge
+            return msg
+
+        async def _send(message):
+            nonlocal started
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+
+        try:
+            await self.app(scope, _limited_receive, _send)
+        except _BodyTooLarge:
+            if not started:   # 响应已开始 (极少见) 时无法再改状态码
+                await self._reject(send)
+
+    async def _reject(self, send):
+        resp = JSONResponse(
+            status_code=413,
+            content={"detail": "request body too large",
+                     "message": f"请求体超过 {self.max_bytes // (1 << 20)}MB 上限 "
+                                f"(ADR_MAX_BODY_MB)",
+                     "code": "payload_too_large"})
+        await resp({"type": "http"}, None, send)
+
+
 def create_app(engine=None) -> FastAPI:
     default_profile = settings.default_profile()
 
@@ -84,6 +155,10 @@ def create_app(engine=None) -> FastAPI:
         description="ADR 低资源声音克隆 — GSV api_v2 兼容层 + ADR 原生档案 API",
         lifespan=_lifespan,
     )
+    # 批次88 (SEC-06): 非 multipart 请求体上限, 最先加 = 最内层 —
+    # CORS/守卫在外层, 413 也带 CORS 头; 大 body 不会先被读进内存。
+    app.add_middleware(BodySizeLimitMiddleware,
+                       max_bytes=settings.max_body_bytes())
     # 鉴权 (批次12): 先加 = 内层; 未设 ADR_TTS_API_KEY 时完全放行。
     # CORS 需在外层: 预检 OPTIONS 免 key, 401 响应也带 CORS 头 (浏览器可读)。
     api_keys = settings.api_keys()

@@ -996,10 +996,11 @@ $("pImportFile").onchange = async () => {
   const f = $("pImportFile").files[0];
   $("pImportFile").value = "";
   if (!f) return;
-  const doImport = async (overwrite) => {
+  const doImport = async (overwrite, force) => {
     const fd = new FormData();
     fd.append("package", f);
     if (overwrite) fd.append("overwrite", "true");
+    if (force) fd.append("force", "true");
     const r = await fetch(api("/api/adr/v1/profiles/import"),
                           { method: "POST", body: fd });
     let j = {};
@@ -1012,6 +1013,11 @@ $("pImportFile").onchange = async () => {
     if (!ok && (j.message || "").includes("档案已存在")
         && confirm(j.message + "\n" + I.t("pro.confirm_overwrite"))) {
       ({ ok, j } = await doImport(true));
+    }
+    // 批次88 (SEC-05): 权重被其它档案共用 → 二次确认才带 force 重试
+    if (!ok && (j.message || "").includes("将影响")
+        && confirm(j.message + "\n" + I.t("pro.confirm_shared_weights"))) {
+      ({ ok, j } = await doImport(true, true));
     }
     if (!ok) { toast(j.message || I.t("pro.import_fail"), true); return; }
     toast(I.t("pro.import_ok") + (j.imported && j.imported.name || ""));

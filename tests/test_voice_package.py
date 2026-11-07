@@ -103,6 +103,56 @@ def test_import_conflict_rejected_then_overwrite(env):
     assert "冲突音" in vl.list_voices()
 
 
+def _repack_weight(tmp_path, pkg, member: str, new_bytes: bytes):
+    """重打包权重成员 (同步更新 manifest integrity), 模拟同名不同内容。"""
+    import hashlib
+
+    with zipfile.ZipFile(pkg) as zf:
+        manifest = json.loads(zf.read("manifest.json"))
+        manifest["integrity"][member] = hashlib.sha256(new_bytes).hexdigest()
+        items = [(i.filename, zf.read(i.filename)) for i in zf.infolist()]
+    out = tmp_path / "modified.adrvoice"
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, data in items:
+            if name == "manifest.json":
+                data = json.dumps(manifest, ensure_ascii=False).encode("utf-8")
+            elif name == member:
+                data = new_bytes
+            zf.writestr(name, data)
+    return out
+
+
+def test_import_shared_weight_needs_force(env):
+    """批次88 (SEC-05): 覆盖他人引用的权重须 force; 同 hash 则静默复用。"""
+    tmp, _ = env
+    _mk_profile(tmp, "甲")
+    _mk_profile(tmp, "乙")
+    # 乙 借用 甲的 vits 权重 (同一文件被两个档案引用)
+    meta_path = tmp / "voices" / "乙" / "meta.json"
+    meta = json.loads(meta_path.read_text("utf-8"))
+    meta["vits_weights"] = str(tmp / "gsv" / "SoVITS_weights_v2" / "甲.pth")
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+
+    pkg = vp.export_voice("甲", str(tmp / "a.adrvoice"))
+    old = (tmp / "gsv" / "SoVITS_weights_v2" / "甲.pth").read_bytes()
+
+    # 同 hash: 直接复用, 无需 force, 也不改字节
+    vp.import_voice(str(pkg), overwrite=True)
+    assert (tmp / "gsv" / "SoVITS_weights_v2" / "甲.pth").read_bytes() == old
+
+    with zipfile.ZipFile(pkg) as zf:
+        member = json.loads(zf.read("manifest.json"))["weights"]["vits"]
+    mod = _repack_weight(tmp, pkg, member, b"NEWV" * 128)
+
+    with pytest.raises(ValueError, match="将影响 1 个档案"):
+        vp.import_voice(str(mod), overwrite=True)
+    assert (tmp / "gsv" / "SoVITS_weights_v2" / "甲.pth").read_bytes() == old
+
+    vp.import_voice(str(mod), overwrite=True, force=True)
+    assert (tmp / "gsv" / "SoVITS_weights_v2" / "甲.pth").read_bytes() == b"NEWV" * 128
+    assert vl.load_voice("乙")["vits_weights"].endswith("甲.pth")   # 引用链保留
+
+
 def test_import_name_override(env):
     """--name 换名导入。"""
     tmp, _ = env

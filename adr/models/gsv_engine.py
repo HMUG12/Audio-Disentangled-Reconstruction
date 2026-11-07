@@ -884,6 +884,7 @@ class GSVEngine:
             return
         vw = str(Path(vits_weights).resolve()) if vits_weights else None
         tw = str(Path(t2s_weights).resolve()) if t2s_weights else None
+        changed = False
         with self._gsv_context():
             if vw:
                 vstamp = weights_stamp(vw)
@@ -893,12 +894,18 @@ class GSVEngine:
                     validate_weights_file(vw)
                     self._tts.init_vits_weights(vw)
                     self._loaded["vits"] = vstamp
+                    changed = True
             if tw:
                 tstamp = weights_stamp(tw)
                 if self._loaded.get("t2s") != tstamp:
                     validate_weights_file(tw)
                     self._tts.init_t2s_weights(tw)
                     self._loaded["t2s"] = tstamp
+                    changed = True
+        if changed:
+            # 批次88 (CACHE-01): 换权后段缓存里的 PCM 已属于上一套权重;
+            # 旧实现只清 tts_cache, 段缓存默认 128 条/256MB 会继续回放旧人声。
+            _seg_cache_clear()
 
     @staticmethod
     def _sanitize_text(text: str) -> str:
@@ -1043,6 +1050,11 @@ class GSVEngine:
                             # 批次85 (#18): 参考音频版本指纹 — 同名档案重建
                             # ref.wav 后 mtime/size 变化, 不再回放旧缓存人声
                             ref_stamp = weights_stamp(ref_audio)
+                            # 批次88 (CACHE-01): 权重同样带指纹入 key
+                            t2s_stamp = (weights_stamp(t2s_weights)
+                                         if t2s_weights else ())
+                            vits_stamp = (weights_stamp(vits_weights)
+                                          if vits_weights else ())
                             for i, seg in enumerate(segments):
                                 if cancel.is_set():   # 断连: 与旧语义一致, 探针不计样本
                                     raise GeneratorExit
@@ -1058,7 +1070,9 @@ class GSVEngine:
                                         prompt_lang, split_method, top_k, top_p,
                                         temperature, speed_factor, fi,
                                         t2s_weights, vits_weights,
-                                        ref_stamp, seg_seed)
+                                        ref_stamp, seg_seed,
+                                        t2s_stamp=t2s_stamp,
+                                        vits_stamp=vits_stamp)
                                     hit = _seg_cache_get(ckey)
                                     if hit is not None:
                                         pcm, hit_sr = hit
@@ -1265,8 +1279,13 @@ def is_loading() -> bool:
 
 
 def is_ready() -> bool:
-    """引擎是否已就绪可合成 (_tts 权重已加载, 不触发加载)。"""
-    return _ENGINE is not None and _ENGINE._tts is not None
+    """引擎是否已就绪可合成 (_tts 权重已加载, 不触发加载)。
+
+    批次88 (BUG-05): 与实例属性 `is_ready` 对齐, 降级标记置位后不再报 ready,
+    否则 CON-01 卡死后 /health 与桌面壳探活仍持续放流量进来。
+    """
+    return (_ENGINE is not None and _ENGINE._tts is not None
+            and not _ENGINE._stalled)
 
 
 def stage() -> str:

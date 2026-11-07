@@ -516,6 +516,50 @@ def test_s2_ws_same_origin_allowed(open_client):
         pass
 
 
+# ─── 批次88 (SEC-06): 非 multipart 请求体上限 ───
+
+def _limit_client(engine, monkeypatch):
+    monkeypatch.delenv("ADR_TTS_API_KEY", raising=False)
+    monkeypatch.setenv("ADR_MAX_BODY_MB", "1")
+    return TestClient(create_app(engine=engine))
+
+
+def test_body_limit_declared_413(engine, monkeypatch):
+    """Content-Length 预检: 超限直接 413, 不进业务也不触达引擎。"""
+    c = _limit_client(engine, monkeypatch)
+    big = "a" * (1024 * 1024 + 100)
+    r = c.post("/api/v2/tts", json={"text": big, "ref_audio_path": "a.wav"})
+    assert r.status_code == 413
+    assert r.json()["code"] == "payload_too_large"
+    assert engine.synth_calls == []
+
+
+def test_body_limit_chunked_413(engine, monkeypatch):
+    """无 Content-Length (chunked) → 逐块累计越限 413。"""
+    c = _limit_client(engine, monkeypatch)
+
+    def _chunks():
+        yield b'{"text": "'
+        yield b"a" * (1024 * 1024 + 100)
+        yield b'"}'
+
+    r = c.post("/api/v2/tts", content=_chunks(),
+               headers={"content-type": "application/json"})
+    assert r.status_code == 413
+    assert engine.synth_calls == []
+
+
+def test_body_limit_skips_multipart(engine, monkeypatch):
+    """multipart 由导入路由自身上限管控, 中间件不拦。"""
+    c = _limit_client(engine, monkeypatch)
+    body = (b'--b\r\nContent-Disposition: form-data; name="f"; '
+            b'filename="a.bin"\r\n\r\n'
+            + b"x" * (1024 * 1024 + 100) + b"\r\n--b--\r\n")
+    r = c.post("/api/v2/set_gpt_weights", content=body,
+               headers={"content-type": "multipart/form-data; boundary=b"})
+    assert r.status_code != 413
+
+
 def test_s2_env_whitelists(engine, monkeypatch):
     monkeypatch.delenv("ADR_TTS_API_KEY", raising=False)
     monkeypatch.setenv("ADR_CORS_ORIGINS", "https://app.example")

@@ -6,6 +6,7 @@ import os
 import struct
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Optional, Union
 
@@ -297,6 +298,29 @@ def compute_mel(
     return mel
 
 
+@lru_cache(maxsize=8)
+def _mel_basis(sample_rate: int, n_fft: int, n_mels: int,
+               fmin: float, fmax: float, device: str):
+    """mel 滤波器组缓存 (批次88 / PERF-03)。
+
+    训练数据构建对每个 slice 调一次 compute_mel_bigvgan, 参数恒定;
+    旧实现每次都重算 slaney 滤波器组并做一次 H2D 拷贝。按
+    (sr, n_fft, n_mels, fmin, fmax, device) 缓存, 同参数零重建。
+    """
+    import librosa
+
+    return torch.from_numpy(librosa.filters.mel(
+        sr=sample_rate, n_fft=n_fft, n_mels=n_mels,
+        fmin=fmin, fmax=fmax,
+    )).float().to(device)
+
+
+@lru_cache(maxsize=4)
+def _hann_window(win_length: int, device: str):
+    """Hann 窗缓存 (批次88 / PERF-03), 键含 device。"""
+    return torch.hann_window(win_length).to(device)
+
+
 def compute_mel_bigvgan(
     waveform: np.ndarray,
     sample_rate: int = 22050,
@@ -319,8 +343,6 @@ def compute_mel_bigvgan(
 
     训练数据 (npz) 与推理必须用本函数, 否则训练/声码器域错位。
     """
-    import librosa
-
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -329,11 +351,8 @@ def compute_mel_bigvgan(
         y = y.unsqueeze(0)          # (1, T)
     y = y.to(device)
 
-    mel_basis = torch.from_numpy(librosa.filters.mel(
-        sr=sample_rate, n_fft=n_fft, n_mels=n_mels,
-        fmin=fmin, fmax=fmax,
-    )).float().to(device)
-    hann = torch.hann_window(win_length).to(device)
+    mel_basis = _mel_basis(sample_rate, n_fft, n_mels, fmin, fmax, device)
+    hann = _hann_window(win_length, device)
 
     padding = (n_fft - hop_length) // 2
     y = torch.nn.functional.pad(y.unsqueeze(1), (padding, padding),

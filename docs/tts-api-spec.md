@@ -68,7 +68,7 @@ python -m adr.server -p 9880     # 自定义端口
 | `0` / `false` | 非流式, 返回完整音频 |
 | `1` / `true` | 分段流: 按句切分逐块返回 (ADR 流式引擎的本征模式) |
 | `2` | 真流式 (ADR 中与 1 行为一致) |
-| `3` | 真流式+定长块 (ADR 中与 1 行为一致) |
+| `3` | **mode 2 的别名** — 官方是"真流式+定长块", ADR 不实现定长切块, 按句切块行为同 2 |
 | 其他 | `400 {"message": "the value of streaming_mode must be ..."}` |
 
 注: JSON `true` (bool) 在 Python 中 `True == 1`, 自然落分支 1 — 与
@@ -82,6 +82,7 @@ GSV 官方 api_v2 行为一致。
 ```
 
 客户端收到后顺序写入同一个 wav 文件 (或直接送播放器) 即可。
+
 Python 拼接示例:
 
 ```python
@@ -97,6 +98,11 @@ with open("out.wav", "wb") as f:
     for chunk in r.iter_content(chunk_size=4096):
         f.write(chunk)              # 头 + 裸 PCM 顺序落盘即是合法 wav
 ```
+
+> **非 wav 格式的流式限制 (批次88 / CON-02)**: 上述"头 + 裸块"契约只在
+> `media_type=wav` 时成立。请求 `ogg` / `aac` / `raw` 等格式时, 当前实现是
+> **每块各自独立编码成完整容器**, 顺序拼接不等于一个合法单流; 需要边收边播
+> 或落盘成单文件时请用 `wav`, 由客户端自行转码。
 
 ### 2.4 错误格式
 
@@ -235,7 +241,7 @@ meta.json  {"prompt_text", "t2s_weights", "vits_weights",
 | 项 | 官方 api_v2 | ADR | 影响 |
 |---|---|---|---|
 | 忽略参数表 (§2.1) | 生效 | 接受但忽略 | 客户端无感; 批处理/步数类参数无效 |
-| `streaming_mode=3` 定长块 | 定长切片 | 按句切块 | 消费方按块播放无差异 |
+| `streaming_mode=3` 定长块 | 定长切片 | **mode 2 别名, 按句切块** | 消费方按块播放无差异; 需要定长块请自行切分 |
 | 语种校验 | 严格枚举 | 宽松 (透传引擎) | 错语种在引擎层报错 (400 tts failed) |
 | v3 task 队列 + 双 WebSocket (`/tts/stream*`) | 有 (api_neko v3 面) | **未实现** | 需要队列/双向流的消费方请用 api_v2 轮询/流式 |
 | 权重切换 | 全局重载 | 全局预热, 同路径幂等 | 更快; 语义一致 |

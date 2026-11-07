@@ -85,6 +85,24 @@ def _oom():
 BODY = {"text": "hi", "ref_audio_path": "a.wav"}
 
 
+# ─── 批次88 (PERF-04): v3 文本累积器 ───
+
+def test_text_buffer_accumulates_and_splits():
+    """list 累积 + 惰性 join 后语义不变: 整句切分/残留/flush。"""
+    from adr.server.v3_compat import _TextBuffer
+
+    buf = _TextBuffer()
+    for piece in ["你", "好。", "世界", "！", "尾巴"]:
+        buf.append(piece)
+    assert buf.content == "你好。世界！尾巴"
+    assert buf.extract_sentences() == ["你好。", "世界！"]
+    assert buf.content == "尾巴"
+    assert buf.extract_sentences() == []      # 无标点 → 不提前切
+    buf.append("结束。")
+    assert buf.flush() == "尾巴结束。"
+    assert buf.content == ""
+
+
 # ─── #23 / #25 服务端日志 (wire 不变) ───
 
 def test_v2_failure_logs_traceback_keeps_500(client, engine, caplog):
@@ -382,14 +400,16 @@ def test_import_under_cap_still_works(client, monkeypatch):
     from adr.models import gsv_engine, voice_package
     monkeypatch.setenv("ADR_PROFILE_IMPORT_MAX_MB", "1")
     got = []
-    monkeypatch.setattr(voice_package, "import_voice",
-                        lambda tmp, name, ow: got.append((name, ow)) or {"name": "v"})
+    monkeypatch.setattr(
+        voice_package, "import_voice",
+        lambda tmp, name, ow, progress=None, force=False:
+            got.append((name, ow, force)) or {"name": "v"})
     monkeypatch.setattr(gsv_engine, "try_schedule_profile", lambda: None)
     r = client.post("/api/adr/v1/profiles/import",
                     files={"package": ("x.adrvoice", b"PK" * 1000)},
                     data={"name": "v", "overwrite": "true"})
     assert r.status_code == 200 and r.json() == {"imported": {"name": "v"}}
-    assert got == [("v", True)]
+    assert got == [("v", True, False)]
 
 
 # ─── P0-2 OpenAI 兼容层与官方 SDK 对齐 ───

@@ -216,6 +216,62 @@ def test_seg_cache_head_seed_first_seg_only(eng):
     assert len(tts.calls) == 3                       # 仅首段重新前向
 
 
+def test_seg_cache_key_includes_weights_stamp():
+    """批次88 (CACHE-01): 权重 (路径, mtime, size) 指纹入段 key。"""
+    base = dict(seg="文本。", ref_audio="r.wav", prompt_text="",
+                text_lang="zh", prompt_lang="zh", split_method="cut1",
+                top_k=15, top_p=1.0, temperature=1.0, speed_factor=1.0,
+                fragment_interval=0.3, t2s_weights="t.ckpt",
+                vits_weights="v.pth")
+    k0 = gsv_runtime._seg_cache_key(**base)
+    same = gsv_runtime._seg_cache_key(
+        **base, t2s_stamp=("t.ckpt", 1, 10), vits_stamp=("v.pth", 2, 20))
+    assert k0 != same
+    # 同指纹稳定命中
+    assert gsv_runtime._seg_cache_key(
+        **base, t2s_stamp=("t.ckpt", 1, 10), vits_stamp=("v.pth", 2, 20)
+    ) == same
+    # 同路径换权重 (mtime/size 变化) → key 必须变化
+    assert gsv_runtime._seg_cache_key(
+        **base, t2s_stamp=("t.ckpt", 1, 10), vits_stamp=("v.pth", 3, 20)
+    ) != same
+    assert gsv_runtime._seg_cache_key(
+        **base, t2s_stamp=("t.ckpt", 2, 10), vits_stamp=("v.pth", 2, 20)
+    ) != same
+
+
+def test_ensure_weights_change_clears_seg_cache(eng, monkeypatch, tmp_path):
+    """批次88 (CACHE-01): 换权后段缓存清空; 同指纹幂等时不误清。"""
+    from adr.models import gsv_runtime as gr
+
+    calls = []
+
+    class _TTS:
+        def init_vits_weights(self, p):
+            calls.append(("vits", p))
+
+        def init_t2s_weights(self, p):
+            calls.append(("t2s", p))
+
+    eng._tts = _TTS()
+    monkeypatch.setattr(eng, "_ensure_weights",
+                        GSVEngine._ensure_weights.__get__(eng))
+    monkeypatch.setattr(gsv_engine, "validate_weights_file", lambda p: None)
+    w = tmp_path / "v.pth"
+    w.write_bytes(b"v1")
+
+    gr._seg_cache_put("k", b"\x00\x00" * 8, 32000)
+    assert gr._SEG_CACHE
+    eng._ensure_weights(str(w), None)
+    assert calls == [("vits", str(w.resolve()))]
+    assert not gr._SEG_CACHE               # 换权 → 旧 PCM 必须作废
+
+    gr._seg_cache_put("k2", b"\x00\x00" * 8, 32000)
+    eng._ensure_weights(str(w), None)      # 同指纹 → 不重载、不清缓存
+    assert calls == [("vits", str(w.resolve()))]
+    assert "k2" in gr._SEG_CACHE
+
+
 def test_seg_cache_put_same_key_no_double_count(monkeypatch):
     """批次85 (#26): 同 key 重复写入按最新值计字节, 不重复累加。"""
     monkeypatch.setenv("ADR_SEG_CACHE_MAX", "10")

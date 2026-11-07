@@ -4,8 +4,9 @@
 每次都跑完整 GSV 前向 (~数秒) 是纯浪费。这里在 v2 非流式路径上
 加一层 LRU:
 
-- key: 请求参数指纹 (sha1); seed 不入 key — 播报一致性优先,
-  同文本复用同一次合成, 避免"重试一次换一个人声"的观感
+- key: 请求参数指纹 (sha1)。批次88 (API-02): seed 入 key — 与段缓存
+  (``_seg_cache_key``) 语义对齐; 显式 seed 可复现、不同 seed 不再互相
+  命中。默认 seed=-1 的播报场景 key 不变, 同文本仍复用同一次合成。
 - 上限: 32 条 / 256MB (ADR_TTS_CACHE_MAX / ADR_TTS_CACHE_MB 可调)
 - 开关: ADR_TTS_CACHE=0 关闭 (默认开)
 - 流式响应不缓存 (分块字节契约, 复用价值低)
@@ -39,15 +40,15 @@ from adr.core import settings
 # 缓存格式版本 (批次69): 音频编码参数 (pack_audio 码率/重采样) 或 _KEY_FIELDS
 # 集合变化时递增 — make_key 参与哈希, 且磁盘文件名带 v<版本>- 前缀,
 # 启动扫描丢弃旧版本条目, 避免升级后仍命中旧格式音频。
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 _PREFIX = f"v{CACHE_VERSION}-"
 
-# 参与 key 的请求字段 (seed 有意排除, 见模块 docstring)
+# 参与 key 的请求字段 (批次88: seed 入 key, 见模块 docstring)
 # fragment_interval 烤进输出音频 (句末静音长度), 必须参与 key (批次33)
 _KEY_FIELDS = (
     "text", "ref_audio_path", "prompt_text", "text_lang", "prompt_lang",
     "top_k", "top_p", "temperature", "speed_factor", "fragment_interval",
-    "t2s_weights", "vits_weights", "media_type", "text_split_method",
+    "t2s_weights", "vits_weights", "media_type", "text_split_method", "seed",
 )
 
 _lock = threading.Lock()        # 只保护下面三个结构, 不做任何磁盘 IO (批次79)

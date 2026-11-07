@@ -154,6 +154,24 @@ def test_stalled_worker_marks_engine_for_rebuild(eng, monkeypatch):
     assert eng.is_ready is False
 
 
+def test_module_is_ready_respects_stalled(monkeypatch):
+    """批次88 (BUG-05): 模块级 is_ready 不再把降级引擎报成就绪。"""
+
+    class _Fake:
+        def __init__(self, stalled):
+            self._tts = object()
+            self._stalled = stalled
+
+    monkeypatch.setattr(gsv_engine, "_ENGINE", _Fake(True))
+    assert gsv_engine.is_ready() is False
+
+    monkeypatch.setattr(gsv_engine, "_ENGINE", _Fake(False))
+    assert gsv_engine.is_ready() is True
+
+    monkeypatch.setattr(gsv_engine, "_ENGINE", None)
+    assert gsv_engine.is_ready() is False
+
+
 def test_client_disconnect_stops_worker(eng):
     eng._tts = FakeTTS(blocks=50, delay=0.01)
     gen = eng.synthesize_stream("你好世界。", ref_audio="ref.wav")

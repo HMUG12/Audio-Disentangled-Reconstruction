@@ -115,6 +115,16 @@ def default_profile() -> str | None:
     return os.environ.get("ADR_TTS_DEFAULT_PROFILE") or None
 
 
+def max_body_bytes() -> int:
+    """ADR_MAX_BODY_MB — 非 multipart 请求体上限 (批次88 / SEC-06, 默认 16MB)。
+
+    JSON / 表单 / 纯文本在 ASGI receive 层累计计数, 超限即 413;
+    multipart 上传 (档案包) 走自己的 ``ADR_PROFILE_IMPORT_MAX_MB`` 上限,
+    不受本值约束。非数字 / 小于 1 回落默认。
+    """
+    return _pos_int("ADR_MAX_BODY_MB", 16) * 1024 * 1024
+
+
 # ===== TTS 结果缓存 (server/tts_cache.py) =====
 def tts_cache_enabled() -> bool:
     """ADR_TTS_CACHE=0 关闭, 其余 (含未设置) 开。"""

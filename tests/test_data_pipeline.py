@@ -466,3 +466,99 @@ def test_pipeline_mel_failure_skips_sample(tmp_path, monkeypatch):
         assert all(e.startswith("Mel slice") for e in result.errors)
     finally:
         Path(wav_path).unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# 批次88: mel 帧格单源 (DATA-01) + F0 对齐 mel 帧格 (DATA-02) + mel 缓存复用
+# ---------------------------------------------------------------------------
+
+
+def test_align_f0_to_mel_resamples_by_frame_center():
+    """F0 帧中心 t*f0_hop → mel 帧中心 (i+0.5)*mel_hop 线性重采样。"""
+    from adr.data.pipeline import _align_f0_to_mel
+
+    f0 = np.array([100.0, 200.0, 300.0], dtype=np.float32)
+    # src 帧中心 [0, 160, 320]; dst 帧中心 [128, 384, 640]
+    out = _align_f0_to_mel(f0, n_mel_frames=3, mel_hop=256, f0_hop=160)
+    assert out.shape == (3,)
+    assert out[0] == pytest.approx(180.0)          # 100 + 128/160*100
+    assert out[1] == pytest.approx(300.0)          # 超右端 → 末端值钳制
+    assert out[2] == pytest.approx(300.0)
+
+    # 同 hop: 帧中心差半帧 → 仅平移半帧, 长度不变
+    # dst = [128, 384, 640, 896] → [1.5, 2.5, 3.5, 4.0] (末端钳制)
+    same = _align_f0_to_mel(np.array([1.0, 2.0, 3.0, 4.0], np.float32),
+                            n_mel_frames=4, mel_hop=256, f0_hop=256)
+    assert same.shape == (4,)
+    np.testing.assert_allclose(same, [1.5, 2.5, 3.5, 4.0], rtol=1e-6)
+
+
+def test_pipeline_config_hop_is_single_source(tmp_path, monkeypatch):
+    """mel 帧格取 config.hop_length, 不受 F0 hop 影响 (DATA-01)。"""
+    import adr.data.pipeline as pipeline_mod
+
+    seen = {}
+    real = pipeline_mod.compute_mel_bigvgan
+
+    def _spy(waveform, **kw):
+        seen.update(kw)
+        return real(waveform, **kw)
+
+    monkeypatch.setattr(pipeline_mod, "compute_mel_bigvgan", _spy)
+    pipeline = _make_mock_pipeline(
+        str(tmp_path), enable_f0=False, enable_mel=True)
+    pipeline.config.hop_length = 128
+    pipeline.config.f0.hop_length = 320      # 旧实现会误用 320
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        wav_path = f.name
+    try:
+        make_synthetic_wav(wav_path, duration_sec=8.0)
+        pipeline.run(wav_path, output_dir=tmp_path / "out_hop")
+        assert seen["hop_length"] == 128
+        assert seen["n_mels"] == 80
+    finally:
+        Path(wav_path).unlink(missing_ok=True)
+
+
+def test_pipeline_aligns_f0_to_mel_frames(tmp_path):
+    """F0 长度与 mel 帧数一致 (DATA-02), hop 不同不再依赖下游截断。"""
+    pipeline = _make_mock_pipeline(
+        str(tmp_path), enable_f0=True, enable_mel=True)
+    pipeline.config.hop_length = 256
+    pipeline.config.f0.hop_length = 320
+    pipeline._f0 = lambda w, sample_rate=None: np.full(97, 220.0, np.float32)
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        wav_path = f.name
+    try:
+        make_synthetic_wav(wav_path, duration_sec=8.0)
+        result = pipeline.run(wav_path, output_dir=tmp_path / "out_align")
+        assert result.samples
+        for s in result.samples:
+            assert s.mel is not None
+            assert s.f0.shape == (s.mel.shape[-1],)
+            np.testing.assert_allclose(s.f0, 220.0, atol=1e-3)
+    finally:
+        Path(wav_path).unlink(missing_ok=True)
+
+
+def test_compute_mel_reuses_basis_and_window():
+    """同参数重复调用复用 mel 滤波器组/Hann 窗 (PERF-03)。"""
+    from adr.utils import audio as audio_mod
+
+    audio_mod._mel_basis.cache_clear()
+    audio_mod._hann_window.cache_clear()
+    rng = np.random.default_rng(0)
+    x = (rng.standard_normal(16000) * 0.1).astype(np.float32)
+
+    audio_mod.compute_mel_bigvgan(x, sample_rate=22050, n_mels=80,
+                                  hop_length=256)
+    first = audio_mod._mel_basis.cache_info()
+    audio_mod.compute_mel_bigvgan(x, sample_rate=22050, n_mels=80,
+                                  hop_length=256)
+    second = audio_mod._mel_basis.cache_info()
+
+    assert first.misses == 1 and second.misses == 1     # 只构造一次
+    assert second.hits == 1
+    assert audio_mod._hann_window.cache_info().hits >= 1

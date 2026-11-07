@@ -26,6 +26,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -598,7 +599,9 @@ async def train_upload(file: UploadFile = File(...),
         raise HTTPException(
             415, f"不支持的格式 {ext}, 可用: {'/'.join(sorted(_UPLOAD_EXT))}")
     stem = re.sub(r"[^\w\-]+", "_", orig.stem)[:40] or "audio"
-    fname = f"{datetime.now():%Y%m%d_%H%M%S}_{stem}{ext}"
+    # 批次88 (BUG-03): 时间戳只到秒, 同秒同名上传会 truncate 覆盖前一个文件。
+    # 加随机后缀后每个请求独占路径, 失败回滚也只删自己那一个。
+    fname = f"{datetime.now():%Y%m%d_%H%M%S}_{stem}_{uuid.uuid4().hex[:8]}{ext}"
     dest = UPLOAD_DIR / fname
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     size = 0

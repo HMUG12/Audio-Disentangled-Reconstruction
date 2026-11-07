@@ -208,7 +208,10 @@ def voice_export(name: str, output: str | None) -> None:
 @click.option("--name", "-n", default=None,
               help="导入后的音色名 (默认用包内档案名)")
 @click.option("--overwrite", is_flag=True, help="覆盖同名档案/权重文件")
-def voice_import(package: str, name: str | None, overwrite: bool) -> None:
+@click.option("--force", is_flag=True,
+              help="允许覆盖其它档案正在共用的权重 (批次88 / SEC-05)")
+def voice_import(package: str, name: str | None, overwrite: bool,
+                 force: bool) -> None:
     """导入 .adrvoice 音色档案包。"""
     from adr.models.voice_package import import_voice
 
@@ -216,7 +219,8 @@ def voice_import(package: str, name: str | None, overwrite: bool) -> None:
         click.echo(f"  {msg}")
 
     try:
-        r = import_voice(package, name=name, overwrite=overwrite, progress=_log)
+        r = import_voice(package, name=name, overwrite=overwrite,
+                         progress=_log, force=force)
     except ValueError as e:
         click.echo(f"✗ {e}")
         sys.exit(1)
