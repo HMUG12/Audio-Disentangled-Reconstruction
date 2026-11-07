@@ -26,7 +26,7 @@
 - **但看门狗能在锁死状态下真的退出进程**：`_watchdog_loop`（`gsv_engine.py:1424-1445`）是独立 daemon 线程，只做 `sleep(15s)` + 无锁读 `_degraded_since` + `on_exit()` + `os._exit(75)`，**不抢引擎锁、不进 `_CHDIR_LOCK`、不占 anyio 线程池**；`on_exit` 的 `_stop_proc` 等待均有上界（`console.py:305-317`）。
 - **容器/桌面可被外部拉起**：compose `restart: unless-stopped`（`docker-compose.yml:33`）；桌面壳 `supervise` 轮询重启（`lib.rs:1345-1405`，看门狗 300s 触发时进程存活已远超 `STABLE_UPTIME=60s`，失败计数会重置）。
 - **裸跑不自动恢复**：`python -m adr.server` 无守护，退出后不回来；`ADR_ENGINE_WATCHDOG_SEC=0` 可关闭看门狗（约定 1）。
-- **未覆盖前提（残余 P2）**：看门狗触发源只有 `_mark_stalled()`（流式 idle 超时，`gsv_engine.py:1230`）。**非流式 solo（默认路径）与合批路径的 `_tts.run` 卡死不会置 `_degraded_since`**，后续请求只是 55s 锁超时 503，`/readyz` 仍 200、看门狗不触发——这条路径上即便容器/桌面也不会自动重启。记为 R3-CON-02。
+- **未覆盖前提（残余 P2，批次 94 已闭环）**：看门狗触发源原先只有 `_mark_stalled()`（流式 idle 超时，`gsv_engine.py:1230`）。**非流式 solo（默认路径）与合批路径的 `_tts.run` 卡死不会置 `_degraded_since`**，后续请求只是 55s 锁超时 503，`/readyz` 仍 200、看门狗不触发——这条路径上即便容器/桌面也不会自动重启。记为 R3-CON-02。批次 94 已补齐（见 3 节 R3-CON-02）。
 
 其余复核要点：SEC-01 慢路径已改 zip 流式中央目录，仅 `data.pkl` 进内存（≤256MB），截头自愈仅 ≤64MB，不再有 2~4 倍文件体积峰值；SEC-03 的 `allow_pickle=True` 回落已删除并新增迁移工具 `scripts/migrate_npz_pickle.py`；SEC-04 镜像已删除 `ENV ADR_ALLOW_UNAUTHENTICATED=1`，改由 compose 显式声明（仅绑回环），`docker run -p` 会按作者意图拒绝启动。三条均转为已修，限值/破坏性变更为有意设计（5.1-3/4/5）。
 
@@ -40,7 +40,7 @@
 | P2 | R3-OBS-01 | 健康检查不反映永久降级 | 已修复（部署注意见 5.1-2） |
 | P2 | R3-PACK-01 | 桌面发货运行时（3.13）未被 CI 覆盖 | 已修复 |
 | P3 | R3-PACK-02 | CI 的 torch 未钉版本 | 已修复 |
-| P2 | R3-CON-02 | 非流式/合批卡死不置降级标记，看门狗与 `/readyz` 盲区 | **未修（约定核对中新识别的残余）** |
+| P2 | R3-CON-02 | 非流式/合批卡死不置降级标记，看门狗与 `/readyz` 盲区 | 已修复（批次 94） |
 
 候选 11 条，通过三视角 3/3 的 6 条保留，其余 5 条因影响票或成本票不足已剔除（不列示）；约定核对中新识别 1 条残余（R3-CON-02，同样 3/3）。
 
@@ -294,6 +294,12 @@ while True:
   - 影响 ✓：solo 是默认路径，卡死场景与 CON-01 同源；后果是"自动恢复机制整体失效"，不是单请求失败。
   - 成本 ✓：给 solo/合批的 `_tts.run` 再套一层与流式同款的 idle 监督，或"连续 N 次 `engine_lock_timeout` 即置 `_degraded_since`"，约 10~20 行。
   - **3/3 通过。**
+
+- **批次 94 修复**（按第一条建议，与流式同款 idle 监督）
+  - solo 路径：新增 `GSVEngine._run_nonstream()`，把 `_tts.run()` 放进 daemon 线程，调用线程按 `_NONSTREAM_IDLE_SEC=600s`（与合批 future 等待上限对齐，长文本正常合成不受影响）有界等待；超时 / worker 未退出 → `_mark_stalled(worker, where="非流式")` + `EngineStalledError`（503 可重试），worker 内异常原样转发。
+  - 合批路径：`FuturesTimeout` 分支补 `_mark_stalled(None, where="合批")`，future 永不完成时 `_degraded_since` 立即写入 → `/readyz` 转 503、看门狗按 `ADR_ENGINE_WATCHDOG_SEC` 退出进程交由容器/桌面拉起。
+  - `_mark_stalled(worker, where=...)` 增加来源标签，`stream_stall` 审计事件带 `where` 字段便于定位。
+  - 回归：`tests/test_gsv_stream_threading.py` 新增 4 条 — 非流式卡死有界降级（断言 `_stalled` / `_degraded_since`）、worker 异常透传、正常路径仍返回音频、合批 future 超时置降级。**19 passed**。
 
 ---
 

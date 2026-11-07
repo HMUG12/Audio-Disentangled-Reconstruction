@@ -76,6 +76,12 @@ _STREAM_IDLE_SEC = 120.0
 # 走到 — 整轮拿不到 _engine_lock 时 55s 内已经 503。
 _COALESCE_WAIT_SEC = 600.0
 
+# 批次94 (R3-CON-02): 非流式 solo 合成静默上限。上游 run() 卡死时同步调用会让
+# 请求线程永久停在 run() 里, 既不置降级标记, 看门狗与 /readyz 也全盲。这里把
+# 调用挪到 daemon 线程 + 有界等待; 上限与合批 future 对齐, 长文本正常合成不受
+# 影响 (超过该时长仍无返回视为上游卡死)。
+_NONSTREAM_IDLE_SEC = 600.0
+
 # 批次90 (R3-OBS-01 / CON-01): 进程级看门狗。卡死 worker 同时持有 _lock 与
 # _CHDIR_LOCK, Python 线程无法安全强杀 → 进程内重建永远拿不到锁, 全站永久
 # 503。唯一可靠收口是交给外部守护重启 (Docker restart policy / 桌面壳
@@ -736,7 +742,8 @@ class GSVEngine:
         finally:
             self._lock.release()
 
-    def _mark_stalled(self, worker: Optional[threading.Thread]) -> None:
+    def _mark_stalled(self, worker: Optional[threading.Thread],
+                      where: str = "流式") -> None:
         """批次82 (#1): 流式 worker 超时未退出 — 标记引擎不可复用。
 
         这里不抢 ``_lock`` (卡死的 worker 可能正持着它), 只置降级标记;
@@ -745,15 +752,18 @@ class GSVEngine:
         批次90: 同时记录降级起点, 供进程级看门狗判定"永久不可恢复" —
         ``_drop_stalled_model`` 会提前清掉 ``_stalled``, 但重建会卡在
         ``_lock`` / ``_CHDIR_LOCK`` 上, 计时必须保留到 TTS 真正重建成功。
+
+        批次94 (R3-CON-02): ``where`` 区分卡死路径 (流式 / 非流式 / 合批),
+        非流式路径此前同步调用 run(), 卡死时永远不会走到这里。
         """
         name = worker.name if worker is not None else "?"
         self._stalled = True
         if self._degraded_since is None:
             self._degraded_since = time.monotonic()
         logging.getLogger("adr").error(
-            "[gsv] 流式合成 worker %s 超时未退出, 引擎降级: 下次请求重建模型",
-            name)
-        log_event("stream_stall", worker=name)
+            "[gsv] %s合成 worker %s 超时未退出, 引擎降级: 下次请求重建模型",
+            where, name)
+        log_event("stream_stall", worker=name, where=where)
 
     def _drop_stalled_model(self) -> bool:
         """批次82 (#1): 上次流式卡死 → 丢弃模型与权重指纹, 本次强制重建。
@@ -1229,6 +1239,47 @@ class GSVEngine:
             if worker.is_alive():
                 self._mark_stalled(worker)
 
+    def _run_nonstream(self, inputs: dict) -> tuple:
+        """非流式 ``_tts.run`` 的有界等待 (批次94, R3-CON-02)。
+
+        上游卡死时同步调用会让请求线程永久停在 ``run()`` 里: 既不置降级标记,
+        看门狗与 ``/readyz`` 也无从判定 → 进程只能等外部超时。这里把调用挪到
+        daemon 线程, 调用线程按 ``_NONSTREAM_IDLE_SEC`` 有界等待; 超时即
+        ``_mark_stalled`` 并转 ``EngineStalledError`` (503 可重试)。
+        """
+        import queue as _queue
+
+        q: "_queue.Queue" = _queue.Queue()
+        box: dict = {}
+
+        def _produce():
+            try:
+                sr, audio = None, None
+                for sr, audio in self._tts.run(inputs):
+                    pass  # 非流式只 yield 一次完整音频
+                box["value"] = (sr, audio)
+            except BaseException as e:   # noqa: BLE001 — 转发到调用线程重抛
+                box["error"] = e
+            finally:
+                q.put(None)   # 哨兵: 生产线程已结束
+
+        worker = threading.Thread(target=_produce, name="adr-gsv-nonstream",
+                                  daemon=True)
+        worker.start()
+        try:
+            q.get(timeout=_NONSTREAM_IDLE_SEC)
+        except _queue.Empty:
+            self._mark_stalled(worker, where="非流式")
+            raise EngineStalledError(
+                f"合成上游 {_NONSTREAM_IDLE_SEC:.0f}s 未返回, 已判定卡死")
+        worker.join(timeout=_STREAM_JOIN_SEC)
+        if worker.is_alive():
+            self._mark_stalled(worker, where="非流式")
+            raise EngineStalledError("合成 worker 未正常退出, 已判定卡死")
+        if "error" in box:
+            raise box["error"]
+        return box["value"]
+
     def synthesize(
         self,
         text: str,
@@ -1314,6 +1365,9 @@ class GSVEngine:
                 try:
                     sr, audio = fut.result(timeout=_COALESCE_WAIT_SEC)
                 except FuturesTimeout as e:
+                    # 批次94 (R3-CON-02): future 永不完成 = worker 多半卡在上游
+                    # run() 里; 旧实现只抛 503 不置降级 → 看门狗与 /readyz 全盲
+                    self._mark_stalled(None, where="合批")
                     log_event("coalesce_wait_timeout",
                               wait_s=_COALESCE_WAIT_SEC)
                     raise EngineStalledError(
@@ -1331,9 +1385,9 @@ class GSVEngine:
                         inputs["batch_size"] = bs
                     self._ensure_weights(vits_weights, t2s_weights)
                     with self._gsv_context():
-                        sr, audio = None, None
-                        for sr, audio in self._tts.run(inputs):
-                            pass  # 非流式只 yield 一次完整音频
+                        # 批次94 (R3-CON-02): 去程有界 — 上游 run() 卡死时不再
+                        # 永久占住请求线程, 超时置降级交给看门狗收口
+                        sr, audio = self._run_nonstream(inputs)
             if audio is not None:
                 probe.chunk(len(audio), int(sr))
         if audio is None:

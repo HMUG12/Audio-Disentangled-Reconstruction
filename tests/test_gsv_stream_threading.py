@@ -359,3 +359,72 @@ def test_stream_head_split_cuts_at_sentence_end():
     head, rest = GSVEngine._stream_head_split(text, max_head=14)
     assert head == "今天天气很好。"
     assert rest == text[len(head):]
+
+
+# ---- 批次94 (R3-CON-02): 非流式 run() 卡死也要置降级 ----
+
+def test_nonstream_run_hang_marks_stalled_and_bounded(eng, monkeypatch):
+    """非流式 solo: 上游 run() 永不返回 → 有界返回 503 且置降级标记。
+
+    旧实现同步 ``for sr, audio in self._tts.run(inputs)``, 卡死时请求线程
+    永久挂起, ``_degraded_since`` 永不写入 → 看门狗与 /readyz 全盲。
+    """
+    from adr.core.exceptions import EngineStalledError
+
+    release = threading.Event()
+    eng._tts = NeverYieldsTTS(release)
+    monkeypatch.setattr(gsv_engine, "_NONSTREAM_IDLE_SEC", 0.2)
+    monkeypatch.setattr(gsv_engine, "_STREAM_JOIN_SEC", 0.1)
+
+    t0 = time.monotonic()
+    with pytest.raises(EngineStalledError):
+        eng.synthesize("你好世界。", ref_audio="ref.wav")
+    assert time.monotonic() - t0 < 5
+    assert eng._stalled is True
+    assert eng._degraded_since is not None
+    release.set()
+
+
+def test_nonstream_run_error_propagates(eng):
+    """worker 内异常要原样抛给调用方 (不被降级逻辑吞掉)。"""
+    eng._tts = FakeTTS(fail_at=0)
+    with pytest.raises(RuntimeError, match="boom"):
+        eng.synthesize("你好世界。", ref_audio="ref.wav")
+    assert eng._stalled is False
+
+
+def test_nonstream_run_normal_path_returns_audio(eng):
+    """正常路径不受有界等待影响: 拿到完整音频并解码为 float32。"""
+    eng._tts = FakeTTS(blocks=1)
+    wav, sr = eng.synthesize("你好世界。", ref_audio="ref.wav")
+    assert sr == 32000
+    assert wav.dtype == np.float32
+    assert wav.shape[0] > 0
+    assert not eng._stalled
+
+
+def test_coalesce_wait_timeout_marks_stalled(eng, monkeypatch):
+    """合批 future 永不完成 → 置降级标记 (看门狗 / /readyz 可见), 不只抛 503。"""
+    import contextlib
+    from concurrent.futures import Future
+
+    from adr.core import settings
+    from adr.core.exceptions import EngineStalledError
+
+    monkeypatch.setattr(settings, "t2s_coalesce_enabled", lambda: True)
+    monkeypatch.setattr(settings, "t2s_batch_rng", lambda: True)
+    monkeypatch.setattr(settings, "scheduler_max_concurrency", lambda: 2)
+    monkeypatch.setattr(gsv_engine, "_COALESCE_WAIT_SEC", 0.2)
+    monkeypatch.setattr(eng, "_admit", contextlib.nullcontext)
+
+    class _StuckCoalescer:
+        def submit(self, inputs):
+            return Future()   # 永不完成 = worker 卡在上游 run()
+
+    eng._coalescer = _StuckCoalescer()
+    t0 = time.monotonic()
+    with pytest.raises(EngineStalledError):
+        eng.synthesize("你好世界。", ref_audio="ref.wav")
+    assert time.monotonic() - t0 < 5
+    assert eng._stalled is True
+    assert eng._degraded_since is not None
