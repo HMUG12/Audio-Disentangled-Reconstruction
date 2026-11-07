@@ -416,6 +416,10 @@
         <span>开机自启</span>
         <input type="checkbox" id="st-autostart">
       </div>
+      <div class="st-row">
+        <span>下载限速 (MB/s)</span>
+        <input type="number" id="st-dlrate" min="0" max="1024" step="0.5" placeholder="0 = 不限速">
+      </div>
 
       <div class="st-sec">声音安全</div>
       <div class="st-row">
@@ -620,6 +624,7 @@ async function openSettings() {
     $st("st-datadir-now").textContent = paths?.data_dir || "(默认位置)";
     document.querySelector('input[name="st-hf"][value="' + (cfg.hf_mirror ? "mirror" : "off") + '"]').checked = true;
     $st("st-profile").value = cfg.default_profile || "";
+    $st("st-dlrate").value = cfg.download_rate || "";
     $st("st-port").value = cfg.service_port || "";
     $st("st-numba").value = cfg.numba_cache_dir || "";
     $st("st-cuda").checked = !!cfg.cudagraph;
@@ -669,6 +674,7 @@ async function saveSettings() {
       api_key: $st("st-key").value.trim(),
       data_dir: $st("st-datadir").value.trim(),
       hf_mirror: document.querySelector('input[name="st-hf"]:checked').value === "mirror",
+      download_rate: Math.min(Math.max(parseFloat($st("st-dlrate").value) || 0, 0), 1024),
       autostart: $st("st-autostart").checked,
       default_profile: $st("st-profile").value.trim(),
       service_port: port,

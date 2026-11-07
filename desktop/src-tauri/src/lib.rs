@@ -130,6 +130,9 @@ struct ShellSettings {
     data_dir: Option<String>,
     /// true → HF_ENDPOINT=https://hf-mirror.com (国内模型下载镜像)
     hf_mirror: Option<bool>,
+    /// ADR_DOWNLOAD_RATE_MBPS — 预训练资源下载限速 (MB/s, 批次95);
+    /// 0/None = 不限速
+    download_rate: Option<f32>,
     /// 开机自启 (HKCU Run 注册表, 与本文件无关的独立持久化)
     autostart: Option<bool>,
     /// ADR_TTS_DEFAULT_PROFILE — /tts 缺省档案
@@ -240,6 +243,10 @@ fn env_overrides(c: &ShellSettings, auto_compat: bool) -> Vec<(String, String)> 
     }
     if let Some(n) = c.s2_num_workers.filter(|n| *n > 0) {
         v.push(("ADR_S2_NUM_WORKERS".into(), n.to_string()));
+    }
+    // 批次95: 预训练资源下载限速 (MB/s), 0.1~1024 之外视为未配置
+    if let Some(r) = c.download_rate.filter(|r| *r >= 0.1 && *r <= 1024.0) {
+        v.push(("ADR_DOWNLOAD_RATE_MBPS".into(), format!("{r}")));
     }
     // 批次57 兼容模式: Intel 13/14 代 (Raptor Lake) AVX-512 高电压硬件缺陷可致
     // 计算密集段 native 崩溃 (0xC0000005, 闪退无 Python 栈)。全链指令集限到 AVX2
@@ -1806,6 +1813,7 @@ mod tests {
             api_key: Some(" k1,k2 ".into()), // trim 保留 key 内部
             data_dir: Some(" D:/voices ".into()),
             hf_mirror: Some(true),
+            download_rate: Some(2.5),        // 批次95 下载限速 (MB/s)
             autostart: Some(true),           // 独立注册表持久化, 不进环境变量
             default_profile: Some(" my_voice ".into()),
             service_port: Some(9900),        // 端口走 start_server 探测, 不进环境变量
@@ -1830,11 +1838,12 @@ mod tests {
         assert_eq!(m.get("ADR_TORCH_THREADS").unwrap(), "4");
         assert_eq!(m.get("ADR_LOG_LEVEL").unwrap(), "DEBUG");
         assert_eq!(m.get("ADR_S2_NUM_WORKERS").unwrap(), "2");
+        assert_eq!(m.get("ADR_DOWNLOAD_RATE_MBPS").unwrap(), "2.5");
         // 兼容模式: 全链限 ISA 到 AVX2 (oneDNN/MKL/numba)
         assert_eq!(m.get("ONEDNN_MAX_CPU_ISA").unwrap(), "AVX2");
         assert_eq!(m.get("MKL_ENABLE_INSTRUCTIONS").unwrap(), "AVX2");
         assert_eq!(m.get("NUMBA_CPU_NAME").unwrap(), "generic");
-        assert_eq!(m.len(), 13);
+        assert_eq!(m.len(), 14);
     }
 
     #[test]
@@ -1854,6 +1863,11 @@ mod tests {
         // 非法日志级别 → 白名单丢弃
         let c = ShellSettings { log_level: Some("VERBOSE".into()), ..Default::default() };
         assert!(env_overrides(&c, false).is_empty());
+        // 限速 0 / 越界 → 不注入 (0.1~1024 之外)
+        for bad in [0.0_f32, 0.05, 5000.0] {
+            let c = ShellSettings { download_rate: Some(bad), ..Default::default() };
+            assert!(env_overrides(&c, false).is_empty());
+        }
         // hf_mirror=false / cudagraph=false → 不注入
         let c = ShellSettings { hf_mirror: Some(false), cudagraph: Some(false), ..Default::default() };
         assert!(env_overrides(&c, false).is_empty());

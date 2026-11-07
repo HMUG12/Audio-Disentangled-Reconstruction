@@ -14,8 +14,8 @@ import hashlib
 import os
 import threading
 import time
+import urllib.error
 import urllib.request
-import uuid
 import zipfile
 from pathlib import Path
 
@@ -142,7 +142,60 @@ def _clear_parts(entry: dict) -> None:
     d = entry["extract_to"]
     for p in d.glob(entry["zip_name"] + ".*.part"):
         p.unlink(missing_ok=True)
-    (d / (entry["zip_name"] + ".part")).unlink(missing_ok=True)   # 旧固定名
+    (d / (entry["zip_name"] + ".part")).unlink(missing_ok=True)   # 固定续传名
+
+
+def _clear_legacy_parts(entry: dict) -> None:
+    """只清旧版 pid/uuid 临时文件, 保留固定 `.part` 供断点续传 (批次95)。"""
+    d = entry["extract_to"]
+    for p in d.glob(entry["zip_name"] + ".*.part"):
+        p.unlink(missing_ok=True)
+
+
+def _rate_limit_mbps() -> float:
+    """批次95: ADR_DOWNLOAD_RATE_MBPS — 下载限速 (MB/s); 0/非法 = 不限速。"""
+    raw = os.environ.get("ADR_DOWNLOAD_RATE_MBPS", "").strip()
+    try:
+        v = float(raw)
+    except ValueError:
+        return 0.0
+    return v if 0 < v <= 1024 else 0.0
+
+
+def _throttle_delay(done: int, elapsed: float, mbps: float) -> float:
+    """限速补觉时长: 已写 ``done`` 字节 / 耗时 ``elapsed`` 秒, 还差几秒才合规。
+
+    纯函数便于单测; ``mbps<=0`` 或参数异常 → 0 (不限速)。
+    """
+    if mbps <= 0 or done <= 0:
+        return 0.0
+    target = done / (mbps * 1024 * 1024)
+    return max(0.0, target - elapsed)
+
+
+def _resp_status(resp) -> int:
+    """HTTP 状态码 (urllib 响应对象形态不一, 取不到按 200)。"""
+    try:
+        code = resp.getcode()
+        if code:
+            return int(code)
+    except Exception:
+        pass
+    return int(getattr(resp, "status", 200) or 200)
+
+
+def _resp_total(resp, resume_from: int) -> int:
+    """完整文件大小: 206 用 Content-Range 的总量, 否则 offset + Content-Length。"""
+    cr = resp.headers.get("Content-Range", "") if resp.headers else ""
+    if "/" in cr:
+        tail = cr.rsplit("/", 1)[-1].strip()
+        if tail.isdigit():
+            return int(tail)
+    try:
+        n = int(resp.headers.get("Content-Length", 0) or 0)
+    except (TypeError, ValueError):
+        n = 0
+    return resume_from + n if n > 0 else 0
 
 
 @contextlib.contextmanager
@@ -186,22 +239,49 @@ def _bootstrap_lock():
 
 
 def _download(url: str, dest: Path, sha256: str = "", no_proxy: bool = False) -> None:
-    """单源下载 (带进度回调 + sha256 校验), 失败抛异常由调用方换源重试。
+    """单源下载 (断点续传 + 限速 + sha256 校验), 失败抛异常由调用方换源重试。
 
-    批次83 (#15): 临时名带 pid/uuid, 不再固定 ``dest.part`` (并发/上次残留
-    会互相截断); 下载结束校验 sha256, 任何失败都清理自己的临时文件。
+    批次83 (#15): 结束校验 sha256, 挡 CDN 错误页/代理替换/等长损坏。
+    批次95: 固定 ``<dest>.part`` 作续传位, 中断后下次请求带 ``Range`` 续传
+    (源不支持 Range 返回 200 则自动从头下); 内容型错误 (sha 不符 / 416)
+    丢弃残留, 网络类错误保留残片供下次续传。``ADR_DOWNLOAD_RATE_MBPS``
+    可限速, 不影响校验与进度显示。
     """
-    part = dest.with_name(f"{dest.name}.{os.getpid()}.{uuid.uuid4().hex}.part")
-    req = urllib.request.Request(url, headers={"User-Agent": "adr-bootstrap/1.0"})
+    part = dest.with_name(dest.name + ".part")
     opener = _NO_PROXY_OPENER if no_proxy else urllib.request.build_opener()
-    try:
+    resume_from = part.stat().st_size if part.exists() else 0
+    while True:
+        headers = {"User-Agent": "adr-bootstrap/1.0"}
+        if resume_from:
+            headers["Range"] = f"bytes={resume_from}-"
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            resp = opener.open(req, timeout=60)
+            break
+        except urllib.error.HTTPError as e:
+            # 416: 本地残片比远端还长 (换版本/坏残留) → 丢弃重来
+            if e.code == 416 and resume_from:
+                part.unlink(missing_ok=True)
+                resume_from = 0
+                continue
+            raise
+    with resp:
+        status = _resp_status(resp)
+        if resume_from and status != 206:
+            resume_from = 0          # 源忽略 Range (200) → 从头下
+        total = _resp_total(resp, resume_from)
         digest = hashlib.sha256()
-        with opener.open(req, timeout=60) as resp:
-            total = int(resp.headers.get("Content-Length", 0))
-            done = 0
-            _set_state(stage="downloading", file=dest.name, total=total,
-                       downloaded=0)
-            with open(part, "wb") as f:
+        if resume_from:
+            with open(part, "rb") as f:
+                for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        done = resume_from
+        limit = _rate_limit_mbps()
+        started = time.monotonic()
+        _set_state(stage="downloading", file=dest.name, total=total or done,
+                   downloaded=done)
+        try:
+            with open(part, "ab" if resume_from else "wb") as f:
                 while True:
                     chunk = resp.read(1024 * 1024)
                     if not chunk:
@@ -210,17 +290,24 @@ def _download(url: str, dest: Path, sha256: str = "", no_proxy: bool = False) ->
                     digest.update(chunk)
                     done += len(chunk)
                     _set_state(downloaded=done, total=total or done)
+                    if limit:
+                        delay = _throttle_delay(done - resume_from,
+                                                time.monotonic() - started, limit)
+                        if delay > 0:
+                            time.sleep(delay)
+        except BaseException:
+            # 网络中断: 保留 .part, 下次 (换源/重启) 从断点续传
+            raise
         if total > 0 and done != total:
             raise RuntimeError(
                 f"truncated download: expected {total}, got {done}")
         got = digest.hexdigest()
         if sha256 and got != sha256:
+            # 内容型错误: 残片不可信, 丢弃避免下次继续续传坏字节
+            part.unlink(missing_ok=True)
             raise RuntimeError(
                 f"sha256 mismatch: expected {sha256}, got {got} (源返回内容被替换或损坏)")
         os.replace(str(part), str(dest))
-    except BaseException:
-        part.unlink(missing_ok=True)
-        raise
 
 
 def _extract(entry: dict) -> None:
@@ -269,7 +356,8 @@ def _acquire(entry: dict) -> None:
                 break
             except Exception as e:  # 换源/绕代理重试
                 last_err = e
-                _clear_parts(entry)
+                # 批次95: 保留固定 .part 供断点续传; 只清旧版 pid/uuid 残片
+                _clear_legacy_parts(entry)
                 zip_path.unlink(missing_ok=True)
                 if no_proxy:
                     continue

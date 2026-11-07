@@ -21,19 +21,18 @@ import math
 import os
 import random
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Union
 
 import numpy as np
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from adr.core import get_logger
 from adr.models.base import BaseBackbone
 from adr.training.callbacks import Callback, CheckpointCallback, LoggerCallback, ProgressCallback
-from adr.training.dataset import VoiceCloneDataset, collate_samples
+from adr.training.dataset import VoiceCloneDataset
 from adr.training.grad_ckpt import enable_gradient_checkpointing
 from adr.training.optimizer import OptimizerConfig, build_optimizer, build_scheduler
 

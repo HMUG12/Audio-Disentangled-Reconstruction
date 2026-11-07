@@ -175,6 +175,130 @@ def test_download_accepts_matching_sha(tmp_path, monkeypatch):
     assert list(tmp_path.glob("*.part")) == []
 
 
+def test_download_resumes_from_part_with_range(tmp_path, monkeypatch):
+    """批次95: 中断残片存在时带 Range 续传, 拼接后 sha256 仍一致。"""
+    import hashlib
+
+    from adr.models import gsv_bootstrap
+
+    body = b"0123456789" * 100
+    prefix = body[:300]
+    part = tmp_path / "m.zip.part"
+    part.write_bytes(prefix)
+    seen = {}
+
+    class _Resp206:
+        def __init__(self):
+            self.headers = {
+                "Content-Length": str(len(body) - len(prefix)),
+                "Content-Range": f"bytes {len(prefix)}-{len(body) - 1}/{len(body)}",
+            }
+            self._buf = body[len(prefix):]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def getcode(self):
+            return 206
+
+        def read(self, n=-1):
+            chunk, self._buf = self._buf[:n], self._buf[n:]
+            return chunk
+
+    class _Opener:
+        def open(self, req, timeout=60):
+            seen["range"] = req.get_header("Range")
+            return _Resp206()
+
+    monkeypatch.setattr(gsv_bootstrap.urllib.request, "build_opener",
+                        lambda *a, **k: _Opener())
+    monkeypatch.setattr(gsv_bootstrap.urllib.request, "getproxies", lambda: {})
+    dest = tmp_path / "m.zip"
+    gsv_bootstrap._download("http://x", dest,
+                            sha256=hashlib.sha256(body).hexdigest())
+    assert seen["range"] == f"bytes={len(prefix)}-"
+    assert dest.read_bytes() == body
+    assert not part.exists()
+
+
+def test_download_restarts_when_server_ignores_range(tmp_path, monkeypatch):
+    """源忽略 Range 返回 200 → 从头写, 不拼接脏残片。"""
+    from adr.models import gsv_bootstrap
+
+    body = b"full-body" * 200
+    (tmp_path / "m.zip.part").write_bytes(b"stale")
+    _patch_download_body(monkeypatch, body)
+    dest = tmp_path / "m.zip"
+    gsv_bootstrap._download("http://x", dest)
+    assert dest.read_bytes() == body
+
+
+def test_download_416_discards_part_and_restarts(tmp_path, monkeypatch):
+    """本地残片比远端长 (416) → 丢弃重来, 不阻塞换源/重试。"""
+    import urllib.error
+
+    from adr.models import gsv_bootstrap
+
+    body = b"payload" * 100
+    (tmp_path / "m.zip.part").write_bytes(b"too-long")
+    calls = {"n": 0}
+
+    class _Opener:
+        def open(self, req, timeout=60):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise urllib.error.HTTPError("http://x", 416, "range", {}, None)
+            return _FakeResp(body)
+
+    monkeypatch.setattr(gsv_bootstrap.urllib.request, "build_opener",
+                        lambda *a, **k: _Opener())
+    monkeypatch.setattr(gsv_bootstrap.urllib.request, "getproxies", lambda: {})
+    dest = tmp_path / "m.zip"
+    gsv_bootstrap._download("http://x", dest)
+    assert dest.read_bytes() == body
+    assert calls["n"] == 2
+
+
+def test_download_keeps_part_on_network_error(tmp_path, monkeypatch):
+    """网络类错误保留 .part, 供下次续传; 不能一失败就删。"""
+    from adr.models import gsv_bootstrap
+
+    part = tmp_path / "m.zip.part"
+    part.write_bytes(b"xyz")
+
+    class _BoomOpener:
+        def open(self, req, timeout=60):
+            raise OSError("net down")
+
+    monkeypatch.setattr(gsv_bootstrap.urllib.request, "build_opener",
+                        lambda *a, **k: _BoomOpener())
+    with pytest.raises(OSError):
+        gsv_bootstrap._download("http://x", tmp_path / "m.zip")
+    assert part.read_bytes() == b"xyz"
+
+
+def test_download_rate_limit_env_and_throttle(monkeypatch):
+    """限速旋钮解析 + 纯函数补觉时长。"""
+    from adr.models import gsv_bootstrap
+
+    monkeypatch.delenv("ADR_DOWNLOAD_RATE_MBPS", raising=False)
+    assert gsv_bootstrap._rate_limit_mbps() == 0
+    monkeypatch.setenv("ADR_DOWNLOAD_RATE_MBPS", " 2.5 ")
+    assert gsv_bootstrap._rate_limit_mbps() == 2.5
+    for bad in ("abc", "-1", "0", "99999"):
+        monkeypatch.setenv("ADR_DOWNLOAD_RATE_MBPS", bad)
+        assert gsv_bootstrap._rate_limit_mbps() == 0
+
+    mb = 1024 * 1024
+    assert gsv_bootstrap._throttle_delay(2 * mb, 0.0, 2.0) == pytest.approx(1.0)
+    assert gsv_bootstrap._throttle_delay(2 * mb, 5.0, 2.0) == 0.0
+    assert gsv_bootstrap._throttle_delay(0, 0.0, 2.0) == 0.0
+    assert gsv_bootstrap._throttle_delay(2 * mb, 0.0, 0) == 0.0
+
+
 def _zip_bytes(member="good/keep.txt", data=b"ok"):
     import io
     import zipfile
