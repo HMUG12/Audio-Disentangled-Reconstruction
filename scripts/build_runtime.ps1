@@ -129,6 +129,12 @@ transformers==4.57.3
 tokenizers==0.22.2
 safetensors==0.7.0
 huggingface_hub==0.36.2
+# batch75: GSV ASR scripts (tools/asr/fasterwhisper_asr.py, funasr_asr.py) do a
+# TOP-LEVEL "from modelscope import snapshot_download" -- without the package the
+# training pipeline step 2/7 (ASR) dies with ModuleNotFoundError.
+# Light deps only (filelock/packaging/requests/setuptools/tqdm/urllib3); the
+# heavy "datasets" extra is NOT pulled in.
+modelscope==1.35.3
 fastapi==0.129.0
 uvicorn[standard]==0.41.0
 python-multipart==0.0.24
@@ -181,7 +187,7 @@ Remove-Item -Force $ReqFile -ErrorAction SilentlyContinue
 Set-Content -Path $ReqFile -Value $requirements -Encoding ASCII
 # Write-back check: v1.3.1 build once ran pip against a stale file missing the G2P pins
 $written = Get-Content -Raw $ReqFile
-foreach ($pin in "pyopenjtalk==", "jamo==", "ToJyutping==", "ko_pron==", "nltk==") {
+foreach ($pin in "pyopenjtalk==", "jamo==", "ToJyutping==", "ko_pron==", "nltk==", "modelscope==") {
     if ($written -notmatch [regex]::Escape($pin)) { throw "requirements file missing $pin (stale write?)" }
 }
 Log ("requirements written: {0}" -f $ReqFile)
@@ -332,6 +338,37 @@ try {
 } finally {
     Pop-Location
 }
+
+Step "8 strip bytecode caches (批次75: 安装包不应带 .pyc / __pycache__ 临时文件)"
+# pip install 会为每个模块生成 __pycache__/*.pyc (cp313 默认开), runtime-cpu
+# 实测 17768 个 .pyc / 2297 个 __pycache__ 目录 — 用户装完看到一堆"临时文件",
+# 安装包也白涨体积。它们是纯缓存: Python 首次 import 会自行重建 (安装目录
+# per-user 可写, 重建无碍)。必须排在所有 python 步骤 (pip install / smoke
+# test) 之后执行, 否则会被重新生成。
+$stripPy = Join-Path $DlDir "strip_bytecode.py"
+@'
+import os, shutil, sys
+
+root = sys.argv[1]
+dirs = files = 0
+for dirpath, dirnames, filenames in os.walk(root, topdown=True, onerror=lambda e: None):
+    if os.path.basename(dirpath) == "__pycache__":
+        shutil.rmtree(dirpath, ignore_errors=True)
+        dirs += 1
+        dirnames[:] = []
+        continue
+    for fn in filenames:
+        if fn.endswith(".pyc"):
+            try:
+                os.remove(os.path.join(dirpath, fn))
+                files += 1
+            except OSError:
+                pass
+print("removed __pycache__ dirs=%d, .pyc files=%d" % (dirs, files))
+'@ | Set-Content -Path $stripPy -Encoding ASCII
+$stripOut = & $py -B $stripPy $OutDir
+if ($LASTEXITCODE -ne 0) { throw "bytecode strip failed" }
+Log ("bytecode caches stripped: {0}" -f $stripOut)
 
 Step "done"
 $variant = if ($AllowCuda) { "GPU (cu130)" } else { "CPU" }

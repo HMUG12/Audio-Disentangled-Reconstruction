@@ -27,6 +27,11 @@ runtime 1.78GB。本脚本固化排除规则, 防止垃圾再混入。
     精简系统缺它装完 python.exe 起不来; installer.iss [Run] 静默安装)
 11. python/nltk_data 必须随包 (批次74: g2p-en 的 cmudict + nltk
     PerceptronTagger; 缺失时英文合成 LookupError — 无外网机器无法补下载)
+12. modelscope 必须随包 (批次75: GSV ASR 脚本 tools/asr/fasterwhisper_asr.py
+    与 funasr_asr.py 顶层 "from modelscope import snapshot_download" —
+    训练管线 2/7 ASR 步骤直接 ModuleNotFoundError, 训练必挂)
+13. 不得残留字节码缓存 (批次75: 安装包不应带 .pyc / __pycache__ 临时文件;
+    自有代码树出现即 FAIL, site-packages 只统计告警)
 
 用法:
   python scripts/check_runtime.py                 # 自动探测 build/runtime-cpu|gpu
@@ -152,7 +157,7 @@ def main() -> int:
     if py.is_file():
         import subprocess
         probe = subprocess.run(
-            [str(py), "-c",
+            [str(py), "-B", "-c",
              "import pyopenjtalk, jamo, ToJyutping, ko_pron"],
             capture_output=True, text=True, timeout=120)
         if probe.returncode != 0:
@@ -188,13 +193,44 @@ def main() -> int:
         import subprocess
         # 目录在还不够: 实跑 runtime python 确认 nltk 能解析到 (路径/损坏双保险)
         probe = subprocess.run(
-            [str(py), "-c",
+            [str(py), "-B", "-c",
              "import nltk; nltk.data.find('corpora/cmudict'); "
              "nltk.data.find('taggers/averaged_perceptron_tagger_eng')"],
             capture_output=True, text=True, timeout=120)
         if probe.returncode != 0:
             fails.append(f"nltk_data 无法被 runtime python 解析 (英文合成将失败): "
                          f"{probe.stderr.strip().splitlines()[-1] if probe.stderr.strip() else probe.returncode}")
+
+    # 12) modelscope 随包 (批次75: GSV ASR 脚本 tools/asr/fasterwhisper_asr.py
+    #     与 funasr_asr.py 顶层 "from modelscope import snapshot_download" —
+    #     训练管线 2/7 (ASR) 直接 ModuleNotFoundError, 训练必挂)
+    if py.is_file():
+        import subprocess
+        probe = subprocess.run(
+            [str(py), "-B", "-c", "import modelscope; print(modelscope.__version__)"],
+            capture_output=True, text=True, timeout=120)
+        if probe.returncode != 0:
+            fails.append("modelscope 缺失 (训练 ASR 步骤将 ModuleNotFoundError): "
+                         f"{probe.stderr.strip().splitlines()[-1] if probe.stderr.strip() else probe.returncode}")
+
+    # 13) 字节码缓存卫生 (批次75: 用户装完看到一堆 __pycache__/*.pyc 临时文件)
+    #     自有代码树出现即 FAIL (build_runtime Step8 负责清); site-packages 里
+    #     pip 生成的只统计告警 — 纯缓存, 首次 import 会自行重建
+    for tree in ("adr", "scripts", "third_party"):
+        t = rt / tree
+        if not t.is_dir():
+            continue
+        pc_dirs = [p for p in t.rglob("__pycache__") if p.is_dir()]
+        if pc_dirs:
+            fails.append(f"{tree}/ 残留 __pycache__ ×{len(pc_dirs)} "
+                         "(构建未清理字节码缓存 — 安装包不该带临时文件)")
+    try:
+        pyc_total = sum(1 for _ in rt.rglob("*.pyc"))
+    except OSError:
+        pyc_total = 0
+    if pyc_total:
+        warns.append(f"runtime 残留 .pyc ×{pyc_total} (纯缓存, 首次 import 会重建; "
+                     "build_runtime Step8 应已清理)")
 
     for w in warns:
         print(f"[WARN] {w}")
