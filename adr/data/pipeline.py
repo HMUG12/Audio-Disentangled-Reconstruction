@@ -79,8 +79,10 @@ class TrainSample:
             sample_id=self.sample_id,
             waveform=self.waveform,
             sample_rate=self.sample_rate,
-            text=np.array([self.text], dtype=object),
-            phonemes=np.array([self.phonemes], dtype=object),
+            # 批次87 (SEC-03): 文本/音素存为 numpy 字符串数组 (非 object),
+            # 让 load 能走 allow_pickle=False — 老文件仍可读, 见 load()
+            text=np.array([self.text]),
+            phonemes=np.array([self.phonemes], dtype=str),
             f0=self.f0,
             mel=self.mel if self.mel is not None else np.array([]),
             start_sec=self.start_sec,
@@ -89,19 +91,33 @@ class TrainSample:
 
     @staticmethod
     def load(path: Union[str, Path]) -> "TrainSample":
-        """从 npz 加载。"""
-        data = np.load(path, allow_pickle=True)
-        return TrainSample(
-            sample_id=str(data["sample_id"]),
-            waveform=data["waveform"],
-            sample_rate=int(data["sample_rate"]),
-            text=str(data["text"][0]) if data["text"].size > 0 else "",
-            phonemes=list(data["phonemes"][0]) if data["phonemes"].size > 0 else [],
-            f0=data["f0"],
-            mel=data["mel"] if data["mel"].size > 0 else None,
-            start_sec=float(data["start_sec"]),
-            end_sec=float(data["end_sec"]),
-        )
+        """从 npz 加载。
+
+        批次87 (SEC-03): 默认 allow_pickle=False (npz 里的 object 数组可用
+        pickle 执行任意代码); 只有历史文件 (文本/音素为 object dtype, 旧版本
+        写出) 才回落到 allow_pickle=True, 并打一次告警。
+        """
+        def _read(data) -> "TrainSample":
+            # npz 是惰性读取: object 数组的 ValueError 在**取键**时才抛,
+            # 所以取值必须放在 try 内 (只包 np.load 兜不住)。
+            return TrainSample(
+                sample_id=str(data["sample_id"]),
+                waveform=data["waveform"],
+                sample_rate=int(data["sample_rate"]),
+                text=str(data["text"][0]) if data["text"].size > 0 else "",
+                phonemes=list(data["phonemes"][0]) if data["phonemes"].size > 0 else [],
+                f0=data["f0"],
+                mel=data["mel"] if data["mel"].size > 0 else None,
+                start_sec=float(data["start_sec"]),
+                end_sec=float(data["end_sec"]),
+            )
+
+        try:
+            return _read(np.load(path, allow_pickle=False))
+        except ValueError:
+            get_logger("adr.data.pipeline").warning(
+                "legacy npz with object arrays (allow_pickle fallback): %s", path)
+            return _read(np.load(path, allow_pickle=True))
 
 
 @dataclass

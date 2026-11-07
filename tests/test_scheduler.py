@@ -185,3 +185,20 @@ def test_engine_env_budget(monkeypatch):
     assert GSVEngine()._sched.max_concurrent == 2
     monkeypatch.delenv("ADR_SCHED_MAX_CONCURRENCY", raising=False)
     assert GSVEngine()._sched.max_concurrent == 1
+
+
+def test_slot_timeout_keeps_counts_clean():
+    """批次86 (CON-01): 槽位占满时排队可超时 (旧语义无界 → 全站假死)。
+
+    超时抛 TimeoutError, waiting 计数回零, 已持有的槽不受影响。
+    """
+    s = SynthesisScheduler(1)
+    with s.slot():
+        t0 = time.monotonic()
+        with pytest.raises(TimeoutError):
+            with s.slot(timeout=0.05):
+                pass
+        assert time.monotonic() - t0 < 2
+        assert s.waiting == 0
+        assert s.busy == 1
+    assert s.busy == 0

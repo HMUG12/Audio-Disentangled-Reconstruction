@@ -68,27 +68,50 @@ def _enforce_terms(args) -> None:
     raise SystemExit(2)
 
 
-def _warn_unauthenticated_listen(addr: str) -> None:
-    """监听地址对外 + 无 API Key 时打醒目警告 (批次26, P2-a)。
+def _warn_unauthenticated_listen(addr: str, *, from_shell: bool = False) -> None:
+    """监听地址对外 + 无 API Key: 默认拒绝启动 (批次26 告警; 批次87 / SEC-04 收口)。
 
     create_app 不知道 bind host (uvicorn.run 在本入口传参),
-    所以只有这里能同时看到 host 与鉴权配置 — 警告只打这一处, 不在 app.py 重复。
+    所以只有这里能同时看到 host 与鉴权配置 — 判定只在这一处, 不在 app.py 重复。
+
+    旧行为只打警告, 默认部署 ``--addr 0.0.0.0`` 就等于把无鉴权的合成/换权/
+    管理接口开放给整个局域网。现在:
+    - 显式 ``ADR_ALLOW_UNAUTHENTICATED=1`` → 仅告警 (容器/受控内网);
+    - 桌面壳 ``--from-shell`` → 仅告警 (局域网开关是用户在设置页的显式操作);
+    - 其余 (CLI / 默认容器入口) → 打印原因后以退出码 2 结束。
     """
     if addr not in ("0.0.0.0", "::"):
         return
     if settings.has_api_key():
         return
+    allow = os.environ.get("ADR_ALLOW_UNAUTHENTICATED", "").strip().lower()
+    if allow in ("1", "true", "yes", "on") or from_shell:
+        print(
+            "\n" + "=" * 64,
+            "⚠  安全警告: 服务监听 0.0.0.0 且未设置 ADR_TTS_API_KEY",
+            "   局域网内任何设备均可无鉴权调用合成 API。",
+            "   如需暴露到局域网, 请设置环境变量后重启:",
+            '     set ADR_TTS_API_KEY=<你的密钥>        (Windows CMD)',
+            '     $env:ADR_TTS_API_KEY="<你的密钥>"     (PowerShell)',
+            "   仅本机使用可改用: python -m adr.server --addr 127.0.0.1",
+            "=" * 64 + "\n",
+            sep="\n", file=sys.stderr, flush=True,
+        )
+        return
     print(
         "\n" + "=" * 64,
-        "⚠  安全警告: 服务监听 0.0.0.0 且未设置 ADR_TTS_API_KEY",
-        "   局域网内任何设备均可无鉴权调用合成 API。",
-        "   如需暴露到局域网, 请设置环境变量后重启:",
-        '     set ADR_TTS_API_KEY=<你的密钥>        (Windows CMD)',
-        '     $env:ADR_TTS_API_KEY="<你的密钥>"     (PowerShell)',
-        "   仅本机使用可改用: python -m adr.server --addr 127.0.0.1",
+        "✗  拒绝启动: 监听 0.0.0.0 且未设置 ADR_TTS_API_KEY",
+        "   这会把无鉴权的合成 / 换权 / 管理接口开放给整个局域网。",
+        "   请二选一:",
+        "     1) 设置 ADR_TTS_API_KEY=<你的密钥> 后重启 (推荐)",
+        "     2) 仅本机使用: --addr 127.0.0.1",
+        "     3) 明确接受风险 (容器内监听 0.0.0.0 但只发布到回环):",
+        "        set ADR_ALLOW_UNAUTHENTICATED=1  (Windows CMD)",
+        '        $env:ADR_ALLOW_UNAUTHENTICATED="1"  (PowerShell)',
         "=" * 64 + "\n",
         sep="\n", file=sys.stderr, flush=True,
     )
+    raise SystemExit(2)
 
 
 def _print_banner(addr: str, port: int) -> None:
@@ -149,7 +172,7 @@ def main():
     # server.log 与 docker logs 只剩 uvicorn 行。级别可用 ADR_LOG_LEVEL 覆盖。
     setup_logging(level=os.environ.get("ADR_LOG_LEVEL", "INFO"))
     _enforce_terms(args)
-    _warn_unauthenticated_listen(args.addr)
+    _warn_unauthenticated_listen(args.addr, from_shell=args.from_shell)
     _print_banner(args.addr, args.port)
     uvicorn.run(create_app(), host=args.addr, port=args.port)
 

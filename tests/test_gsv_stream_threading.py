@@ -172,3 +172,83 @@ def test_worker_error_reraised_to_consumer(eng):
     with pytest.raises(RuntimeError, match="boom"):
         list(gen)
     assert _lock_free()
+
+
+# ─── 批次86 (CON-01): 上游永卡 → 有界返回 503 语义, 进程不假死 ───
+
+class NeverYieldsTTS:
+    """run() 既不产出也不返回 (模拟上游死锁 / 半开连接永久挂起)。"""
+
+    def __init__(self, release):
+        self.release = release
+
+    def run(self, inputs):
+        self.release.wait(30)
+        if False:   # 保持生成器语义
+            yield 32000, np.zeros(1, dtype=np.float32)
+
+
+def test_idle_stream_marks_stalled_and_next_request_bounded(eng, monkeypatch):
+    """上游永不产出: 消费端静默超时即降级, 后续请求有界返回 503 而非永久排队。
+
+    旧实现 q.get() 无超时 + 调度准入无超时 → 卡死 worker 永久占住槽位与
+    引擎锁, 第二个请求永不返回 (全站假死)。
+    """
+    from adr.core.exceptions import EngineStalledError
+
+    release = threading.Event()
+    eng._tts = NeverYieldsTTS(release)
+    monkeypatch.setattr(gsv_engine, "_STREAM_IDLE_SEC", 0.2)
+    monkeypatch.setattr(gsv_engine, "_STREAM_JOIN_SEC", 0.1)
+    monkeypatch.setattr(gsv_engine, "_LOCK_WAIT_SEC", 0.2)
+
+    gen = eng.synthesize_stream("你好世界。", ref_audio="ref.wav")
+    try:
+        t0 = time.monotonic()
+        with pytest.raises(EngineStalledError):
+            next(gen)
+        assert time.monotonic() - t0 < 5
+    finally:
+        gen.close()
+
+    assert eng._stalled is True
+    # 第二个请求: worker 仍占着调度槽/引擎锁 → 有界返回 EngineStalledError (503)
+    t0 = time.monotonic()
+    with pytest.raises(EngineStalledError):
+        eng.synthesize("你好世界。", ref_audio="ref.wav")
+    assert time.monotonic() - t0 < 5
+    release.set()
+
+
+def test_engine_lock_wait_timeout_bounded(eng, monkeypatch):
+    """引擎锁被长期占用: 流式与非流式都在有限时间内抛 EngineStalledError。"""
+    from adr.core.exceptions import EngineStalledError
+
+    monkeypatch.setattr(gsv_engine, "_LOCK_WAIT_SEC", 0.2)
+    eng._tts = FakeTTS(blocks=1)
+
+    held, release = threading.Event(), threading.Event()
+
+    def _hold():
+        eng._lock.acquire()
+        held.set()
+        release.wait(10)
+        eng._lock.release()
+
+    th = threading.Thread(target=_hold, daemon=True)
+    th.start()
+    assert held.wait(2)
+    try:
+        t0 = time.monotonic()
+        with pytest.raises(EngineStalledError):
+            list(eng.synthesize_stream("你好世界。", ref_audio="ref.wav"))
+        assert time.monotonic() - t0 < 5
+
+        t0 = time.monotonic()
+        with pytest.raises(EngineStalledError):
+            eng.synthesize("你好世界。", ref_audio="ref.wav")
+        assert time.monotonic() - t0 < 5
+    finally:
+        release.set()
+        th.join(5)
+    assert _lock_free()

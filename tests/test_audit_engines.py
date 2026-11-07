@@ -325,3 +325,94 @@ def test_ensure_weights_reloads_when_same_path_replaced(tmp_path, monkeypatch):
     weights.write_bytes(b"v2-replaced-longer")   # 音色包导入 / 训练产物替换
     eng._ensure_weights(str(weights), None)
     assert len(validated) == 2 and len(loaded) == 2
+
+
+# ---- 批次87 (SEC-02): 权重安全校验按指纹缓存, 不再每请求整文件反序列化 ----
+
+def test_validate_weights_file_cached_by_stamp(tmp_path, monkeypatch):
+    import torch
+
+    from adr.models import gsv_engine
+
+    p = tmp_path / "cached.pth"
+    p.write_bytes(b"fake")
+    calls = []
+
+    def _fake_load(path, **kwargs):
+        calls.append((str(path), kwargs.get("weights_only")))
+        return {"w": 1}
+
+    monkeypatch.setattr(torch, "load", _fake_load)
+    gsv_engine._WEIGHTS_CHECKED.clear()
+
+    gsv_engine.validate_weights_file(str(p))
+    gsv_engine.validate_weights_file(str(p))          # 指纹未变 → 缓存命中
+    assert len(calls) == 1 and calls[0][1] is True
+
+    os.utime(p, (1_600_000_000, 1_600_000_000))       # 文件被换掉 → 重新校验
+    gsv_engine.validate_weights_file(str(p))
+    assert len(calls) == 2
+    gsv_engine._WEIGHTS_CHECKED.clear()
+
+
+# ---- 批次87 (SEC-03): 受限反序列化 —— 白名单外 GLOBAL 一律拒绝 ----
+
+def _weights_zip(payload: bytes) -> bytes:
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("archive/data.pkl", payload)
+    return buf.getvalue()
+
+
+class _ForeignGlobal:
+    """非白名单类型: pickle GLOBAL 指向本测试模块, 用于验证拒绝/显式放行。"""
+
+
+_FOREIGN = (__name__, "_ForeignGlobal")
+
+
+def test_restricted_scan_rejects_foreign_global(tmp_path):
+    import pickle
+
+    from adr.models import gsv_engine
+
+    p = tmp_path / "evil.pth"
+    p.write_bytes(_weights_zip(pickle.dumps({"x": _ForeignGlobal})))
+    with pytest.raises(pickle.UnpicklingError, match="forbidden global"):
+        gsv_engine._restricted_weights_scan(str(p))
+
+
+def test_restricted_scan_allows_explicit_global(tmp_path):
+    import pickle
+
+    from adr.models import gsv_engine
+
+    p = tmp_path / "allowed.pth"
+    p.write_bytes(_weights_zip(pickle.dumps({"x": _ForeignGlobal})))
+    # 白名单内按 stub 化走完, 顶层仍须是 dict
+    gsv_engine._restricted_weights_scan(str(p), allow_globals=(_FOREIGN,))
+
+
+def test_safe_torch_load_roundtrip_and_allow_globals(tmp_path):
+    import pickle
+
+    import torch
+
+    from adr.models import gsv_engine
+    from adr.training.trainer import TrainerConfig
+
+    plain = tmp_path / "plain.pth"
+    torch.save({"w": torch.zeros(2)}, plain)
+    got = gsv_engine.safe_torch_load(str(plain))      # 快路径 weights_only=True
+    assert isinstance(got, dict) and got["w"].shape == (2,)
+
+    ckpt = tmp_path / "ckpt.pt"
+    torch.save({"config": TrainerConfig(epochs=1), "w": torch.zeros(2)}, ckpt)
+    with pytest.raises(pickle.UnpicklingError, match="forbidden global"):
+        gsv_engine.safe_torch_load(str(ckpt))         # 未放行本仓 dataclass → 拒绝
+    got = gsv_engine.safe_torch_load(
+        str(ckpt), allow_globals=(("adr.training.trainer", "TrainerConfig"),))
+    assert isinstance(got["config"], TrainerConfig) and got["config"].epochs == 1

@@ -136,6 +136,27 @@ def test_save_checkpoint_4bit_does_not_mutate_training_model():
         assert all(v.dtype != torch.uint8 for v in ckpt["model_state"].values()), "ckpt 应为反量化权重"
 
 
+# ========== 批次87 (BUG-01): 训练集不足一个 batch 必须提前失败 ==========
+def test_trainer_rejects_zero_step_loader():
+    """drop_last=True + samples < batch_size → 旧实现静默 0 步, 现应报错。"""
+    from adr.models.sovits import SoVITS, SoVITSConfig
+    from adr.training import Trainer, TrainerConfig
+    from adr.training.dataset import VoiceCloneDataset
+
+    model = SoVITS(SoVITSConfig(
+        hidden_dim=16, n_layers=1, n_heads=2, ffn_dim=32,
+        vocab_size=607, content_dim=8, timbre_dim=8,
+    ))
+    ds = VoiceCloneDataset(samples=[_make_dummy_sample(0)])
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config = TrainerConfig(
+            epochs=1, batch_size=2, use_amp=False, use_gradient_checkpointing=False,
+            use_lora=False, output_dir=tmp_dir, val_ratio=0.0,
+        )
+        with pytest.raises(ValueError, match="不足以构成 1 个 batch"):
+            Trainer(model=model, train_data=ds, config=config)
+
+
 # ========== #6: BigVGAN import 不永久污染 sys.modules ==========
 def _write_fake_bigvgan(d: Path) -> None:
     (d / "alias_free_activation" / "torch").mkdir(parents=True)

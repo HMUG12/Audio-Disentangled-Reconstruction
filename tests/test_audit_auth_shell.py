@@ -21,9 +21,29 @@ def test_has_api_key_agrees_with_api_keys_blank(monkeypatch, raw):
     assert settings.has_api_key() is False
 
 
-def test_warn_fires_when_all_keys_blank(monkeypatch, capsys):
+def test_refuses_unauthenticated_expose(monkeypatch, capsys):
+    """批次87 (SEC-04): 对外监听 + 无 key → 默认拒绝启动。"""
+    monkeypatch.delenv("ADR_ALLOW_UNAUTHENTICATED", raising=False)
+    monkeypatch.setenv("ADR_TTS_API_KEY", " , ")
+    with pytest.raises(SystemExit) as ei:
+        server_main._warn_unauthenticated_listen("0.0.0.0")
+    assert ei.value.code == 2
+    assert "拒绝启动" in capsys.readouterr().err
+
+
+def test_warn_fires_when_explicit_opt_out(monkeypatch, capsys):
+    """显式 ADR_ALLOW_UNAUTHENTICATED=1 (容器场景) → 保留告警。"""
+    monkeypatch.setenv("ADR_ALLOW_UNAUTHENTICATED", "1")
     monkeypatch.setenv("ADR_TTS_API_KEY", " , ")
     server_main._warn_unauthenticated_listen("0.0.0.0")
+    assert "安全警告" in capsys.readouterr().err
+
+
+def test_warn_fires_from_shell(monkeypatch, capsys):
+    """桌面壳的局域网开关是显式用户操作 → 保留告警。"""
+    monkeypatch.delenv("ADR_ALLOW_UNAUTHENTICATED", raising=False)
+    monkeypatch.setenv("ADR_TTS_API_KEY", "")
+    server_main._warn_unauthenticated_listen("0.0.0.0", from_shell=True)
     assert "安全警告" in capsys.readouterr().err
 
 

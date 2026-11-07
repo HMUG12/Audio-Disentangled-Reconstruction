@@ -103,6 +103,27 @@ def test_load_missing_or_corrupt(tmp_path):
     assert policy.load() is None
 
 
+def test_load_caches_by_stamp(tmp_path, monkeypatch):
+    """批次87 (PERF-01): 指纹未变不重复读盘, 文件改写后自动重读。"""
+    path = tmp_path / "policy.json"
+    path.write_text(json.dumps({"policy_version": 1}), encoding="utf-8")
+    reads = []
+    orig = type(path).read_text
+
+    def _counting(self, *args, **kwargs):
+        if str(self) == str(path):
+            reads.append(str(self))
+        return orig(self, *args, **kwargs)
+
+    monkeypatch.setattr(type(path), "read_text", _counting)
+    assert policy.load(path) == {"policy_version": 1}
+    assert policy.load(path) == {"policy_version": 1}
+    assert len(reads) == 1                       # 第二次命中缓存
+    path.write_text(json.dumps({"policy_version": 2}), encoding="utf-8")
+    assert policy.load(path) == {"policy_version": 2}
+    assert len(reads) == 2                       # 指纹变化 → 重读
+
+
 def test_snapshot_sources(monkeypatch):
     policy.save(policy.infer(CPU_SLOW, physical_cores=8))
     policy.apply()

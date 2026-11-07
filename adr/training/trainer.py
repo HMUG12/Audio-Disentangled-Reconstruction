@@ -179,6 +179,14 @@ class Trainer:
             if self.val_data is not None else None
         )
 
+        # 批次87 (BUG-01): drop_last=True 时"样本数 < batch_size"会得到 0 个 step,
+        # 训练循环静默空转 (scheduler total_steps=0, 跑完不报错)。提前失败。
+        if len(self.train_loader) == 0:
+            raise ValueError(
+                f"训练集不足以构成 1 个 batch: samples={len(self.train_data)}, "
+                f"batch_size={self.config.batch_size} (drop_last=True); "
+                "请减小 batch_size 或补充训练数据")
+
         # 优化器
         opt_config = OptimizerConfig(
             lr=self.config.lr,
@@ -510,11 +518,14 @@ class Trainer:
         非 LoRA 模式: 用 load_state_dict。
         """
         path = Path(path)
-        # weights_only=False 是因为我们保存了 dataclass config
-        # ADR checkpoint 只来自我们自己的训练,trusted
+        # 批次87 (SEC-03): weights_only=True 优先, 需要 dataclass config 时
+        # 回落到白名单扫描后的加载 (不再无条件 weights_only=False)
         # 批次65 显存双重加载: map CPU 后再由 load_state_dict 自动迁到模型设备,
         # 避免反序列化与参数复制两份 GPU 驻留
-        ckpt = torch.load(path, map_location="cpu", weights_only=False)
+        from adr.models.gsv_engine import safe_torch_load
+        ckpt = safe_torch_load(
+            path, map_location="cpu",
+            allow_globals=(("adr.training.trainer", "TrainerConfig"),))
         if ckpt.get("use_lora", False) or self.config.use_lora:
             from adr.training.lora import load_lora_state_dict
             loaded, missing = load_lora_state_dict(self.model, ckpt["model_state"])

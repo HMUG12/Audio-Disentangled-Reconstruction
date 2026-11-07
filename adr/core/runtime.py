@@ -28,6 +28,9 @@ FAIL_RATE_FALLBACK = 0.3
 TUNE_KEYS = ("ADR_TTS_STREAM_HEAD", "ADR_TTS_SPLIT_MAX")
 
 _lock = threading.Lock()
+# 批次87 (PERF-01): 评估串行锁。评估 (policy.load 读盘 + 统计) 移到全局锁外,
+# 避免每个合成请求收尾都在 _lock 内做文件 IO — 那会把所有并发请求串在锁上。
+_eval_lock = threading.Lock()
 _samples: deque = deque(maxlen=WINDOW)
 _events: deque = deque(maxlen=20)
 _applied: dict[str, str] = {}          # runtime 写入的 env 值 (区分来源)
@@ -76,10 +79,17 @@ def record(*, ok: bool, elapsed_s: float, audio_s: float = 0.0,
     with _lock:
         _samples.append({"ok": ok, "rtf": rtf, "ttfb_ms": ttfb_ms,
                          "mem_mb": mem_mb, "stream": stream})
-        try:
-            _evaluate()
-        except Exception as e:      # 闭环失败不影响合成
-            log.warning("[Runtime] 评估失败: %s", e)
+    # 批次87 (PERF-01): 评估移到 _lock 之外 (旧实现 policy.load() 的读盘与
+    # 统计都在锁内)。非阻塞: 已有评估在跑就跳过本次 — 窗口是近似的, 少评估
+    # 一次不影响结论, 但不能让合成线程排队等 IO。
+    if not _eval_lock.acquire(blocking=False):
+        return
+    try:
+        _evaluate()
+    except Exception as e:      # 闭环失败不影响合成
+        log.warning("[Runtime] 评估失败: %s", e)
+    finally:
+        _eval_lock.release()
 
 
 def _evaluate() -> None:

@@ -68,8 +68,12 @@ class SynthesisScheduler:
             }
 
     @contextlib.contextmanager
-    def slot(self):
-        """取一个并发槽; 预算满则排队 (无界, 不超时 — 准入控制属第四阶段)。
+    def slot(self, timeout: float | None = None):
+        """取一个并发槽; 预算满则排队。
+
+        timeout: 排队上限 (秒)。None = 无界 (批次63 原语义); 超时抛
+        ``TimeoutError``, 由调用方转 503 (批次86 / CON-01: 卡死 worker
+        占着槽位时, 后续请求不再永久排队 → 全站假死)。
 
         yield AdmissionTicket (wait_ms / waiting / busy) 供调用方记调度报告。
         """
@@ -82,7 +86,14 @@ class SynthesisScheduler:
                     self._max_waiting = self._waiting
                 try:
                     while self._busy >= self._max:
-                        self._cond.wait()
+                        if timeout is None:
+                            self._cond.wait()
+                        else:
+                            remain = timeout - (time.monotonic() - start)
+                            if remain <= 0:
+                                raise TimeoutError(
+                                    f"scheduler admission timeout ({timeout:.1f}s)")
+                            self._cond.wait(remain)
                 except BaseException:
                     self._waiting -= 1
                     # 可能已消费了一次 notify: 转交给下一个等待者, 防止唤醒丢失

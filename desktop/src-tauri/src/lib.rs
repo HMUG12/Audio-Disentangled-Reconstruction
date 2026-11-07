@@ -876,8 +876,10 @@ fn server_log_path() -> PathBuf {
 /// 后台泵: 把服务 stdout/stderr 逐行追加写入共享日志文件。
 /// 双线程共享同一句柄 (Arc<Mutex<File>>) 且整行读取 (read_until b'\n')，
 /// 避免 io::copy 8KB 块拷贝导致的行劈裂与双线程字节交错。
+/// 批次87 (BUG-02): 日志句柄改为可选 — 打不开日志时仍必须把管道抽干,
+/// 否则子进程写满 stdout/stderr 缓冲区 (4~64KB) 后会阻塞, 表现为启动卡死。
 fn pump_server_log<R: std::io::Read>(reader: R,
-                                     file: Arc<Mutex<std::fs::File>>,
+                                     file: Option<Arc<Mutex<std::fs::File>>>,
                                      tag: &str) {
     use std::io::{BufRead, BufReader, Write};
     let mut reader = BufReader::new(reader);
@@ -887,17 +889,21 @@ fn pump_server_log<R: std::io::Read>(reader: R,
         match reader.read_until(b'\n', &mut line) {
             Ok(0) | Err(_) => break,
             Ok(_) => {
-                let mut f = file.lock().unwrap();
-                let _ = f.write_all(&line);
+                if let Some(file) = &file {
+                    let mut f = file.lock().unwrap();
+                    let _ = f.write_all(&line);
+                }
             }
         }
     }
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let mut f = file.lock().unwrap();
-    let _ = writeln!(f, "\n===== [server {tag} {ts}] stream closed =====");
+    if let Some(file) = &file {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let mut f = file.lock().unwrap();
+        let _ = writeln!(f, "\n===== [server {tag} {ts}] stream closed =====");
+    }
 }
 
 /// server.log 简易轮转: 超 10MB → rename server.log.old (单代覆盖, 不累加)。
@@ -1089,6 +1095,12 @@ fn start_server(
     for (k, v) in env_overrides(&cfg, cpu_auto_compat()) {
         cmd.env(k, v);
     }
+    // 批次87 (SEC-04): 服务在 0.0.0.0 且未设 key 时默认拒绝启动。桌面壳的
+    // 「对外服务」开关是用户在设置页的显式选择 (UI 已提示风险), 这里把这份
+    // 知情显式传给服务端, 保留原有局域网能力。
+    if state.expose.load(Ordering::Relaxed) {
+        cmd.env("ADR_ALLOW_UNAUTHENTICATED", "1");
+    }
     // 服务日志落盘 (排错必需: 此前服务崩溃/卡死均无日志可查)
     // 路径见 server_log_path(): ADR_LOG_DIR > <adr_data_dir()>\logs
     #[cfg(windows)]
@@ -1105,28 +1117,32 @@ fn start_server(
     };
     let log_path = server_log_path();
     // 单次打开句柄共享给 stdout/stderr 两泵; 头行由调用方单线程写一次
-    if let Ok(file) = std::fs::OpenOptions::new()
+    // 批次87 (BUG-02): 句柄打不开也要继续, 由泵把管道抽干 (见 pump_server_log)
+    let log_file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&log_path)
-    {
-        use std::io::Write;
-        let file = Arc::new(Mutex::new(file));
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        {
-            let mut f = file.lock().unwrap();
-            let _ = writeln!(f, "\n===== [server {ts}] stream open =====");
-        }
-        if let Some(out) = child.stdout.take() {
-            let file = file.clone();
-            std::thread::spawn(move || pump_server_log(out, file, "stdout"));
-        }
-        if let Some(err) = child.stderr.take() {
-            std::thread::spawn(move || pump_server_log(err, file, "stderr"));
-        }
+        .ok()
+        .map(|file| {
+            use std::io::Write;
+            let file = Arc::new(Mutex::new(file));
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            {
+                let mut f = file.lock().unwrap();
+                let _ = writeln!(f, "\n===== [server {ts}] stream open =====");
+            }
+            file
+        });
+    if let Some(out) = child.stdout.take() {
+        let file = log_file.clone();
+        std::thread::spawn(move || pump_server_log(out, file, "stdout"));
+    }
+    if let Some(err) = child.stderr.take() {
+        let file = log_file.clone();
+        std::thread::spawn(move || pump_server_log(err, file, "stderr"));
     }
     state.pid.store(child.id(), Ordering::Relaxed);
     *state.base_url.lock().unwrap() = Some(base.clone());

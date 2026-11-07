@@ -53,6 +53,8 @@ def http_error_code(exc: HTTPException) -> str:
 #   500 = 其余未预期内部故障。
 _UNAVAILABLE_CODES = {
     "config_error", "model_not_found", "device_error", "dependency_missing",
+    # 批次86 (CON-01): 引擎卡死 / 锁等待超时 → 503, 客户端可重试
+    "engine_stalled",
 }
 
 

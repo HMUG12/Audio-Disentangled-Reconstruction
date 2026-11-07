@@ -624,7 +624,8 @@ async def train_upload(file: UploadFile = File(...),
     duration_s = samplerate = None
     if ext != ".zip":
         try:
-            probe = _probe_audio(dest)
+            # 批次87 (PERF-02): 探测含 soundfile/ffprobe 子进程, 移出事件循环
+            probe = await asyncio.to_thread(_probe_audio, dest)
         except ValueError as e:
             dest.unlink(missing_ok=True)
             raise HTTPException(400, str(e))

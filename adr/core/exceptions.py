@@ -84,6 +84,16 @@ class SynthesisParamsError(SynthesisError):
     code = "invalid_params"
 
 
+class EngineStalledError(SynthesisError):
+    """合成引擎卡死 / 等待引擎锁超时 (批次86 / CON-01)。
+
+    流式 worker 卡在上游 run() 时会长期持有引擎锁; 后续请求不再无限排队,
+    而是按 503 (可重试) 返回, 进程保持可响应。
+    """
+
+    code = "engine_stalled"
+
+
 def error_code(e: BaseException) -> str:
     """异常 → 稳定错误码 (批次35 四面统一映射的单点)。
 

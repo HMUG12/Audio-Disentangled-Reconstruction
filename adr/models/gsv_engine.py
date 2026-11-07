@@ -41,6 +41,7 @@ from adr.models.gsv_runtime import (  # noqa: F401
 )
 from adr.core import settings
 from adr.core.audit import log_event
+from adr.core.exceptions import EngineStalledError
 from adr.core.scheduler import SynthesisScheduler
 from adr.models.gsv_coalescer import _Coalescer
 
@@ -59,6 +60,22 @@ _CHDIR_LOCK = threading.RLock()
 # 超时后直接返回, worker 仍持引擎锁存活)。超时即标记引擎降级, 下次重建模型。
 _STREAM_DRAIN_SEC = 30.0
 _STREAM_JOIN_SEC = 5.0
+
+# 批次86 (CON-01): 引擎锁等待上限。卡死的 worker 会长期持有 _lock, 旧实现用
+# 无超时 ``with self._lock`` → 后续请求全部永久排队, 表现为全站假死。
+# 超时统一转 EngineStalledError (503 可重试), 进程保持可响应。
+_LOCK_WAIT_SEC = 55.0
+# 批次86 (CON-01): 流式消费端静默上限 — 上游 run() 这么久没有产出即判定卡死,
+# 主动取消 + 降级, 让 finally 里的 _mark_stalled 能真正执行到。
+_STREAM_IDLE_SEC = 120.0
+
+# 批次87 (SEC-02): 权重安全校验结果缓存。旧实现每个带 t2s_weights/vits_weights
+# 的请求都在线程池里整文件 torch.load + 慢路径 f.read() (峰值 2× 文件体积),
+# 稳态调用/并发几次即 OOM。与 _ensure_weights 同一指纹 (路径 + mtime_ns +
+# size): 文件被换掉指纹变化 → 自动重校验, 不会漏检。
+_WEIGHTS_CHECKED: "OrderedDict[tuple[str, int, int], None]" = OrderedDict()
+_WEIGHTS_CHECKED_LOCK = threading.Lock()
+_WEIGHTS_CHECKED_MAX = 256
 
 
 def is_cuda_oom(e: BaseException) -> bool:
@@ -134,6 +151,63 @@ def _nvidia_driver_version() -> Optional[str]:
     return None
 
 
+def _weights_max_bytes() -> int:
+    """权重文件大小上限 (批次86 / SEC-01): ADR_TTS_WEIGHTS_MAX_MB, 默认 2048MB。
+    GSV 权重常见 500MB~1.5GB, 留足余量; 超限只可能是误传/攻击。"""
+    try:
+        mb = int(os.environ.get("ADR_TTS_WEIGHTS_MAX_MB", "2048"))
+    except ValueError:
+        mb = 2048
+    return (mb if mb > 0 else 2048) * 1024 * 1024
+
+
+def _precheck_weights_path(weights_path: str) -> str:
+    """整文件读入前的本地路径预检, 返回解析后的绝对路径 (批次86 / SEC-01)。
+
+    v2 的 GET /tts 默认无鉴权, 旧实现把 query 里的路径直接丢给 torch.load /
+    f.read(): 任意本地大文件可打爆内存, UNC 路径 (\\\\host\\share\\x) 还会让
+    服务主动发起 SMB 连接。这里先拒绝 UNC/设备路径 + stat 校验 (存在、普通
+    文件、大小上限), 通过后才进入 pickle 预检。
+
+    相对路径按 GSV 目录解析 — 与 _ensure_weights 在 _gsv_context() (chdir)
+    下 ``Path(p).resolve()`` 的语义一致, 不影响 GPT_weights_v2/xxx.ckpt 这类
+    文档化写法。
+    """
+    p = str(weights_path or "")
+    if not p or "\x00" in p:
+        raise ValueError("weights path is empty or invalid")
+    if p.startswith(("\\\\", "//", "\\\\?\\", "\\\\.\\")):
+        raise ValueError("UNC/device weights path is not allowed")
+    path = Path(p)
+    if not path.is_absolute():
+        path = GSV_DIR / path
+    path = path.resolve()
+    if not path.is_file():
+        raise ValueError(f"weights file not found or not a regular file: {path}")
+    size = path.stat().st_size
+    limit = _weights_max_bytes()
+    if size > limit:
+        raise ValueError(
+            f"weights file too large: {size} bytes (limit {limit} bytes, "
+            f"see ADR_TTS_WEIGHTS_MAX_MB)")
+    return str(path)
+
+
+def _weights_check_cached(stamp: tuple[str, int, int]) -> bool:
+    """批次87 (SEC-02): 校验结果缓存命中? (路径 + mtime_ns + size 指纹)"""
+    with _WEIGHTS_CHECKED_LOCK:
+        return stamp in _WEIGHTS_CHECKED
+
+
+def _weights_check_remember(stamp: tuple[str, int, int]) -> None:
+    """记一次校验通过 (FIFO 上限 256, 防无界增长)。"""
+    with _WEIGHTS_CHECKED_LOCK:
+        _WEIGHTS_CHECKED[stamp] = None
+        _WEIGHTS_CHECKED.move_to_end(stamp)
+        while len(_WEIGHTS_CHECKED) > _WEIGHTS_CHECKED_MAX:
+            _WEIGHTS_CHECKED.popitem(last=False)
+
+
 def validate_weights_file(weights_path: str) -> None:
     """权重文件安全预检 (Track B 收口; 批次38 收编为引擎单点): 防恶意 pickle RCE。
 
@@ -154,23 +228,53 @@ def validate_weights_file(weights_path: str) -> None:
     唯一强收口点在 _ensure_weights 换权分支内 (覆盖 v2 请求级热换 /
     v3 档案 / native / openai / set_*_weights 全部入口); v2 层另有
     请求入口早检, 仅为了流式请求能在响应头发出前给出干净的 400。
+
+    批次86 (SEC-01): 进入反序列化前先过 _precheck_weights_path —
+    UNC/设备路径拒绝、非普通文件拒绝、超过 ADR_TTS_WEIGHTS_MAX_MB 拒绝。
+    批次87 (SEC-02): 同一指纹 (路径+mtime_ns+size) 只校验一次, 结果缓存。
     """
+    weights_path = _precheck_weights_path(weights_path)
+    stamp = weights_stamp(weights_path)
+    if _weights_check_cached(stamp):
+        return
     import torch
     try:
         obj = torch.load(weights_path, map_location="cpu", weights_only=True)
-    except Exception as fast_err:
+    except Exception:
         try:
             _restricted_weights_scan(weights_path)
         except Exception as slow_err:
             raise ValueError(
                 f"weights file rejected by safe loader: {type(slow_err).__name__}: "
                 f"{slow_err} ({weights_path})") from slow_err
+        _weights_check_remember(stamp)
         return  # 慢路径通过: 含 HParams 的 GSV 训练产物
     if not isinstance(obj, dict):
         raise ValueError("weights file top-level must be a dict of tensors")
+    _weights_check_remember(stamp)
 
 
-def _is_trusted_weights_global(module: str, name: str) -> bool:
+def safe_torch_load(path, map_location="cpu",
+                    allow_globals: tuple[tuple[str, str], ...] = ()):
+    """受限反序列化 (批次87 / SEC-03): 优先 weights_only=True, 需要时按白名单回落。
+
+    ADR 自己的训练产物把 ``TrainerConfig`` 等本仓 dataclass 存进了 checkpoint,
+    ``weights_only=True`` 会拒; 直接 ``weights_only=False`` 又是 RCE 面。这里
+    先受限扫描 pickle GLOBAL (白名单外一律拒绝), 再以 weights_only=False 真正
+    加载 —— 能落地的只有白名单内的类型。
+
+    allow_globals: 额外放行的 (module, name), 只应列本仓自有类。
+    """
+    import torch
+    try:
+        return torch.load(path, map_location=map_location, weights_only=True)
+    except Exception:
+        _restricted_weights_scan(str(path), allow_globals=allow_globals)
+        return torch.load(path, map_location=map_location, weights_only=False)
+
+
+def _is_trusted_weights_global(module: str, name: str,
+                               extra: tuple[tuple[str, str], ...] = ()) -> bool:
     """慢路径 GLOBAL 白名单 (批次43, 探针实测真实权重文件 GLOBAL 并集)。
 
     - collections.OrderedDict: torch.save 顶层容器 (真类, 保顶层 dict 校验)
@@ -178,7 +282,11 @@ def _is_trusted_weights_global(module: str, name: str) -> bool:
     - torch._utils._rebuild_*: torch 张量重建函数
     - utils.HParams: GPT-SoVITS 训练产物 config 的第三方类型 (唯一放行的
       非 torch GLOBAL; stub 化, 不 import third_party)
+    - extra: 调用方显式放行的 (module, name) — 仅本仓训练产物用
+      (批次87 / SEC-03)
     """
+    if (module, name) in extra:
+        return True
     if module == "collections" and name == "OrderedDict":
         return True
     if module == "torch" and name.endswith("Storage"):
@@ -222,10 +330,14 @@ class _WeightsScanStub:
 class _WeightsScanUnpickler(pickle.Unpickler):
     """受限 Unpickler: 白名单外 GLOBAL 直接抛 UnpicklingError。"""
 
+    def __init__(self, *args, allow_globals: tuple[tuple[str, str], ...] = ()):
+        super().__init__(*args)
+        self._allow = allow_globals
+
     def find_class(self, module, name):
         if module == "collections" and name == "OrderedDict":
             return OrderedDict  # 标准库纯容器, 真类以保顶层 dict 校验
-        if _is_trusted_weights_global(module, name):
+        if _is_trusted_weights_global(module, name, self._allow):
             return _WeightsScanStub
         raise pickle.UnpicklingError(
             f"forbidden global in weights pickle: {module}.{name}")
@@ -235,7 +347,8 @@ class _WeightsScanUnpickler(pickle.Unpickler):
         return _WeightsScanStub()
 
 
-def _restricted_weights_scan(weights_path: str) -> None:
+def _restricted_weights_scan(weights_path: str,
+                             allow_globals: tuple[tuple[str, str], ...] = ()) -> None:
     """慢路径: 受限 Unpickler 扫描 torch zip 权重的 data.pkl (不加载张量)。"""
     with open(weights_path, "rb") as f:
         raw = f.read()
@@ -254,7 +367,8 @@ def _restricted_weights_scan(weights_path: str) -> None:
     except zipfile.BadZipFile as e:
         raise pickle.UnpicklingError(
             "not a torch zip weights file (legacy non-zip format not accepted)") from e
-    obj = _WeightsScanUnpickler(io.BytesIO(data)).load()
+    obj = _WeightsScanUnpickler(
+        io.BytesIO(data), allow_globals=allow_globals).load()
     if not isinstance(obj, dict):
         raise pickle.UnpicklingError(
             "weights file top-level must be a dict of tensors")
@@ -498,12 +612,24 @@ class GSVEngine:
     def _admit(self):
         """调度准入 (批次63 第三子批): N=1 硬预算排队 + 调度报告落审计。
 
+        批次86 (CON-01): 排队也带上限 — 卡死的流式 worker 会一直占着槽位,
+        无界排队会让后续请求全部永久挂起 (全站假死)。超时转 503 可重试。
         log_event 内部吞异常降级, 审计失败不影响合成。
         """
-        with self._sched.slot() as tk:
-            log_event("schedule", wait_ms=tk.wait_ms,
-                      waiting=tk.waiting, busy=tk.busy)
-            yield
+        admitted = False
+        try:
+            with self._sched.slot(timeout=_LOCK_WAIT_SEC) as tk:
+                admitted = True
+                log_event("schedule", wait_ms=tk.wait_ms,
+                          waiting=tk.waiting, busy=tk.busy)
+                yield
+        except TimeoutError as e:
+            if admitted:
+                raise   # 合成体自己抛的 TimeoutError, 不当作准入超时
+            log_event("engine_admit_timeout", wait_s=_LOCK_WAIT_SEC)
+            raise EngineStalledError(
+                f"合成引擎忙或已卡死 ({_LOCK_WAIT_SEC:.0f}s 未获得调度准入), "
+                f"请稍后重试") from e
 
     @property
     def is_ready(self) -> bool:
@@ -527,6 +653,26 @@ class GSVEngine:
                 yield
             finally:
                 os.chdir(old_cwd)
+
+    @contextlib.contextmanager
+    def _engine_lock(self):
+        """批次86 (CON-01): 带超时获取引擎锁。
+
+        卡死的流式 worker 可能正持着 ``_lock``; 旧实现的无超时 ``with
+        self._lock`` 会让后续请求永久排队。这里超时即转 503 (engine_stalled),
+        由调用方重试, 不再拖住整个进程。
+        """
+        if not self._lock.acquire(timeout=_LOCK_WAIT_SEC):
+            logging.getLogger("adr").error(
+                "[gsv] 等待引擎锁 %.0fs 超时: 可能有流式 worker 卡死",
+                _LOCK_WAIT_SEC)
+            log_event("engine_lock_timeout", wait_s=_LOCK_WAIT_SEC)
+            raise EngineStalledError(
+                f"合成引擎忙或已卡死 ({_LOCK_WAIT_SEC:.0f}s 未获得锁), 请稍后重试")
+        try:
+            yield
+        finally:
+            self._lock.release()
 
     def _mark_stalled(self, worker: threading.Thread) -> None:
         """批次82 (#1): 流式 worker 超时未退出 — 标记引擎不可复用。
@@ -721,7 +867,7 @@ class GSVEngine:
         传权重时额外热换到目标权重 — 否则首次流式调用要付 ~12s 的
         init_vits_weights 罚金 (实测 bench_stream_variance)。
         """
-        with self._lock:
+        with self._engine_lock():
             self._lazy_init()
             self._ensure_weights(vits_weights, t2s_weights)
 
@@ -872,7 +1018,7 @@ class GSVEngine:
         def _produce():
             try:
                 with self._admit(), _RuntimeProbe(stream=True) as probe:
-                    with self._lock:
+                    with self._engine_lock():
                         self._lazy_init()
                         probe.start()   # 计时从模型就绪起: 懒加载不计入 RTF
                         inputs = {
@@ -952,9 +1098,19 @@ class GSVEngine:
                                   daemon=True)
         worker.start()
         done_seen = False
+        idle_stalled = False
         try:
             while True:
-                item = q.get()
+                try:
+                    item = q.get(timeout=_STREAM_IDLE_SEC)
+                except _queue.Empty:
+                    # 批次86 (CON-01): 上游 run() 卡死时旧实现的 q.get() 无超时,
+                    # 消费端永远停在循环里, finally 里的 _mark_stalled 根本执行
+                    # 不到 → 引擎锁被永久占住, 后续请求全部排队 (全站假死)。
+                    # 静默超时即判定卡死: 主动取消 + 降级, 并把 503 交给调用方。
+                    idle_stalled = True
+                    raise EngineStalledError(
+                        f"合成上游 {_STREAM_IDLE_SEC:.0f}s 无输出, 已判定卡死")
                 if item is _DONE:
                     done_seen = True
                     break
@@ -967,7 +1123,10 @@ class GSVEngine:
             # 方永远拿不回控制权。现在排空到 deadline 为止 (无界队列下正常
             # 路径不会阻塞), join 有界; 仍未退出则判定引擎卡死并降级。
             cancel.set()
-            deadline = time.monotonic() + _STREAM_DRAIN_SEC
+            # 批次86 (CON-01): 已因静默超时判定卡死时跳过 30s 排空 — worker
+            # 不会再产出, 直接 join + 降级, 让调用方尽快拿到 503。
+            deadline = time.monotonic() + (0.0 if idle_stalled
+                                           else _STREAM_DRAIN_SEC)
             while not done_seen:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -1066,7 +1225,7 @@ class GSVEngine:
                     inputs["batch_size"] = bs
                 sr, audio = self._coalescer.submit(inputs).result()
             else:
-                with self._lock:
+                with self._engine_lock():
                     self._lazy_init()
                     probe.start()
                     inputs = _build_inputs(with_weights=False)

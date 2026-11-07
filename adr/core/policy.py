@@ -15,11 +15,16 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
+
+# 批次87 (PERF-01): policy.json 解析结果缓存 — (path, mtime_ns, size) → dict
+_LOAD_CACHE: dict[tuple[str, int, int], dict] = {}
+_LOAD_CACHE_LOCK = threading.Lock()
 
 POLICY_VERSION = 1          # 规则或 schema 变化时递增
 RULES = "conservative-v1"
@@ -110,14 +115,29 @@ def save(policy: dict, path: Path | None = None) -> Path:
 
 
 def load(path: Path | None = None) -> dict | None:
+    """读 policy.json (批次87 / PERF-01: 按 mtime+size 缓存, 命中不读盘)。
+
+    返回的 dict 由调用方**只读**使用 (内部各调用点均如此); 文件被改写时
+    指纹变化 → 自动重读, 不会读到过期内容。
+    """
     path = path or policy_path()
-    if not path.exists():
-        return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        st = path.stat()
+    except OSError:
+        return None
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    with _LOAD_CACHE_LOCK:
+        if key in _LOAD_CACHE:
+            return _LOAD_CACHE[key]
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         log.warning("[Policy] policy.json 无法解析, 忽略: %s", e)
         return None
+    with _LOAD_CACHE_LOCK:
+        _LOAD_CACHE.clear()          # 只保留最近一次 (policy.json 极少变)
+        _LOAD_CACHE[key] = data
+    return data
 
 
 def generate(profile: dict | None, path: Path | None = None) -> dict:

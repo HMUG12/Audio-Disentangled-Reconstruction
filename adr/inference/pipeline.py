@@ -137,7 +137,15 @@ class InferPipeline:
         if not checkpoint_path.exists():
             raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
-        ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        # 批次87 (SEC-03): 走受限反序列化 — checkpoint 含本仓 dataclass config,
+        # weights_only=True 会拒; 白名单外 GLOBAL 一律拒绝, 不再裸 allow_pickle
+        from adr.models.gsv_engine import safe_torch_load
+        ckpt = safe_torch_load(
+            checkpoint_path, map_location="cpu",
+            allow_globals=(
+                ("adr.training.trainer", "TrainerConfig"),
+                ("adr.inference.pipeline", "InferConfig"),
+            ))
 
         # 推断 backbone 类型 (从 ckpt['model_class'] 优先)
         if backbone_cls is None:

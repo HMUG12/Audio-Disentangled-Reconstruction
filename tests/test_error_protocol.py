@@ -19,6 +19,7 @@ from adr.core.exceptions import (
     DataPipelineError,
     DependencyMissingError,
     DeviceError,
+    EngineStalledError,
     InferenceError,
     ModelNotFoundError,
     ProfileInvalidError,
@@ -47,6 +48,7 @@ from adr.server import create_app
     (ProfileInvalidError, "profile_invalid"),
     (ProfileNotFoundError, "profile_not_found"),
     (SynthesisParamsError, "invalid_params"),
+    (EngineStalledError, "engine_stalled"),
 ])
 def test_exception_codes(exc, code):
     assert issubclass(exc, ADRException)
@@ -169,6 +171,16 @@ def test_v2_engine_value_error_stays_400(client, engine, monkeypatch):
     r = client.post("/api/v2/tts", json={"text": "你好", "ref_audio_path": "a.wav"})
     assert r.status_code == 400
     assert r.json()["code"] == "internal_error"
+
+
+def test_v2_engine_stalled_503(client, engine, monkeypatch):
+    """批次86 (CON-01): 引擎卡死 / 锁等待超时 → 503 (可重试), 不再是 400/500。"""
+    def _boom(*args, **kwargs):
+        raise EngineStalledError("engine stalled")
+    monkeypatch.setattr(engine, "synthesize", _boom)
+    r = client.post("/api/v2/tts", json={"text": "你好", "ref_audio_path": "a.wav"})
+    assert r.status_code == 503
+    assert r.json()["code"] == "engine_stalled"
 
 
 def test_http_exception_has_message(client):

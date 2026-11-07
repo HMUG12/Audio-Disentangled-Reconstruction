@@ -248,11 +248,21 @@ async def tts_handle(req: dict, request: Request) -> Response:
       0 → 非流式 | 1 → 分段流 (return_fragment) | 2 → 真流式 | 3 → 真流式+定长块
       其余 → 400。注: bool True == 1, 自然落分支 1。
     """
-    # 批次38 (Track B 补口): 请求显式传入的权重文件先过安全预检, 给出干净的 400
-    # (流式路径响应头先行, 引擎校验发生在流开始后只能断流)。仅校验请求级热换值 —
-    # 档案回填的权重由引擎 _ensure_weights 换权分支强收口, 不在此处重复。
-    for _wk in ("t2s_weights", "vits_weights"):
-        _wp = req.get(_wk)
+    # 批次86 (SEC-01): 先记下"请求级"权重值 — _resolve_profile 会把档案里的
+    # 权重回填进 req, 那不是本次请求的输入; 对档案权重做无鉴权预检既无意义
+    # (由引擎 _ensure_weights 换权分支收口), 又会把库里的相对路径当用户输入拒。
+    _req_weights = {k: req.get(k) for k in ("t2s_weights", "vits_weights")}
+    err = _resolve_profile(request, req)
+    if err is not None:
+        return err
+    err = _check_params(req)
+    if err is not None:
+        return err
+    # 批次86 (SEC-01): 权重预检移到参数校验之后 — 旧顺序让未鉴权的 GET /tts 在
+    # text 等参数非法时也会按 query 里的任意路径做整文件校验/读盘 (单请求 OOM,
+    # UNC 还会主动发起 SMB 连接)。预检本身也加了 UNC 拒绝 + stat 大小上限,
+    # 见 validate_weights_file。
+    for _wk, _wp in _req_weights.items():
         if _wp:
             try:
                 await asyncio.to_thread(_validate_weights_file, _wp)
@@ -261,13 +271,6 @@ async def tts_handle(req: dict, request: Request) -> Response:
                     status_code=400,
                     content={"message": f"invalid {_wk}: {e}",
                              "code": "invalid_params"})
-
-    err = _resolve_profile(request, req)
-    if err is not None:
-        return err
-    err = _check_params(req)
-    if err is not None:
-        return err
     msg = await asyncio.to_thread(_check_ref_audio, req["ref_audio_path"])
     if msg:
         return JSONResponse(status_code=400,
@@ -381,6 +384,7 @@ async def tts_get_endpoint(
     voice: str = None,
     t2s_weights: str = None,
     vits_weights: str = None,
+    _guard: None = Depends(require_browser_safe),
 ):
     req = {
         "text": text,

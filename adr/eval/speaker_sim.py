@@ -32,7 +32,7 @@ def _load_model():
         return _model
     import torch
     from ERes2NetV2 import ERes2NetV2
-    state = torch.load(SV_CKPT, map_location="cpu", weights_only=False)
+    state = torch.load(SV_CKPT, map_location="cpu", weights_only=True)  # SEC-03
     m = ERes2NetV2(baseWidth=24, scale=4, expansion=4)
     m.load_state_dict(state)
     m.eval()

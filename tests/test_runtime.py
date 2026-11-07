@@ -101,3 +101,32 @@ def test_record_never_raises(monkeypatch):
     monkeypatch.setattr(runtime, "_evaluate", lambda: 1 / 0)
     runtime.record(ok=True, elapsed_s=1.0, audio_s=1.0)   # 吞异常
     assert runtime.report()["window_size"] == 1
+
+
+def test_record_evaluates_outside_global_lock(monkeypatch):
+    """批次87 (PERF-01): 评估期间全局锁必须已释放 (旧实现锁内读盘)。"""
+    held = []
+
+    def _eval():
+        got = runtime._lock.acquire(blocking=False)
+        held.append(got)
+        if got:
+            runtime._lock.release()
+
+    monkeypatch.setattr(runtime, "_evaluate", _eval)
+    runtime.record(ok=True, elapsed_s=1.0, audio_s=1.0)
+    assert held == [True]
+    assert runtime.report()["window_size"] == 1
+
+
+def test_record_skips_eval_when_another_running(monkeypatch):
+    """批次87 (PERF-01): 评估非阻塞 — 另一个评估在跑时请求不被拖住。"""
+    calls = []
+    monkeypatch.setattr(runtime, "_evaluate", lambda: calls.append(1))
+    assert runtime._eval_lock.acquire(blocking=False)
+    try:
+        runtime.record(ok=True, elapsed_s=1.0, audio_s=1.0)
+    finally:
+        runtime._eval_lock.release()
+    assert calls == []
+    assert runtime.report()["window_size"] == 1

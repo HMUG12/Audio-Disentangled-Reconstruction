@@ -544,3 +544,57 @@ def test_s2_guard_off_when_api_key_set(auth_client):
     assert auth_client.get(PROFILES, headers=h).status_code == 401
     h["Authorization"] = "Bearer k1"
     assert auth_client.get(PROFILES, headers=h).status_code == 200
+
+
+# ─── 批次86 (SEC-01): 未鉴权 GET /tts 跨站守卫 + 权重路径预检 ───
+
+TTS_GET = "/api/v2/tts"
+
+
+def test_audit_sec01_cross_site_get_tts_blocked(open_client):
+    """无 key 时浏览器跨站 GET /tts (<img>/导航不带 Origin) → 403。"""
+    r = open_client.get(TTS_GET, params={"text": "hi", "ref_audio_path": "a.wav"},
+                        headers={"Sec-Fetch-Site": "cross-site"})
+    assert r.status_code == 403
+
+
+def test_audit_sec01_tts_non_browser_still_allowed(open_client):
+    """后端客户端不带 Sec-Fetch-Site → 守卫放行 (零改造红线)。"""
+    r = open_client.get(TTS_GET, params={"text": "hi", "ref_audio_path": "a.wav"})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("audio/wav")
+
+
+def test_audit_sec01_unc_weights_rejected_before_io(open_client):
+    """UNC 权重路径 → 400, 不发起 SMB 连接 / 不读盘。"""
+    r = open_client.get(TTS_GET, params={
+        "text": "hi", "ref_audio_path": "a.wav",
+        "t2s_weights": "//server/share/x.pth"})
+    assert r.status_code == 400
+    assert "UNC" in r.json()["message"]
+
+
+def test_audit_sec01_params_checked_before_weights(open_client):
+    """缺 text 时先报参数错误 — 不再按 query 里的任意路径做整文件校验。"""
+    r = open_client.get(TTS_GET, params={
+        "ref_audio_path": "a.wav", "t2s_weights": "//server/share/x.pth"})
+    assert r.status_code == 400
+    assert "t2s_weights" not in r.json()["message"]
+
+
+def test_validate_weights_rejects_oversize(tmp_path, monkeypatch):
+    """批次86 (SEC-01): 超 ADR_TTS_WEIGHTS_MAX_MB 的权重文件在读取前拒绝。"""
+    from adr.models.gsv_engine import validate_weights_file
+
+    monkeypatch.setenv("ADR_TTS_WEIGHTS_MAX_MB", "1")
+    p = tmp_path / "big.pth"
+    p.write_bytes(b"\0" * (2 * 1024 * 1024))
+    with pytest.raises(ValueError, match="too large"):
+        validate_weights_file(str(p))
+
+
+def test_validate_weights_rejects_missing_file(tmp_path):
+    from adr.models.gsv_engine import validate_weights_file
+
+    with pytest.raises(ValueError, match="not found"):
+        validate_weights_file(str(tmp_path / "nope.pth"))

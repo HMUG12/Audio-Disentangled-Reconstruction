@@ -206,7 +206,9 @@ class BigVGANVocoder(BaseVocoder):
         # 加载权重 — 处理 3 种 ckpt 格式
         # 批次65 显存双重加载: 先 map CPU,load_state_dict 再复制到已在 device 上的模型;
         # 完整训练 ckpt 的判别器/优化器状态也不会被搬上 GPU
-        ckpt = torch.load(pt_file, map_location="cpu", weights_only=False)
+        # 批次87 (SEC-03): 受限反序列化 (官方 ckpt 含 hparams 字典, 由白名单兜底)
+        from adr.models.gsv_engine import safe_torch_load
+        ckpt = safe_torch_load(pt_file, map_location="cpu")
         if isinstance(ckpt, dict) and "generator" in ckpt and isinstance(ckpt["generator"], dict):
             # 格式 1: {"generator": OrderedDict}
             state_dict = ckpt["generator"]
