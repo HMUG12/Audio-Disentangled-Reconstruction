@@ -19,6 +19,9 @@
    host:port 与 Host 头一致, 即控制台页面自身) 或在白名单内
    (见 settings.cors_origins: Tauri 壳 / 本机 localhost 页 / ADR_CORS_ORIGINS)。
    不带 Origin 的请求 (N.E.K.O 后端 / curl / Python 客户端) 一律放行。
+3. 有副作用接口 (批次77): `<img>` / 顶层导航 / no-cors fetch 等浏览器发起
+   的跨站 GET 不带 Origin, 上面两条拦不住 — 这类路由额外挂
+   ``require_browser_safe`` 依赖, 按 Sec-Fetch-Site 判定 (见该函数)。
 
 逃生阀: ``ADR_ALLOWED_HOSTS=*`` 关闭 Host 检查; ``ADR_CORS_ORIGINS=*``
 恢复旧的 CORS 全开并关闭 Origin 检查。
@@ -27,6 +30,8 @@ from __future__ import annotations
 
 import ipaddress
 import re
+
+from fastapi import HTTPException, Request
 
 # 本机来源: 任意端口的 localhost / 127.0.0.1 / [::1] 页面 (本机软件, 如
 # N.E.K.O 前端若改为浏览器直连)。Tauri 壳来源见 settings.TAURI_ORIGINS。
@@ -73,6 +78,66 @@ def origin_allowed(origin: str, host_header: str | None,
         netloc = low.split("://", 1)[1]
         return netloc == host_header.strip().lower()
     return False  # 含 "null" (沙箱 iframe / file://) 等
+
+
+def configured_allowed_origins() -> set[str]:
+    """当前静态白名单 (Tauri 壳 + ADR_CORS_ORIGINS), 小写化。"""
+    from adr.core import settings
+    return {o.strip().lower()
+            for o in (*settings.TAURI_ORIGINS, *settings.cors_origins())
+            if o.strip() and o.strip() != "*"}
+
+
+def any_origin_allowed() -> bool:
+    """``ADR_CORS_ORIGINS=*`` 逃生阀 — 恢复旧的全开语义。"""
+    from adr.core import settings
+    return "*" in settings.cors_origins()
+
+
+def cross_site_allowed(sec_fetch_site: str | None, origin: str | None,
+                       host_header: str | None, allowed: set[str],
+                       allow_any_origin: bool = False) -> bool:
+    """有副作用接口的浏览器跨站判定 (批次77 / CODE_REVIEW #4)。
+
+    中间件的 Origin 检查只能看见"带 Origin 的跨站"; 浏览器 `<img>` /
+    顶层导航 / ``{mode: "no-cors"}`` fetch 的跨站 GET 一律不带 Origin,
+    可直接触发换权 / doctor 修复这类有副作用的接口。这里改用
+    Sec-Fetch-Site (Chrome 76+ / Firefox 90+ / Safari 16.4+ 均发送):
+
+    - 缺 Sec-Fetch-Site = 非浏览器客户端 (N.E.K.O / curl / SDK) → 放行,
+      保住零改造兼容红线;
+    - same-origin / same-site / none → 放行 (控制台自身 / 本机页面 / 地址栏);
+    - cross-site → 必须带白名单内的 Origin 才放行 (Tauri 壳
+      ``tauri.localhost`` → ``127.0.0.1`` 的合法跨站 fetch), 否则拒。
+    """
+    site = (sec_fetch_site or "").strip().lower()
+    if not site:
+        return True
+    if site != "cross-site":
+        return True
+    if allow_any_origin:
+        return True
+    return bool(origin) and origin_allowed(origin, host_header, allowed)
+
+
+async def require_browser_safe(request: Request) -> None:
+    """路由依赖: 有副作用接口拒绝浏览器跨站触发 (批次77)。
+
+    与中间件 enabled 语义对齐: 配了 ``ADR_TTS_API_KEY`` 时由鉴权兜底
+    (跨站请求带不上 key), 这里直接放行 — 反代 / 自定义域名部署不被误伤。
+    """
+    from adr.core import settings
+    if settings.api_keys():
+        return
+    headers = request.headers
+    if not cross_site_allowed(headers.get("sec-fetch-site"),
+                              headers.get("origin"),
+                              headers.get("host"),
+                              configured_allowed_origins(),
+                              any_origin_allowed()):
+        raise HTTPException(
+            status_code=403,
+            detail="forbidden: cross-site request to side-effecting endpoint")
 
 
 class OriginGuardMiddleware:

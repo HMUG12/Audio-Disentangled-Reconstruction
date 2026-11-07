@@ -157,12 +157,15 @@ class Trainer:
         )
 
         # DataLoader
+        # 批次81 (#8): collate_fn 用 dataset 的绑定方法而不是 lambda ——
+        # lambda 在 Windows spawn 模式下不可 pickle, num_workers>0 直接
+        # PicklingError; 绑定方法可被 pickle, 且仍携带 phoneme_to_id。
         self.train_loader = DataLoader(
             self.train_data,
             batch_size=self.config.batch_size,
             shuffle=True,
             num_workers=self.config.num_workers,
-            collate_fn=lambda b: self.train_data.collate(b),
+            collate_fn=self.train_data.collate,
             drop_last=True,
         )
         self.val_loader = (
@@ -171,7 +174,7 @@ class Trainer:
                 batch_size=self.config.batch_size,
                 shuffle=False,
                 num_workers=self.config.num_workers,
-                collate_fn=lambda b: self.val_data.collate(b),
+                collate_fn=self.val_data.collate,
             )
             if self.val_data is not None else None
         )
@@ -326,6 +329,35 @@ class Trainer:
             self.log.info(f"  Best val/loss = {best_val_loss:.4f}")
         return best_metrics
 
+    def _step_optimizer(self) -> None:
+        """梯度裁剪 + optimizer.step + scheduler.step (含 AMP scaler)。
+
+        批次81 (#7): 从 ``_train_epoch`` 抽出, 供累积边界与 epoch 末尾
+        余数 flush 共用, 避免两处逻辑漂移。
+        """
+        if self.config.grad_clip > 0:
+            if self.scaler is not None:
+                self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(),
+                self.config.grad_clip,
+            )
+
+        if self.scaler is not None:
+            # AMP: inf 梯度时 scaler 会跳过 step (scale 下降)
+            prev_scale = self.scaler.get_scale()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+            opt_stepped = self.scaler.get_scale() >= prev_scale
+        else:
+            self.optimizer.step()
+            opt_stepped = True
+        self.optimizer.zero_grad()
+        # 只有 optimizer 真正更新后才步进 scheduler
+        # (避免 "lr_scheduler.step() before optimizer.step()" 警告)
+        if opt_stepped:
+            self.scheduler.step()
+
     def _train_epoch(self, epoch: int, global_step: int) -> dict:
         """一个训练 epoch。"""
         self.model.train()
@@ -367,30 +399,17 @@ class Trainer:
 
             # 累积到一定步数才更新
             if (step + 1) % self.config.grad_accum_steps == 0:
-                # 梯度裁剪
-                if self.config.grad_clip > 0:
-                    if self.scaler is not None:
-                        self.scaler.unscale_(self.optimizer)
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(),
-                        self.config.grad_clip,
-                    )
+                self._step_optimizer()
 
-                # 更新
-                if self.scaler is not None:
-                    # AMP: inf 梯度时 scaler 会跳过 step (scale 下降)
-                    prev_scale = self.scaler.get_scale()
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
-                    opt_stepped = self.scaler.get_scale() >= prev_scale
-                else:
-                    self.optimizer.step()
-                    opt_stepped = True
-                self.optimizer.zero_grad()
-                # 只有 optimizer 真正更新后才步进 scheduler
-                # (避免 "lr_scheduler.step() before optimizer.step()" 警告)
-                if opt_stepped:
-                    self.scheduler.step()
+        # 批次81 (#7): epoch 末尾不足一组的余数梯度原先被下一个 epoch 开头的
+        # zero_grad() 静默丢弃 (epoch_loss 却统计了它), 这里补一次
+        # clip + step + scheduler.step; 口径与 total_steps 的 ceil() 一致。
+        if n_batches and n_batches % self.config.grad_accum_steps != 0:
+            self.log.debug(
+                f"  [GradAccum] flush {n_batches % self.config.grad_accum_steps}"
+                f" batch(es) at epoch {epoch} end"
+            )
+            self._step_optimizer()
 
         avg_loss = epoch_loss / max(1, n_batches)
         elapsed = time.time() - t_start

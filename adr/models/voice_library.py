@@ -67,7 +67,6 @@ def _materialize_ref(src: str, dst: Path) -> dict:
     - <3s / 无法读取: 报错拒绝 (音频内容不足, 无法自动修复)
     返回 {"action": "copy"|"clipped", "duration_s", "orig_s"?}。
     """
-    import numpy as np
     import soundfile as sf
     try:
         info = sf.info(src)
@@ -76,21 +75,29 @@ def _materialize_ref(src: str, dst: Path) -> dict:
     dur = info.frames / info.samplerate
     if dur < 3.0:
         raise ValueError(f"参考音频仅 {dur:.1f}s, 至少需要 3s 干净人声")
-    if dur <= 10.0:
-        shutil.copy2(src, dst)
-        return {"action": "copy", "duration_s": round(dur, 2)}
+    # 批次83 (#17): 先写唯一临时文件再 os.replace — copy/裁剪中途失败或断电
+    # 不会在最终 ref.wav 留下半截文件 (旧实现直写档案路径)。
+    tmp = dst.with_name(f"{dst.stem}.{os.getpid()}.{uuid.uuid4().hex}.tmp.wav")
+    try:
+        if dur <= 10.0:
+            shutil.copy2(src, tmp)
+            os.replace(str(tmp), str(dst))
+            return {"action": "copy", "duration_s": round(dur, 2)}
 
-    wav, sr = sf.read(src, dtype="float32")
-    if wav.ndim > 1:
-        wav = wav.mean(axis=1)
-    wav = _trim_silence(wav, sr)[: int(8.0 * sr)]
-    if len(wav) < int(3.0 * sr):
-        # 极端: 去静音后不足 3s (几乎全静音), 兜底取原始前 8s
         wav, sr = sf.read(src, dtype="float32")
         if wav.ndim > 1:
             wav = wav.mean(axis=1)
-        wav = wav[: int(8.0 * sr)]
-    sf.write(str(dst), wav, sr, subtype="PCM_16")
+        wav = _trim_silence(wav, sr)[: int(8.0 * sr)]
+        if len(wav) < int(3.0 * sr):
+            # 极端: 去静音后不足 3s (几乎全静音), 兜底取原始前 8s
+            wav, sr = sf.read(src, dtype="float32")
+            if wav.ndim > 1:
+                wav = wav.mean(axis=1)
+            wav = wav[: int(8.0 * sr)]
+        sf.write(str(tmp), wav, sr, subtype="PCM_16")
+        os.replace(str(tmp), str(dst))
+    finally:
+        tmp.unlink(missing_ok=True)
     print(f"[voice] ref 超长已自动裁剪: {dur:.1f}s -> {len(wav)/sr:.1f}s "
           f"(GSV 合成限 3~10s)", flush=True)
     return {"action": "clipped", "duration_s": round(len(wav) / sr, 2),
@@ -271,7 +278,7 @@ def _finalize_bind_sim_locked(name: str, sim: float) -> Optional[dict]:
         meta["degraded"] = degraded
     else:
         meta.pop("degraded", None)
-    _write_meta(vdir := VOICES_DIR / name, meta)
+    _write_meta(VOICES_DIR / name, meta)
     return degraded
 
 
@@ -440,37 +447,40 @@ def save_voice_auto(
     eng = get_gsv_engine()
 
     starts = np.linspace(2, dur - _PROBE_LEN_S - 2, _SWEEP_COUNT)
-    tmp_dir = VOICES_DIR / "_sweep_tmp"
+    # 批次83 (#17): 每轮扫描用独立临时目录 (旧固定 _sweep_tmp 被并发建档
+    # 共享, 后到者会删掉别人正在用的 seg/clone 文件), 且无论成败都清理。
+    tmp_dir = VOICES_DIR / f"_sweep_tmp_{os.getpid()}_{uuid.uuid4().hex}"
     tmp_dir.mkdir(parents=True, exist_ok=True)
-    best = (-1.0, None)
-    best_any = (-1.0, None)   # 全部被节奏过滤时的兜底
-    for i, st in enumerate(starts):
-        seg = wav[int(st * sr):int((st + _PROBE_LEN_S) * sr)]
-        rhythm = _seg_rhythm(seg, sr)
-        seg_path = tmp_dir / f"seg_{i}.wav"
-        sf.write(str(seg_path), seg, sr)
-        clone, osr = eng.synthesize(_PROBE_TEXT, str(seg_path))
-        clone_path = tmp_dir / f"seg_{i}_clone.wav"
-        sf.write(str(clone_path), clone, osr)
-        sim = similarity(str(seg_path), str(clone_path))
-        if sim > best_any[0]:
-            best_any = (sim, seg_path)
-        ok = _rhythm_ok(rhythm)
-        _log(f"段{i + 1}/{_SWEEP_COUNT} @{st:.0f}s: 相似度 {sim:.3f} "
-             f"(静音{rhythm['silence_ratio']:.0%} 停顿{rhythm['pauses']} "
-             f"尾音{rhythm['tail_db']:+.0f}dB {'✓' if ok else '✗节奏'})")
-        if ok and sim > best[0]:
-            best = (sim, seg_path)
+    try:
+        best = (-1.0, None)
+        best_any = (-1.0, None)   # 全部被节奏过滤时的兜底
+        for i, st in enumerate(starts):
+            seg = wav[int(st * sr):int((st + _PROBE_LEN_S) * sr)]
+            rhythm = _seg_rhythm(seg, sr)
+            seg_path = tmp_dir / f"seg_{i}.wav"
+            sf.write(str(seg_path), seg, sr)
+            clone, osr = eng.synthesize(_PROBE_TEXT, str(seg_path))
+            clone_path = tmp_dir / f"seg_{i}_clone.wav"
+            sf.write(str(clone_path), clone, osr)
+            sim = similarity(str(seg_path), str(clone_path))
+            if sim > best_any[0]:
+                best_any = (sim, seg_path)
+            ok = _rhythm_ok(rhythm)
+            _log(f"段{i + 1}/{_SWEEP_COUNT} @{st:.0f}s: 相似度 {sim:.3f} "
+                 f"(静音{rhythm['silence_ratio']:.0%} 停顿{rhythm['pauses']} "
+                 f"尾音{rhythm['tail_db']:+.0f}dB {'✓' if ok else '✗节奏'})")
+            if ok and sim > best[0]:
+                best = (sim, seg_path)
 
-    if best[1] is None:
-        best = best_any
-        _log("所有段未过节奏过滤, 取相似度最高段兜底")
-    sim, best_seg = best
-    vdir = save_voice(name, str(best_seg), prompt_text, t2s_weights, vits_weights,
-                      style=style, language=language,
-                      source=source, consent=consent)
-    for f in tmp_dir.glob("*"):
-        f.unlink(missing_ok=True)
+        if best[1] is None:
+            best = best_any
+            _log("所有段未过节奏过滤, 取相似度最高段兜底")
+        sim, best_seg = best
+        vdir = save_voice(name, str(best_seg), prompt_text, t2s_weights,
+                          vits_weights, style=style, language=language,
+                          source=source, consent=consent)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
     _log(f"建档完成, 最优段相似度 {sim:.3f}")
     return vdir, {"mode": "auto-sweep", "best_sim": round(sim, 3),
                   "duration_s": round(dur, 1), "segments": _SWEEP_COUNT}

@@ -42,6 +42,14 @@
 #else
 #define VariantSuffix ""
 #endif
+; 批次76 (#20): 本次安装包的 runtime 变体, 与 build_runtime.ps1 写进
+; BUILD_VARIANT.txt 的内容逐字对应 (cpu/gpu)。安装时拿它与已装版本比对,
+; 不一致即清掉整棵 runtime\python (见 [InstallDelete] + VariantChanged)。
+#ifdef GPU_BUILD
+#define VariantName "gpu"
+#else
+#define VariantName "cpu"
+#endif
 
 [Setup]
 AppId={{6E1F3C7A-59B2-4A8D-9C43-D2F0A1B65E42}
@@ -86,6 +94,15 @@ Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RuntimeDir}\*"; DestDir: "{app}\runtime"; \
     Flags: ignoreversion recursesubdirs createallsubdirs
 
+[InstallDelete]
+; 批次76 (#20): 双变体共用同一 AppId (原地升级), 换包型 (GPU↔CPU) 时必须
+; 先清整棵 python 树 — 否则旧 CUDA torch 的 nvidia_* 目录 / 旧 CPU 轮的
+; DLL 与新包混装, BUILD_VARIANT.txt 标着 gpu 实际却是 CPU torch, 推理或
+; 训练随机崩。Check=VariantChanged: 首次安装 (无 python 树) 与同变体升级
+; 都不删, 避免每次升级无谓重写 2GB。用户数据 (runtime\data、GSV 权重)
+; 不在 python 树内, 不受影响。
+Type: filesandordirs; Name: "{app}\runtime\python"; Check: VariantChanged
+
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; \
@@ -121,10 +138,37 @@ Filename: "{app}\runtime\redist\vc_redist.x64.exe"; \
     Parameters: "/install /quiet /norestart"; \
     WorkingDir: "{app}\runtime\redist"; \
     Flags: shellexec runhidden waituntilterminated; Check: VCRedistNeedsInstall
+; 批次76 (#20): 这里原来带 skipifsilent — 壳侧静默升级 (/VERYSILENT) 装完
+; 不拉起应用, 用户点完「立即安装」程序就消失, 以为装坏了。去掉该标志后
+; 静默安装同样执行本条, 升级完自动回到应用。
 Filename: "{app}\{#MyAppExe}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; \
-    Flags: nowait postinstall skipifsilent
+    Flags: nowait postinstall
 
 [Code]
+// ---------------------------------------------------------------------------
+// 批次76 (#20): 包型切换清理判定 — [InstallDelete] 的 Check 函数
+// ---------------------------------------------------------------------------
+// 读已装版本留下的标记 (build_runtime.ps1 写入 <app>\runtime\BUILD_VARIANT.txt)。
+// 缺失即视为与本次包型不一致: 批次73 之前的安装包没有该文件, 其 python 树
+// 内容未知, 一律按"换包"清理, 宁可多删不可混装。
+function ReadInstalledVariant(): String;
+var
+  S: AnsiString;
+begin
+  Result := '';
+  if not FileExists(ExpandConstant('{app}\runtime\BUILD_VARIANT.txt')) then
+    Exit;
+  if LoadStringFromFile(ExpandConstant('{app}\runtime\BUILD_VARIANT.txt'), S) then
+    Result := Lowercase(Trim(String(S)));
+end;
+
+// True = 需要先删整棵 runtime\python 再装 (见 [InstallDelete])
+function VariantChanged(): Boolean;
+begin
+  Result := DirExists(ExpandConstant('{app}\runtime\python')) and
+            (ReadInstalledVariant() <> '{#VariantName}');
+end;
+
 // 批次71: VC++ 2015-2022 x64 是否已装 (注册表 Runtimes\x64 键存在即装过;
 // redist 机器级, 本安装器 per-user 只读 HKLM 无权限问题; 64 位安装模式
 // 下无 WOW6432Node 重定向)

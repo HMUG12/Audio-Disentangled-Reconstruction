@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import threading
 from io import BytesIO
 from pathlib import Path
 
@@ -142,12 +144,119 @@ def test_scan_cleans_leftover_tmp(tc):
     assert _names(tc) == [_disk(tc, "ok")]
 
 
+# ─── 批次79 (#5): 磁盘 IO 移出全局锁 ───
+
+def test_get_reads_disk_outside_lock(tc, monkeypatch):
+    """#5: 磁盘条目首次读入在锁外 — 单条最大 256MB, 持锁读盘会冻住所有请求。"""
+    tc.put("big", b"payload", "wav")
+    _restart(tc)
+    locked_at_read = []
+    real_read = Path.read_bytes
+
+    def spy(self):
+        locked_at_read.append(tc._lock.locked())
+        return real_read(self)
+
+    monkeypatch.setattr(Path, "read_bytes", spy)
+    assert tc.get("big") == b"payload"
+    assert locked_at_read == [False]
+
+
+def test_put_writes_disk_outside_lock(tc, monkeypatch):
+    """#5: 落盘 (write_bytes) 在锁外, 写盘期间其它请求仍可读写缓存。"""
+    locked_at_write = []
+    real_write = Path.write_bytes
+
+    def spy(self, data):
+        locked_at_write.append(tc._lock.locked())
+        return real_write(self, data)
+
+    monkeypatch.setattr(Path, "write_bytes", spy)
+    tc.put("k", b"data", "wav")
+    assert locked_at_write and not any(locked_at_write)
+
+
+def test_evict_unlink_outside_lock(tc, monkeypatch):
+    """#5: LRU 逐出的删盘也在锁外 (占用/杀软下 unlink 可能长时间阻塞)。"""
+    tc.put("A", b"AAAA", "wav")
+    tc.put("B", b"BBBB", "wav")
+    locked_at_unlink = []
+    real_unlink = Path.unlink
+
+    def spy(self, missing_ok=False):
+        locked_at_unlink.append(tc._lock.locked())
+        return real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", spy)
+    tc.put("C", b"CCCC", "wav")  # 逐出 A
+    assert locked_at_unlink and not any(locked_at_unlink)
+    assert list(tc._cache) == ["B", "C"]
+
+
+def test_get_backfill_skips_after_clear(tc, monkeypatch):
+    """#5: 读盘期间缓存被 clear — 不回填旧条目, 记账归零 (字节仍可返回)。"""
+    tc.put("k", b"hello", "wav")
+    _restart(tc)
+    real_read = Path.read_bytes
+
+    def read_then_clear(self):
+        data = real_read(self)
+        tts_cache.clear()
+        return data
+
+    monkeypatch.setattr(Path, "read_bytes", read_then_clear)
+    assert tc.get("k") == b"hello"
+    assert "k" not in tc._cache
+    assert tc._total_bytes == 0
+
+
+def test_get_missing_disk_file_drops_entry(tc):
+    """盘上文件被外部删除 → 未命中且按记录值回减, 账目不漂移。"""
+    tc.put("keep", b"kk", "wav")
+    tc.put("gone", b"gggg", "wav")
+    _restart(tc)
+    assert tc.get("keep") == b"kk"      # 触发扫描: gone 只登记文件名, 不读盘
+    (tc._dir() / _disk(tc, "gone")).unlink()
+    assert tc.get("gone") is None
+    assert "gone" not in tc._cache
+    assert tc._total_bytes == 2
+
+
+def test_concurrent_get_put_keeps_accounting(tc):
+    """#5: 并发 get/put/逐出不死锁, 记账始终等于条目大小之和。"""
+    tc.put("seed", b"1234567890", "wav")
+    errors = []
+
+    def worker(i):
+        try:
+            for n in range(20):
+                key = f"k{i}-{n % 3}"
+                tc.put(key, b"x" * 8, "wav")
+                tc.get("seed")
+                tc.get(key)
+        except Exception as e:  # 线程内异常带回主线程断言
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    assert not errors
+    with tc._lock:
+        assert tc._total_bytes == sum(v[2] for v in tc._cache.values())
+
+
 class _FakeProc:
     def __init__(self, rc, out, err):
         self.returncode, self._out, self._err = rc, out, err
+        self.killed = False
 
-    def communicate(self, input=None):
+    def communicate(self, input=None, timeout=None):
         return self._out, self._err
+
+    def kill(self):
+        self.killed = True
 
 
 @pytest.mark.parametrize("packer", ["pack_ogg", "pack_mp3", "pack_aac"])
@@ -168,3 +277,46 @@ def test_ffmpeg_success_writes_output(monkeypatch, packer):
                         lambda *a, **k: _FakeProc(0, b"ENCODED", b"warn"))
     buf = getattr(audio_codec, packer)(BytesIO(), np.zeros(160, np.float32), 32000)
     assert buf.getvalue() == b"ENCODED"
+
+
+class _HangProc:
+    """批次78 (#14): 首次 communicate 超时, 回收调用正常返回。"""
+
+    returncode = None
+
+    def __init__(self):
+        self.timeouts = []
+        self.killed = False
+
+    def communicate(self, input=None, timeout=None):
+        self.timeouts.append(timeout)
+        if len(self.timeouts) == 1:
+            raise subprocess.TimeoutExpired(cmd="ffmpeg", timeout=timeout or 0)
+        return b"", b""
+
+    def kill(self):
+        self.killed = True
+
+
+@pytest.mark.parametrize("packer", ["pack_ogg", "pack_mp3", "pack_aac"])
+def test_ffmpeg_timeout_kills_and_raises(monkeypatch, packer):
+    """#14: ffmpeg 卡死必须带超时调用, 超时 kill 子进程并抛可读错误。"""
+    monkeypatch.setattr(audio_codec, "_resolve_ffmpeg", lambda: "ffmpeg")
+    proc = _HangProc()
+    monkeypatch.setattr(audio_codec.subprocess, "Popen", lambda *a, **k: proc)
+    with pytest.raises(RuntimeError, match="超时"):
+        getattr(audio_codec, packer)(BytesIO(), np.zeros(160, np.float32), 32000)
+    assert proc.killed is True
+    assert len(proc.timeouts) == 2          # 第一次带超时, 第二次回收
+    assert proc.timeouts[0] == audio_codec._encode_timeout()
+
+
+def test_encode_timeout_env(monkeypatch):
+    """#14: 超时秒数可由 ADR_FFMPEG_TIMEOUT_SEC 调整, 非法值回落默认。"""
+    monkeypatch.delenv("ADR_FFMPEG_TIMEOUT_SEC", raising=False)
+    assert audio_codec._encode_timeout() == 120.0
+    monkeypatch.setenv("ADR_FFMPEG_TIMEOUT_SEC", "7.5")
+    assert audio_codec._encode_timeout() == 7.5
+    monkeypatch.setenv("ADR_FFMPEG_TIMEOUT_SEC", "-3")
+    assert audio_codec._encode_timeout() == 120.0
+

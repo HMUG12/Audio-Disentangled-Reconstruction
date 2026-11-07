@@ -14,7 +14,7 @@ import time
 import numpy as np
 import pytest
 
-from adr.models import gsv_engine
+from adr.models import gsv_engine, gsv_runtime
 from adr.models.gsv_engine import GSVEngine
 
 
@@ -188,3 +188,43 @@ def test_busy_counted_during_synthesis(eng):
         pass
     assert eng.synth_busy() == 0
     assert first[1] == 32000
+
+
+def test_seg_cache_ref_version_miss(eng, tmp_path):
+    """批次85 (#18): 同名参考音频被覆盖 (size 变化) → 段缓存不命中。"""
+    ref = tmp_path / "ref.wav"
+    ref.write_bytes(b"v1")
+    tts = FakeTTS()
+    eng._tts = tts
+    _collect(eng.synthesize_stream("版本文本。", ref_audio=str(ref)))
+    ref.write_bytes(b"v2-longer")           # 同名覆盖 → 指纹变化
+    _collect(eng.synthesize_stream("版本文本。", ref_audio=str(ref)))
+    assert tts.calls == ["版本文本。", "版本文本。"]
+
+
+def test_seg_cache_head_seed_first_seg_only(eng):
+    """批次85 (#18): head_seed 变化只影响首段; 后续段不随种子分片。"""
+    tts = FakeTTS()
+    eng._tts = tts
+    text = "第一句实验文本。第二句实验文本。"
+    kw = dict(ref_audio="ref.wav")
+    _collect(eng.synthesize_stream(text, head_seed=1, **kw))
+    assert len(tts.calls) == 2                       # 两段
+    _collect(eng.synthesize_stream(text, head_seed=1, **kw))
+    assert len(tts.calls) == 2                       # 同 seed 全命中
+    _collect(eng.synthesize_stream(text, head_seed=7, **kw))
+    assert len(tts.calls) == 3                       # 仅首段重新前向
+
+
+def test_seg_cache_put_same_key_no_double_count(monkeypatch):
+    """批次85 (#26): 同 key 重复写入按最新值计字节, 不重复累加。"""
+    monkeypatch.setenv("ADR_SEG_CACHE_MAX", "10")
+    monkeypatch.setenv("ADR_SEG_CACHE_MB", "1")
+    pcm = b"\x00\x00" * 100                          # 200 字节
+    gsv_engine._seg_cache_put("k", pcm, 32000)
+    assert gsv_engine._SEG_CACHE["k"] == (pcm, 32000)
+    assert gsv_runtime._SEG_BYTES == len(pcm)
+    gsv_engine._seg_cache_put("k", pcm[:100], 32000)  # 覆盖为更短
+    assert gsv_engine._SEG_CACHE["k"] == (pcm[:100], 32000)
+    assert gsv_runtime._SEG_BYTES == 100
+    assert len(gsv_engine._SEG_CACHE) == 1

@@ -4,6 +4,7 @@
 - pandas × numpy: 容器钉的组合在本机可构造 DataFrame (ABI 兼容冒烟)
 - build_installer.ps1 -DryRun: 门禁链路端到端冒烟 (Windows only)
 """
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -205,3 +206,108 @@ def test_installer_asks_before_deleting_user_assets():
     assert r"runtime\data\voices" in code
     assert r"SoVITS_weights_v2" in code
     assert r"GPT_weights_v2" in code
+
+
+# ===== 批次76: 打包/更新链整改 (#20 安装器变体清理 + 静默升级拉起应用) =====
+
+
+def test_installer_cleans_python_tree_on_variant_switch():
+    """#20 防复发: 双变体共用 AppId 原地升级 → 换包型必须先删整棵
+    runtime\\python, 否则旧 torch/nvidia_* 与新包混装 (标记与实际不符)。"""
+    iss = INSTALLER_ISS.read_text(encoding="utf-8")
+    assert "[InstallDelete]" in iss, "installer.iss 缺 [InstallDelete] 段"
+    # 注释里也提到过 [InstallDelete], 只认行首的段头
+    m = re.search(r"^\[InstallDelete\]$(.*?)(?=^\[|\Z)", iss, re.S | re.M)
+    assert m, "installer.iss 缺 [InstallDelete] 段"
+    section = m.group(1)
+    assert r'runtime\python' in section
+    assert "Check: VariantChanged" in section
+    code = iss.partition("[Code]")[2]
+    assert "function VariantChanged" in code
+    assert "BUILD_VARIANT.txt" in code, "必须读已装变体标记, 否则无从比对"
+    assert "'{#VariantName}'" in code
+    # 用户数据不在 python 树内 → 清理条目不得波及 data / 权重目录
+    entries = [ln for ln in section.splitlines() if ln.strip().startswith("Type:")]
+    assert entries, "[InstallDelete] 无实际条目"
+    for ln in entries:
+        assert r"runtime\data" not in ln
+        assert "SoVITS_weights" not in ln
+
+
+def test_installer_launches_app_after_silent_upgrade():
+    """#20 防复发: [Run] 拉起应用不得带 skipifsilent — 壳侧静默升级
+    (/VERYSILENT) 装完必须自动回到应用, 否则程序"消失"。"""
+    iss = INSTALLER_ISS.read_text(encoding="utf-8")
+    run = iss.partition("[Run]")[2].partition("[Code]")[0]
+    # 条目跨行 (行尾反斜杠续行) → 整段匹配, 只看 MyAppExe 那条
+    m = re.search(r'Filename: "\{app\}\\\{#MyAppExe\}".*?(?=\nFilename:|\n\[|\Z)',
+                  run, re.S)
+    assert m, "[Run] 缺拉起应用的条目"
+    entry = m.group(0)
+    assert "skipifsilent" not in entry
+    assert "nowait postinstall" in entry
+
+
+# ===== 批次76: CI 发布门禁 (#22) + 依赖版本漂移 (#23) =====
+
+DOCKER_PUBLISH = REPO / ".github" / "workflows" / "docker-publish.yml"
+SMOKE_WF = REPO / ".github" / "workflows" / "smoke.yml"
+CHECK_REQUIREMENTS = REPO / "scripts" / "check_requirements.py"
+CHECK_VERSIONS = REPO / "scripts" / "check_versions.py"
+
+
+def _run(script: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(script), *args],
+        cwd=str(REPO), capture_output=True, text=True, check=False,
+        encoding="utf-8", errors="replace", timeout=120,
+    )
+
+
+def test_docker_publish_gated_by_release_checks():
+    """#22 防复发: v* tag 不得直接构建推送 — gate 先跑版本面 / tag 对齐 /
+    依赖漂移 / 语法, 任一红则 build-push 不启动。"""
+    wf = DOCKER_PUBLISH.read_text(encoding="utf-8")
+    build = wf.partition("build-push:")[2]
+    assert build, "docker-publish.yml 缺 build-push job"
+    assert "needs: gate" in build, "build-push 必须依赖发布门禁"
+    gate = wf.partition("gate:")[2].partition("build-push:")[0]
+    for needle in ("check_versions.py", "check_requirements.py",
+                   "check_compliance.py", "compileall"):
+        assert needle in gate, f"发布门禁缺 {needle}"
+    # tag 与 pyproject 事实源对账 (只有 tag 触发时才传 --tag)
+    assert '--tag "$GITHUB_REF_NAME"' in gate
+    assert "GITHUB_REF_TYPE" in gate
+
+
+def test_check_versions_rejects_mismatched_tag():
+    """#22: tag 与 pyproject 不同版就该红 (v9.9.9 不可能等于当前版本)。"""
+    proc = _run(CHECK_VERSIONS, "--tag", "v9.9.9")
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 1, out[-800:]
+    assert "git tag v9.9.9" in out
+    # 同版 tag 必须放行, 否则门禁永远红
+    ver = re.search(r'^version\s*=\s*"([^"]+)"',
+                    (REPO / "pyproject.toml").read_text(encoding="utf-8"),
+                    re.MULTILINE).group(1)
+    ok = _run(CHECK_VERSIONS, "--tag", f"v{ver}")
+    assert ok.returncode == 0, (ok.stdout + ok.stderr)[-800:]
+
+
+def test_core_requirements_have_upper_bounds():
+    """#23 防复发: 只有 >= 下限时 CI 会解析到比发货 runtime 更新的大版本。"""
+    reqs = (REPO / "requirements.txt").read_text(encoding="utf-8")
+    entries = [ln.split("#", 1)[0].strip() for ln in reqs.splitlines()]
+    entries = [ln for ln in entries if ln]
+    assert entries, "requirements.txt 无核心依赖"
+    for ln in entries:
+        assert "==" in ln or "<" in ln, f"核心依赖缺上限: {ln}"
+    proc = _run(CHECK_REQUIREMENTS)
+    assert proc.returncode == 0, (proc.stdout + proc.stderr)[-800:]
+
+
+def test_smoke_ci_reuses_container_pins():
+    """#23: CI 与容器共用同一份钉版清单, 不在 CI 侧另解析一套版本。"""
+    wf = SMOKE_WF.read_text(encoding="utf-8")
+    assert "check_requirements.py" in wf
+    assert "-c docker/requirements-linux.txt" in wf

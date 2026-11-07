@@ -14,12 +14,15 @@ from __future__ import annotations
 import shutil
 import subprocess
 import wave
+from contextlib import suppress
 from functools import lru_cache
 from io import BytesIO
 
 import numpy as np
 
+from adr.core.exceptions import DependencyMissingError
 from adr.core.settings import REPO_ROOT
+from adr.server.param_norm import env_num
 
 
 @lru_cache(maxsize=1)
@@ -27,8 +30,9 @@ def _resolve_ffmpeg() -> str:
     """定位 ffmpeg 可执行文件 (批次41b)。
 
     查找顺序: PATH → 项目 bundled 目录 (third_party/gpt_sovits/, 与
-    core/doctor.py 的查找口径一致)。都找不到时抛出带安装指引的 RuntimeError,
-    而不是 subprocess 的裸 FileNotFoundError traceback。
+    core/doctor.py 的查找口径一致)。都找不到时抛出带安装指引的
+    DependencyMissingError (批次84: 依赖缺失类错误, HTTP 面映射 503 而非
+    400), 而不是 subprocess 的裸 FileNotFoundError traceback。
     """
     found = shutil.which("ffmpeg")
     if found:
@@ -36,7 +40,7 @@ def _resolve_ffmpeg() -> str:
     bundled = REPO_ROOT / "third_party" / "gpt_sovits" / "ffmpeg.exe"
     if bundled.exists():
         return str(bundled)
-    raise RuntimeError(
+    raise DependencyMissingError(
         "未找到 ffmpeg — OGG/MP3/AAC 音频编码依赖它。解决方式 (任选其一):\n"
         "  1. 安装 ffmpeg 并加入 PATH (https://ffmpeg.org, 或 winget install ffmpeg);\n"
         "  2. 将 ffmpeg.exe 放到项目 third_party/gpt_sovits/ 目录下。\n"
@@ -51,6 +55,37 @@ def _check_ffmpeg(returncode: int, err: bytes) -> None:
         raise RuntimeError(f"ffmpeg 编码失败 (exit={returncode}): {tail}")
 
 
+def _encode_timeout() -> float:
+    """批次78 (#14): ffmpeg 转码超时秒数 (ADR_FFMPEG_TIMEOUT_SEC, 默认 120)。"""
+    return env_num("ADR_FFMPEG_TIMEOUT_SEC", 120, float)
+
+
+def _run_ffmpeg(args: list[str], pcm: bytes) -> bytes:
+    """起 ffmpeg 按管道转码, 带超时强杀 (批次78 / CODE_REVIEW #14)。
+
+    无超时保护时, 一次卡死的 ffmpeg 会永久占住线程池线程; 累积到线程池耗尽后
+    所有请求排队。超时后 ``kill()`` 并回收子进程, 再抛可读错误。
+    """
+    timeout = _encode_timeout()
+    process = subprocess.Popen(
+        [_resolve_ffmpeg(), *args],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        out, err = process.communicate(input=pcm, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        with suppress(subprocess.TimeoutExpired, OSError):
+            process.communicate(timeout=5)   # 回收管道/句柄, 不留僵尸
+        raise RuntimeError(
+            f"ffmpeg 编码超时 (>{timeout:.0f}s), 已终止子进程"
+            " — 可用 ADR_FFMPEG_TIMEOUT_SEC 调整") from None
+    _check_ffmpeg(process.returncode, err)
+    return out
+
+
 def to_int16(data: np.ndarray) -> np.ndarray:
     """float [-1,1] → int16 (clip 防爆音, 与 api_neko 打包逻辑一致)。"""
     if data.dtype == np.int16:
@@ -60,25 +95,16 @@ def to_int16(data: np.ndarray) -> np.ndarray:
 
 def pack_ogg(io_buffer: BytesIO, data: np.ndarray, rate: int) -> BytesIO:
     """编码为 OGG (ffmpeg libvorbis q4)。"""
-    process = subprocess.Popen(
-        [
-            _resolve_ffmpeg(),
-            "-f", "s16le",
-            "-ar", str(rate),
-            "-ac", "1",
-            "-i", "pipe:0",
-            "-c:a", "libvorbis",
-            "-q:a", "4",
-            "-f", "ogg",
-            "pipe:1",
-        ],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    out, err = process.communicate(input=to_int16(data).tobytes())
-    _check_ffmpeg(process.returncode, err)
-    io_buffer.write(out)
+    io_buffer.write(_run_ffmpeg([
+        "-f", "s16le",
+        "-ar", str(rate),
+        "-ac", "1",
+        "-i", "pipe:0",
+        "-c:a", "libvorbis",
+        "-q:a", "4",
+        "-f", "ogg",
+        "pipe:1",
+    ], to_int16(data).tobytes()))
     return io_buffer
 
 
@@ -113,50 +139,32 @@ def pack_wav(io_buffer: BytesIO, data: np.ndarray, rate: int) -> BytesIO:
 
 def pack_mp3(io_buffer: BytesIO, data: np.ndarray, rate: int) -> BytesIO:
     """编码为 MP3 (ffmpeg libmp3lame, 192k) — 批次21 OpenAI 兼容面默认格式。"""
-    process = subprocess.Popen(
-        [
-            _resolve_ffmpeg(),
-            "-f", "s16le",
-            "-ar", str(rate),
-            "-ac", "1",
-            "-i", "pipe:0",
-            "-c:a", "libmp3lame",
-            "-b:a", "192k",
-            "-f", "mp3",
-            "pipe:1",
-        ],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    out, err = process.communicate(input=to_int16(data).tobytes())
-    _check_ffmpeg(process.returncode, err)
-    io_buffer.write(out)
+    io_buffer.write(_run_ffmpeg([
+        "-f", "s16le",
+        "-ar", str(rate),
+        "-ac", "1",
+        "-i", "pipe:0",
+        "-c:a", "libmp3lame",
+        "-b:a", "192k",
+        "-f", "mp3",
+        "pipe:1",
+    ], to_int16(data).tobytes()))
     return io_buffer
 
 
 def pack_aac(io_buffer: BytesIO, data: np.ndarray, rate: int) -> BytesIO:
     """编码为 AAC/ADTS (ffmpeg, 192k)。"""
-    process = subprocess.Popen(
-        [
-            _resolve_ffmpeg(),
-            "-f", "s16le",
-            "-ar", str(rate),
-            "-ac", "1",
-            "-i", "pipe:0",
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-vn",
-            "-f", "adts",
-            "pipe:1",
-        ],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    out, err = process.communicate(input=to_int16(data).tobytes())
-    _check_ffmpeg(process.returncode, err)
-    io_buffer.write(out)
+    io_buffer.write(_run_ffmpeg([
+        "-f", "s16le",
+        "-ar", str(rate),
+        "-ac", "1",
+        "-i", "pipe:0",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-vn",
+        "-f", "adts",
+        "pipe:1",
+    ], to_int16(data).tobytes()))
     return io_buffer
 
 

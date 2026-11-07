@@ -77,7 +77,10 @@ def client(monkeypatch):
 
 
 def _audio(tmp_path):
-    p = tmp_path / "in.wav"
+    """批次78 (#11): 训练音频必须落在 UPLOAD_DIR 内, 故写到隔离后的上传目录。"""
+    d = console.UPLOAD_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / "in.wav"
     p.write_bytes(b"RIFF0000WAVEfmt ")
     return str(p)
 
@@ -418,3 +421,35 @@ def test_timeout_log_kill_failure(monkeypatch):
     logs = list(console._train["logs"])
     assert not any("已强杀" in ln for ln in logs), "kill 失败不该写「已强杀」"
     assert any("强杀失败" in ln for ln in logs)
+
+
+# ─── 批次78 / CODE_REVIEW #11: 训练音频路径白名单 ───
+
+def test_train_start_rejects_audio_outside_upload_dir(client, tmp_path):
+    """上传目录外的本地文件不能当训练素材 (防任意路径读取 + 存在性探针)。"""
+    outside = tmp_path / "outside.wav"
+    outside.write_bytes(b"RIFF0000WAVEfmt ")
+    r = client.post("/api/adr/v1/train/start",
+                    json={"audio_path": str(outside), "gate_on": False})
+    assert r.status_code == 400
+    assert "音频不存在或不可用" in r.json()["detail"]
+
+
+def test_train_start_rejects_directory_inside_upload_dir(client):
+    """上传目录内的目录 (非普通文件) 同样拒绝: 原来 exists() 会放行。"""
+    console.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    d = console.UPLOAD_DIR / "dir.wav"
+    d.mkdir(exist_ok=True)
+    r = client.post("/api/adr/v1/train/start",
+                    json={"audio_path": str(d), "gate_on": False})
+    assert r.status_code == 400
+    assert "音频不存在或不可用" in r.json()["detail"]
+
+
+def test_resolve_upload_audio_accepts_relative_name(tmp_path, monkeypatch):
+    """相对名基于上传目录解析 (兼容只回传文件名的老客户端)。"""
+    console.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    (console.UPLOAD_DIR / "rel.wav").write_bytes(b"RIFF0000WAVEfmt ")
+    got = console._resolve_upload_audio("rel.wav")
+    assert got == (console.UPLOAD_DIR / "rel.wav").resolve()
+

@@ -30,13 +30,14 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from adr.core.naming import sanitize_exp_name
 from adr.server.exceptions import ProfileNameInvalid
-from adr.server.pathsafe import is_safe_name
+from adr.server.origin_guard import require_browser_safe
+from adr.server.pathsafe import is_safe_name, resolve_within
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,24 @@ def _parse_timeout(raw: str | None, default: float = 7200.0) -> float:
 
 
 TRAIN_TIMEOUT = _parse_timeout(os.environ.get("ADR_TRAIN_TIMEOUT"))
+
+
+def _resolve_upload_audio(raw: str) -> Path:
+    """批次78 (CODE_REVIEW #11): 训练/建档音频必须是上传目录内的普通文件。
+
+    训练/建档入口原来只做 ``exists()``: 任意本地文件 (设备文件/系统文件/别处素材)
+    都能被当作训练素材或参考音频, 且错误文案可当磁盘路径存在性探针。现在统一走
+    ``resolve_within`` 白名单 + ``is_file()``, 越界/不存在/非普通文件同一文案
+    (不区分原因, 不构成探针)。控制台页面本身经 /train/upload 落盘, 不受影响;
+    v2 的 ``ref_audio_path`` 属另一套契约 (见 docs/tts-api-spec.md §7.3)。
+    """
+    p = resolve_within(UPLOAD_DIR, raw)
+    if p is None or not p.is_file():
+        raise HTTPException(
+            400, "音频不存在或不可用: 请先通过 /api/adr/v1/train/upload 上传"
+                 " (仅接受上传目录内的普通音频文件)")
+    return p
+
 
 _BOOT_T0 = time.time()
 
@@ -382,9 +401,7 @@ class TrainStartReq(BaseModel):
 
 @router.post("/train/start", summary="启动声音克隆微调 (gsv_finetune 子进程)")
 async def train_start(body: TrainStartReq):
-    audio = Path(body.audio_path)
-    if not audio.exists():
-        raise HTTPException(400, f"音频不存在: {body.audio_path}")
+    audio = _resolve_upload_audio(body.audio_path)
     script = REPO / "scripts" / "gsv_finetune.py"
     if not script.exists():
         raise HTTPException(500, f"缺少训练脚本: {script}")
@@ -553,11 +570,19 @@ def _probe_audio(path: Path) -> dict:
 
 
 @router.get("/system/doctor", summary="一键环境自检 (fix=true 自动修复可修项)")
-async def system_doctor(fix: bool = False):
+async def system_doctor(fix: bool = False,
+                        _guard: None = Depends(require_browser_safe)):
     """检测依赖/GPU/权重/档案/端口/磁盘; fix=true 时裁剪超长 ref、清理 STOP 残留。"""
     from adr.core.doctor import run_checks
 
     return run_checks(fix=fix)
+
+
+@router.post("/system/doctor", summary="一键环境自检 (POST; fix=true 自动修复可修项)")
+async def system_doctor_post(fix: bool = False,
+                             _guard: None = Depends(require_browser_safe)):
+    """批次77: 副作用接口的 POST 别名 (浏览器跨站 GET 已由依赖拒绝)。"""
+    return await system_doctor(fix)
 
 
 @router.post("/train/upload", summary="上传克隆录音 (wav/mp3/flac/m4a/ogg/zip)")
@@ -673,9 +698,7 @@ async def profile_create(body: ProfileCreateReq):
     name = "".join(c for c in name if c not in '\\/:*?"<>|') or "我的声音"
     if not is_safe_name(name):
         raise ProfileNameInvalid(name)
-    audio = Path(body.audio_path)
-    if not audio.exists():
-        raise HTTPException(400, f"音频不存在: {body.audio_path}")
+    audio = _resolve_upload_audio(body.audio_path)
     # 批次62 上传侧声音安全: 声纹建档需声音权利人单独同意 (不信任客户端
     # 传入的同意结构, 服务端按声明重组后落 meta/审计)
     if not body.consent_granted:

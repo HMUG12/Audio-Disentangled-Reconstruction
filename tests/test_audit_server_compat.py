@@ -87,11 +87,12 @@ BODY = {"text": "hi", "ref_audio_path": "a.wav"}
 
 # ─── #23 / #25 服务端日志 (wire 不变) ───
 
-def test_v2_failure_logs_traceback_keeps_400(client, engine, caplog):
+def test_v2_failure_logs_traceback_keeps_500(client, engine, caplog):
     engine.fail = RuntimeError("boom")
     with caplog.at_level(logging.ERROR, logger="adr.server.v2_compat"):
         r = client.post("/api/v2/tts", json=BODY)
-    assert r.status_code == 400 and r.json()["code"] == "internal_error"
+    # 批次84 (#12): 未预期内部故障从 400 改为 500, code/wire 字段不变
+    assert r.status_code == 500 and r.json()["code"] == "internal_error"
     assert any(rec.exc_info for rec in caplog.records)
 
 

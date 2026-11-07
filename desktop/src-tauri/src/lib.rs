@@ -20,9 +20,14 @@
 //!
 //! Python 解释器解析优先级:
 //! 1. 便携模式: ``<exe目录>/runtime/python/python.exe`` (打包后的绿色运行时)
-//! 2. 环境变量 ``ADR_DESKTOP_PYTHON`` (开发调试指定解释器)
-//! 3. 仓库虚拟环境 ``<仓库根>/.venv/Scripts/python.exe`` (若存在)
-//! 4. PATH 上的 ``python`` (仓库根从 cwd / exe 逐级向上探测)
+//! 2. 环境变量 ``ADR_DESKTOP_PYTHON`` (开发调试指定解释器, 仅开发态)
+//! 3. 仓库虚拟环境 ``<仓库根>/.venv/Scripts/python.exe`` (仅开发态)
+//! 4. 开发态兜底: 扫 PATH 取 python.exe **绝对路径** (不用裸 "python" 名字)
+//!
+//! 批次76 (#21): 打包态 (``runtime/`` 目录存在) 找不到解释器 = 直接报错,
+//! 绝不回落 PATH —— Windows 解析裸 "python" 会先搜 exe 目录与 cwd, 同名
+//! python.exe 被替换即等于任意代码执行。开发态判定只看 exe 向上探测到的
+//! 仓库根, 不看 cwd (cwd 在打包态由启动者控制, 可被投放 adr/cli.py 伪造)。
 //!
 //! 阶段 2 计划 (见 docs/m9-phase3-plan.md): 前端替换 Gradio、模型管理器、
 //! 便携 runtime/ 目录 (python-build-standalone + 离线依赖 + 静态 ffmpeg)。
@@ -1009,7 +1014,15 @@ fn start_server(
     window: &Option<WebviewWindow>,
     state: &State<ServerState>,
 ) -> Option<(Child, Instant)> {
-    let (python, cwd, pythonpath) = resolve_runtime();
+    // 批次76 (#21): 解析失败 = 硬失败 (不再回落 PATH 上的裸 "python")
+    let (python, cwd, pythonpath) = match resolve_runtime() {
+        Ok(v) => v,
+        Err(e) => {
+            proc_log("runtime", &format!("解释器解析失败: {e}"));
+            update_status(window, &format!("启动失败: {e}"));
+            return None;
+        }
+    };
     // 调用模式: 0.0.0.0 对局域网开放 API; 默认仅本机 (webview 与探活都走 127.0.0.1)
     let host = if state.expose.load(Ordering::Relaxed) { "0.0.0.0" } else { "127.0.0.1" };
     // pro/easy 承载 TTS 服务: 优先绑定 9881 (NEKO GPT-SoVITS provider 默认端口, 零配置直连);
@@ -1559,60 +1572,151 @@ fn wait_healthy(base: &str, path: &str, window: &Option<WebviewWindow>) -> bool 
     false
 }
 
+/// 解释器来源 (纯函数决策的输出, 单测覆盖)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PySource {
+    /// exe 旁 runtime/python/python.exe (打包态)
+    Portable,
+    /// ADR_DESKTOP_PYTHON 显式指定
+    Explicit,
+    /// 仓库 .venv/Scripts/python.exe
+    Venv,
+    /// 开发态扫 PATH 得到的绝对路径
+    PathScan,
+}
+
+/// 纯函数: 决定用哪个解释器 (批次76 #21)。
+///
+/// 铁律: **打包态 (in_repo=false) 绝不走 PathScan**。Windows 解析裸
+/// "python" 时搜索顺序含 exe 目录与 cwd, 攻击者在应用目录放一个同名
+/// python.exe 即可以用户权限执行任意代码。打包态找不到随包解释器 = 报错,
+/// 让用户重装, 而不是降级到不可信来源。
+///
+/// 参数:
+/// - portable_found: exe 旁 runtime/python/python.exe 存在
+/// - explicit: ADR_DESKTOP_PYTHON 指定值 (None/空 = 未指定)
+/// - explicit_exists: 指定值指向的文件确实存在
+/// - venv_found / path_found: 仓库 .venv / PATH 扫描命中
+/// - in_repo: 是否处于仓库内 (开发态)
+fn decide_python_source(
+    portable_found: bool,
+    explicit: Option<&str>,
+    explicit_exists: bool,
+    venv_found: bool,
+    in_repo: bool,
+    path_found: bool,
+) -> Result<PySource, String> {
+    if portable_found {
+        return Ok(PySource::Portable);
+    }
+    if let Some(p) = explicit.map(str::trim).filter(|s| !s.is_empty()) {
+        // 显式指定但文件不存在 → 硬失败 (不静默降级)
+        if !explicit_exists {
+            return Err(format!("ADR_DESKTOP_PYTHON 指向的解释器不存在: {p}"));
+        }
+        return Ok(PySource::Explicit);
+    }
+    if !in_repo {
+        // 打包态且无随包解释器 → 硬失败, 无 PATH 兜底
+        return Err(
+            "未找到随包 Python 运行时 (runtime/python/python.exe), 请重新安装完整安装包".into(),
+        );
+    }
+    if venv_found {
+        return Ok(PySource::Venv);
+    }
+    if path_found {
+        return Ok(PySource::PathScan);
+    }
+    Err("PATH 中未找到 python.exe, 请安装 Python 或设置 ADR_DESKTOP_PYTHON".into())
+}
+
 /// 解析 (python 解释器, 工作目录, 可选 PYTHONPATH)。
-fn resolve_runtime() -> (PathBuf, PathBuf, Option<PathBuf>) {
+///
+/// 批次76 (#21): 打包态**禁止 PATH 回落**。开发态兜底也返回 **绝对路径**,
+/// 不用裸名字, 避免同样的搜索顺序问题。
+fn resolve_runtime() -> Result<(PathBuf, PathBuf, Option<PathBuf>), String> {
     // 1) 便携模式: exe 旁的 runtime/ (阶段 0 打包产物)
     if let Ok(exe) = std::env::current_exe() {
         if let Some(base) = exe.parent() {
             let runtime = base.join("runtime");
             let py = runtime.join("python").join("python.exe");
-            if py.exists() {
-                return (py, runtime, Some(PathBuf::from(".")));
+            if py.is_file() {
+                return Ok((py, runtime, Some(PathBuf::from("."))));
             }
         }
     }
 
+    // 开发态判定: exe 逐级向上找到 adr/cli.py 即仓库内 (cargo run 的 exe 在
+    // target/debug/ 下, 向上 8 层可到仓库根)。**不看 cwd** —— 打包态 cwd 由
+    // 启动者控制, 放一份 adr/cli.py 就能把壳诱进开发态再吃 PATH 回落。
     let root = find_repo_root();
+    // 工作目录: 仓库根 (开发态) 或当前目录 (兜底, 仅当解释器显式指定时用)
+    let cwd = root
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
-    // 2) 显式指定解释器 (开发调试)
-    if let Ok(p) = std::env::var("ADR_DESKTOP_PYTHON") {
-        if !p.trim().is_empty() {
-            return (PathBuf::from(p), root, None);
+    let explicit = std::env::var("ADR_DESKTOP_PYTHON").ok();
+    let explicit_path = explicit.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(PathBuf::from);
+    let explicit_exists = explicit_path.as_ref().map(|p| p.is_file()).unwrap_or(false);
+    let venv_found = root
+        .as_ref()
+        .map(|r| r.join(".venv").join("Scripts").join("python.exe").is_file())
+        .unwrap_or(false);
+    let path_hit = find_python_on_path();
+
+    let source = decide_python_source(
+        false,
+        explicit.as_deref(),
+        explicit_exists,
+        venv_found,
+        root.is_some(),
+        path_hit.is_some(),
+    )?;
+    match source {
+        PySource::Portable => unreachable!("便携分支已在上方返回"),
+        PySource::Explicit => Ok((explicit_path.unwrap(), cwd, None)),
+        PySource::Venv => {
+            let root = root.unwrap();
+            Ok((root.join(".venv").join("Scripts").join("python.exe"), root, None))
+        }
+        PySource::PathScan => {
+            let root = root.unwrap();
+            Ok((path_hit.unwrap(), root, None))
         }
     }
-
-    // 3) 仓库虚拟环境 (若存在)
-    let venv_py = root.join(".venv").join("Scripts").join("python.exe");
-    if venv_py.exists() {
-        return (venv_py, root, None);
-    }
-
-    // 4) PATH python
-    (PathBuf::from("python"), root, None)
 }
 
-/// 从 cwd / exe 逐级向上探测仓库根 (以 adr/cli.py 为标记)。
-fn find_repo_root() -> PathBuf {
-    let mut bases: Vec<PathBuf> = Vec::new();
-    if let Ok(c) = std::env::current_dir() {
-        bases.push(c);
-    }
-    if let Ok(e) = std::env::current_exe() {
-        if let Some(p) = e.parent() {
-            bases.push(p.to_path_buf());
+/// 从 exe 逐级向上探测仓库根 (以 adr/cli.py 为标记)。找不到 → None。
+/// 只认 exe 侧: cwd 在打包态不可信 (见 resolve_runtime 注释)。
+fn find_repo_root() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let mut base = exe.parent()?.to_path_buf();
+    for _ in 0..8 {
+        if base.join("adr").join("cli.py").is_file() {
+            return Some(base);
+        }
+        if !base.pop() {
+            break;
         }
     }
-    for mut base in bases {
-        for _ in 0..8 {
-            if base.join("adr").join("cli.py").exists() {
-                return base;
-            }
-            if !base.pop() {
-                break;
-            }
+    None
+}
+
+/// 扫 PATH 找 python.exe, 返回**绝对路径**。Windows 上 ``Command::new("python")``
+/// 会先搜 exe 目录/cwd, 这里只认 PATH 里的显式目录并回全路径, 避免劫持。
+fn find_python_on_path() -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        if dir.as_os_str().is_empty() {
+            continue;
+        }
+        let cand = dir.join("python.exe");
+        if cand.is_file() {
+            return Some(cand);
         }
     }
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    None
 }
 
 /// NEKO GPT-SoVITS provider 默认 API 端口 (adr.server 默认端口一致, 零配置直连)。
@@ -1780,5 +1884,49 @@ mod tests {
     #[test]
     fn app_mutex_name_matches_spec() {
         assert_eq!(APP_MUTEX_NAME, "ADR-Studio-Running");
+    }
+
+    /// 批次76 (#21): 打包态禁止 PATH 回落 —— 决策矩阵全覆盖。
+    /// 参数序: (portable_found, explicit, explicit_exists, venv_found, in_repo, path_found)
+    #[test]
+    fn decide_python_source_blocks_path_fallback_when_packaged() {
+        // 打包态 + 有随包解释器 → Portable
+        assert_eq!(
+            decide_python_source(true, None, false, false, false, true).unwrap(),
+            PySource::Portable
+        );
+        // 打包态 + 无随包解释器 + PATH 里有 python → **必须报错**, 不得降级
+        let err = decide_python_source(false, None, false, false, false, true).unwrap_err();
+        assert!(err.contains("runtime/python/python.exe"), "错误信息应指向缺失的随包解释器: {err}");
+        // 打包态 + PATH 也没有 → 同样报错
+        assert!(decide_python_source(false, None, false, false, false, false).is_err());
+        // 打包态 + venv 恰好存在 (仓库被误放到安装目录) → 依然不得走 venv
+        assert!(decide_python_source(false, None, false, true, false, true).is_err());
+    }
+
+    /// 批次76 (#21): 开发态兜底顺序 — venv 优先于 PATH, 且显式指定最高。
+    #[test]
+    fn decide_python_source_dev_mode_order() {
+        // 开发态: venv 优先
+        assert_eq!(
+            decide_python_source(false, None, false, true, true, true).unwrap(),
+            PySource::Venv
+        );
+        // 开发态: 无 venv → PATH 扫描兜底
+        assert_eq!(
+            decide_python_source(false, None, false, false, true, true).unwrap(),
+            PySource::PathScan
+        );
+        // 开发态: 全都没有 → 报错
+        assert!(decide_python_source(false, None, false, false, true, false).is_err());
+        // 显式指定 (存在) → 最高优先, 打包态也认 (运维显式覆盖)
+        assert_eq!(
+            decide_python_source(false, Some("D:/pyhon/python.exe"), true, false, false, true).unwrap(),
+            PySource::Explicit
+        );
+        // 显式指定但文件不存在 → 硬失败, 不静默降级
+        let err = decide_python_source(false, Some("D:/nope/python.exe"), false, false, false, true)
+            .unwrap_err();
+        assert!(err.contains("ADR_DESKTOP_PYTHON"), "{err}");
     }
 }

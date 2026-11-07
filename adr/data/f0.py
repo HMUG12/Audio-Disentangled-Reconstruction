@@ -24,7 +24,7 @@ class F0Config:
     fmin: float = 50.0             # 最低频率 (Hz)
     fmax: float = 1100.0           # 最高频率 (Hz)
     hop_length: int = 256          # 帧移 (samples)
-    sr: int = 24000                # 采样率
+    sr: int = 22050                # 采样率 (与 SliceConfig.target_sr / 声码器一致, 批次80)
 
 
 class F0Extractor:

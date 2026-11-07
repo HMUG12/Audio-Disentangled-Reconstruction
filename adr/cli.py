@@ -540,7 +540,8 @@ def model_path(name: str) -> None:
 
 
 @main.command()
-@click.option("--data", "-d", required=True, help="训练数据目录 (含 samples/*.npz)")
+@click.option("--data", "-d", required=True,
+              help="训练数据目录 (递归查找 *.npz, 兼容 output/processed 与 samples/ 子目录)")
 @click.option("--backbone", "-b", default="sovits", help="Backbone 类型 (sovits)")
 @click.option("--config", "-c", default=None, help="YAML 配置文件 (可选)")
 @click.option("--output", "-o", default="output/train", help="输出目录")

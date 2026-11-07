@@ -38,11 +38,17 @@ jobs:
       - name: 合规门禁断言
         run: python scripts/check_compliance.py
 
+      # 批次76 (#23): 核心依赖必须带上限, 且区间覆盖便携 runtime / 容器钉版
+      - name: 依赖版本漂移门禁
+        run: python scripts/check_requirements.py
+
       - name: 安装依赖 (CPU torch + 全量 extras)
         run: |
           python -m pip install --upgrade pip
           pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-          pip install -e .[all,dev]
+          # 批次76 (#23): 用容器钉版清单当 constraints — CI 与 Docker 构建共用同一份
+          # 版本清单, 避免"CI 测新版、容器发旧版"的隐性漂移。
+          pip install -c docker/requirements-linux.txt -e .[all,dev]
 
       - name: 单测全量
         env:

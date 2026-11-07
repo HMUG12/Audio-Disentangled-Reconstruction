@@ -23,20 +23,22 @@ classifiers = [
 ]
 
 # 核心依赖（M1 必需 + TTS 服务运行时）
+# 批次76 (#23): 与 requirements.txt 逐条同源（含上限），由
+# scripts/check_requirements.py 对账；上限挡住大版本漂移。
 dependencies = [
-    "torch>=2.1.0",
-    "torchaudio>=2.1.0",
-    "numpy>=1.24",
-    "pyyaml>=6.0",
-    "click>=8.1",
-    "rich>=13.0",
-    "tqdm>=4.65",
-    "soundfile>=0.12",
-    "librosa>=0.10",
-    "transformers>=4.35",
-    "fastapi>=0.110",
-    "uvicorn[standard]>=0.27",
-    "python-multipart>=0.0.9",
+    "torch>=2.1.0,<2.11",
+    "torchaudio>=2.1.0,<2.11",
+    "numpy>=1.24,<3",
+    "pyyaml>=6.0,<7",
+    "click>=8.1,<9",
+    "rich>=13.0,<15",
+    "tqdm>=4.65,<5",
+    "soundfile>=0.12,<1",
+    "librosa>=0.10,<0.12",
+    "transformers>=4.35,<5",
+    "fastapi>=0.110,<1",
+    "uvicorn[standard]>=0.27,<1",
+    "python-multipart>=0.0.9,<1",
 ]
 
 # 可选依赖（按需安装）

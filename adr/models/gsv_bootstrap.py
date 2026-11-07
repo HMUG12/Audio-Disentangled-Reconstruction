@@ -9,11 +9,24 @@ server stats 透传桌面壳 prewarm 页显示 (用户要求的下载提示)。
 """
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import os
 import threading
+import time
 import urllib.request
+import uuid
 import zipfile
 from pathlib import Path
+
+try:      # 批次83 (#15): 跨进程文件锁 (Windows 便携包主战场)
+    import msvcrt
+except ImportError:      # pragma: no cover - 非 Windows 平台
+    msvcrt = None
+try:
+    import fcntl
+except ImportError:      # pragma: no cover - Windows 无 fcntl
+    fcntl = None
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 GSV_DIR = REPO_ROOT / "third_party" / "gpt_sovits"
@@ -38,6 +51,8 @@ def _urls(fname: str) -> dict[str, str]:
 #   就绪判据 pretrained_models/sv 目录存在
 # - G2PWModel.zip 解到 GPT_SoVITS/text/ (zip 根含 G2PWModel/; 老包解出
 #   G2PWModel_1.1 → 重命名)
+# 批次83 (#15): sha256 取 HF 仓库 tree API 的 lfs.oid (三源同一份字节)。
+# 只校验 Content-Length 挡不住 CDN 错误页/代理替换, 也挡不住大小一致的损坏。
 _MANIFEST: list[dict] = [
     {
         "key": "pretrained",
@@ -46,6 +61,7 @@ _MANIFEST: list[dict] = [
         "urls": _urls("pretrained_models.zip"),
         "extract_to": GSV_DIR / "GPT_SoVITS",
         "marker": GSV_DIR / "GPT_SoVITS" / "pretrained_models" / "sv",
+        "sha256": "66274394318cbf134b78d0d5aeeccb73e96f5d43cf6876ac43560a972cb1f3fc",
     },
     {
         "key": "g2pw",
@@ -54,8 +70,13 @@ _MANIFEST: list[dict] = [
         "urls": _urls("G2PWModel.zip"),
         "extract_to": GSV_DIR / "GPT_SoVITS" / "text",
         "marker": GSV_DIR / "GPT_SoVITS" / "text" / "G2PWModel",
+        "sha256": "46292be0374a49308069233cd5c147ae4c41806558e4781a2467a31a4d8099da",
     },
 ]
+
+# 批次83 (#15): 双开壳 / 预热线程并发 ensure() 时的互斥等待上限。
+# 另开进程正在下 1.4GB 权重时等它下完, 拿到锁后 marker 已存在则直接返回。
+_LOCK_WAIT_SEC = 900.0
 
 _STATE_LOCK = threading.Lock()
 _STATE: dict = {
@@ -97,27 +118,109 @@ def _ordered_sources(urls: dict[str, str]) -> list[tuple[str, str]]:
 _NO_PROXY_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
-def _download(url: str, dest: Path, no_proxy: bool = False) -> None:
-    """单源下载 (带进度回调), 失败抛异常由调用方换源重试。"""
-    part = dest.with_suffix(dest.suffix + ".part")
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _matches_entry(path: Path, entry: dict) -> bool:
+    """残留 zip 是否可信: 清单登记了 sha256 就必须一致 (批次83 #15)。"""
+    want = entry.get("sha256") or ""
+    if not want:
+        return True
+    try:
+        return _sha256_file(path) == want
+    except OSError:
+        return False
+
+
+def _clear_parts(entry: dict) -> None:
+    """清理该条目的下载残留 (批次83 #15: 临时名带 pid/uuid, 需按前缀扫)。"""
+    d = entry["extract_to"]
+    for p in d.glob(entry["zip_name"] + ".*.part"):
+        p.unlink(missing_ok=True)
+    (d / (entry["zip_name"] + ".part")).unlink(missing_ok=True)   # 旧固定名
+
+
+@contextlib.contextmanager
+def _bootstrap_lock():
+    """批次83 (#15): 进程级互斥 — 双开壳并发 ensure() 会互相覆盖同一 zip/解压目录。
+
+    用锁文件而非进程内 threading.Lock: 两个便携包实例是不同进程。
+    msvcrt.locking / fcntl.flock 都是非阻塞轮询, 超时后报可读错误。
+    """
+    GSV_DIR.mkdir(parents=True, exist_ok=True)
+    fh = open(GSV_DIR / ".bootstrap.lock", "a+b")
+    try:
+        deadline = time.monotonic() + _LOCK_WAIT_SEC
+        while True:
+            try:
+                fh.seek(0)
+                if msvcrt is not None:
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        "另一个 ADR 进程正在下载预训练资源, 等待超时; "
+                        "请稍后重试或关闭其他 ADR 窗口") from None
+                time.sleep(0.2)
+        try:
+            yield
+        finally:
+            try:
+                fh.seek(0)
+                if msvcrt is not None:
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+    finally:
+        fh.close()
+
+
+def _download(url: str, dest: Path, sha256: str = "", no_proxy: bool = False) -> None:
+    """单源下载 (带进度回调 + sha256 校验), 失败抛异常由调用方换源重试。
+
+    批次83 (#15): 临时名带 pid/uuid, 不再固定 ``dest.part`` (并发/上次残留
+    会互相截断); 下载结束校验 sha256, 任何失败都清理自己的临时文件。
+    """
+    part = dest.with_name(f"{dest.name}.{os.getpid()}.{uuid.uuid4().hex}.part")
     req = urllib.request.Request(url, headers={"User-Agent": "adr-bootstrap/1.0"})
     opener = _NO_PROXY_OPENER if no_proxy else urllib.request.build_opener()
-    with opener.open(req, timeout=60) as resp:
-        total = int(resp.headers.get("Content-Length", 0))
-        done = 0
-        _set_state(stage="downloading", file=dest.name, total=total, downloaded=0)
-        with open(part, "wb") as f:
-            while True:
-                chunk = resp.read(1024 * 1024)
-                if not chunk:
-                    break
-                f.write(chunk)
-                done += len(chunk)
-                _set_state(downloaded=done, total=total or done)
-    if total > 0 and done != total:
+    try:
+        digest = hashlib.sha256()
+        with opener.open(req, timeout=60) as resp:
+            total = int(resp.headers.get("Content-Length", 0))
+            done = 0
+            _set_state(stage="downloading", file=dest.name, total=total,
+                       downloaded=0)
+            with open(part, "wb") as f:
+                while True:
+                    chunk = resp.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    digest.update(chunk)
+                    done += len(chunk)
+                    _set_state(downloaded=done, total=total or done)
+        if total > 0 and done != total:
+            raise RuntimeError(
+                f"truncated download: expected {total}, got {done}")
+        got = digest.hexdigest()
+        if sha256 and got != sha256:
+            raise RuntimeError(
+                f"sha256 mismatch: expected {sha256}, got {got} (源返回内容被替换或损坏)")
+        os.replace(str(part), str(dest))
+    except BaseException:
         part.unlink(missing_ok=True)
-        raise RuntimeError(f"truncated download: expected {total}, got {done}")
-    part.replace(dest)
+        raise
 
 
 def _extract(entry: dict) -> None:
@@ -139,12 +242,17 @@ def _extract(entry: dict) -> None:
 
 def _acquire(entry: dict) -> None:
     zip_path = entry["extract_to"] / entry["zip_name"]
-    # 残留 zip (上次中断于解压前): 校验后直接复用, 损坏则重新下载
+    # 残留 zip (上次中断于解压前): sha256 与包结构都通过才复用
+    # 批次83 (#15): 旧实现只看 zip 能否打开, 内容被替换/截断但结构合法的包
+    # 会直接解压进运行时。
     if zip_path.exists():
-        try:
-            _extract(entry)
-            return
-        except (zipfile.BadZipFile, RuntimeError):
+        if _matches_entry(zip_path, entry):
+            try:
+                _extract(entry)
+                return
+            except (zipfile.BadZipFile, RuntimeError):
+                zip_path.unlink(missing_ok=True)
+        else:
             zip_path.unlink(missing_ok=True)
 
     last_err: Exception | None = None
@@ -156,11 +264,12 @@ def _acquire(entry: dict) -> None:
             attempts.append((True, url))
         for no_proxy, u in attempts:
             try:
-                _download(u, zip_path, no_proxy=no_proxy)
+                _download(u, zip_path, sha256=entry.get("sha256") or "",
+                          no_proxy=no_proxy)
                 break
             except Exception as e:  # 换源/绕代理重试
                 last_err = e
-                zip_path.with_suffix(zip_path.suffix + ".part").unlink(missing_ok=True)
+                _clear_parts(entry)
                 zip_path.unlink(missing_ok=True)
                 if no_proxy:
                     continue
@@ -184,6 +293,9 @@ def ensure() -> None:
 
     失败抛 RuntimeError, 状态置 failed — gsv_engine.prewarm 捕获后走
     既有 failed 阶段 (壳可重试, 重试会重新进入本函数续传)。
+
+    批次83 (#15): 全程持进程级文件锁, 双开壳不会互相覆盖 .part/解压目录;
+    拿到锁后重新判 marker (另一进程可能已下完)。
     """
     if not pending():
         _set_state(stage="done", error="", file="")
@@ -191,10 +303,11 @@ def ensure() -> None:
     if not GSV_DIR.exists():
         raise RuntimeError(f"GSV source tree not found: {GSV_DIR}")
     try:
-        for entry in _MANIFEST:
-            if entry["marker"].exists():
-                continue
-            _acquire(entry)
+        with _bootstrap_lock():
+            for entry in _MANIFEST:
+                if entry["marker"].exists():
+                    continue
+                _acquire(entry)
         _set_state(stage="done", error="")
     except Exception as e:
         _set_state(stage="failed", error=str(e))
@@ -204,6 +317,6 @@ def ensure() -> None:
 def cleanup_cache() -> None:
     """清理下载残留 .part (维护用)。"""
     for entry in _MANIFEST:
-        part = entry["extract_to"] / (entry["zip_name"] + ".part")
         # 批次66: .part 是文件, rmtree(ignore_errors) 会静默删不掉
-        part.unlink(missing_ok=True)
+        # 批次83 (#15): 临时名已带 pid/uuid, 兜底扫前缀 + 兼容旧固定名
+        _clear_parts(entry)

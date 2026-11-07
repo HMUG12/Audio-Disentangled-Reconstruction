@@ -216,10 +216,12 @@ class FakeEngine:
         pass
 
 
-def test_profile_create_requires_consent(tmp_path):
+def test_profile_create_requires_consent(tmp_path, monkeypatch):
     """consent_granted 缺失 → 422 (声纹属个人敏感信息, 批次62)。"""
-    from adr.server import create_app
-    audio = tmp_path / "ref.wav"
+    from adr.server import console, create_app
+    monkeypatch.setattr(console, "UPLOAD_DIR", tmp_path / "uploads")  # 批次78 #11
+    audio = tmp_path / "uploads" / "ref.wav"
+    audio.parent.mkdir(parents=True, exist_ok=True)
     audio.write_bytes(_make_wav())
     c = TestClient(create_app(engine=FakeEngine()))
     r = c.post("/api/adr/v1/profiles/create", json={

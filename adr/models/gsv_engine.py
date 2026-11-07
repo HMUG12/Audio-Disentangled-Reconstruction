@@ -21,6 +21,7 @@ import os
 import pickle
 import sys
 import threading
+import time
 import traceback
 import zipfile
 from collections import OrderedDict
@@ -52,6 +53,12 @@ GSV_DIR = REPO_ROOT / "third_party" / "gpt_sovits"
 # RLock: synthesize_stream 的 _gsv_context 内嵌套 _ensure_weights 再开
 # _gsv_context, 必须可重入。
 _CHDIR_LOCK = threading.RLock()
+
+# 批次82 (#1): 流式消费端断连后的清理预算。producer 可能卡在上游 run() 里
+# 迟迟不退出, 消费端不能无限期等 _DONE (旧实现 q.get() 无超时 + join(30)
+# 超时后直接返回, worker 仍持引擎锁存活)。超时即标记引擎降级, 下次重建模型。
+_STREAM_DRAIN_SEC = 30.0
+_STREAM_JOIN_SEC = 5.0
 
 
 def is_cuda_oom(e: BaseException) -> bool:
@@ -253,6 +260,21 @@ def _restricted_weights_scan(weights_path: str) -> None:
             "weights file top-level must be a dict of tensors")
 
 
+def weights_stamp(path: str) -> tuple[str, int, int]:
+    """权重文件指纹 (批次77 / CODE_REVIEW #6): 路径 + mtime_ns + size。
+
+    只用路径做幂等键时, 音色包导入 / 训练产物用 ``os.replace`` 覆盖同一路径
+    后仍会被判为"已加载", 既跳过 ``validate_weights_file`` 的安全预检,
+    也继续用旧权重合成。mtime_ns + size 能感知文件被换掉。文件不可 stat
+    (不存在 / 无权限) 时返回零值 — 后续 validate/加载会给出真正的错误。
+    """
+    try:
+        st = os.stat(path)
+        return (path, st.st_mtime_ns, st.st_size)
+    except OSError:
+        return (path, 0, 0)
+
+
 def _resolve_fragment_interval(fragment_interval: Optional[float]) -> float:
     """Track E (批次33): 句末静音秒数解析 — None → env ADR_TTS_FRAGMENT_INTERVAL
     (默认 0.3 = GSV 原行为); 显式传入钳到 [0, 2] (负数会使下游 np.zeros 崩)。
@@ -432,7 +454,9 @@ class GSVEngine:
         self.config = config or GSVEngineConfig()
         self._tts = None
         self._lock = threading.Lock()
-        self._loaded = {"t2s": None, "vits": None}   # 已热换权重路径 (批次9幂等跳过)
+        self._loaded = {"t2s": None, "vits": None}   # 值 = weights_stamp 指纹 (批次9幂等跳过)
+        # 批次82 (#1): 流式 worker 超时未退出 → 置位, 下次 _lazy_init 重建模型
+        self._stalled = False
         # 批次63 第三子批 (m10 ④): N=1 硬预算调度 — 排队/预算/调度报告收口到
         # SynthesisScheduler; _lock 仍是引擎态硬闸 (旁路调度者也被串行化)。
         # 批次64 第一子批: N=2 固定份额调度层, 放宽准入到 2 槽; _lock 仍串行化,
@@ -483,7 +507,9 @@ class GSVEngine:
 
     @property
     def is_ready(self) -> bool:
-        return self._tts is not None
+        # 批次82 (#1): 卡死的流式 worker 可能还占着模型 → 对外报不可用,
+        # 下次 _lazy_init 会重建
+        return self._tts is not None and not self._stalled
 
     @contextlib.contextmanager
     def _gsv_context(self):
@@ -502,7 +528,34 @@ class GSVEngine:
             finally:
                 os.chdir(old_cwd)
 
+    def _mark_stalled(self, worker: threading.Thread) -> None:
+        """批次82 (#1): 流式 worker 超时未退出 — 标记引擎不可复用。
+
+        这里不抢 ``_lock`` (卡死的 worker 可能正持着它), 只置降级标记;
+        下一次 ``_lazy_init()`` 在持有 ``_lock`` 后丢弃模型并重建。
+        """
+        self._stalled = True
+        logging.getLogger("adr").error(
+            "[gsv] 流式合成 worker %s 超时未退出, 引擎降级: 下次请求重建模型",
+            worker.name)
+        log_event("stream_stall", worker=worker.name)
+
+    def _drop_stalled_model(self) -> bool:
+        """批次82 (#1): 上次流式卡死 → 丢弃模型与权重指纹, 本次强制重建。
+
+        调用方须持有 ``_lock``。
+        """
+        if not self._stalled:
+            return False
+        self._stalled = False
+        self._tts = None
+        self._loaded = {"t2s": None, "vits": None}
+        return True
+
     def _lazy_init(self):
+        if self._drop_stalled_model():
+            logging.getLogger("adr").warning(
+                "[gsv] 上次流式合成 worker 超时未退出, 强制重建模型")
         if self._tts is not None:
             return
         # 批次10: t2s CUDA Graph 桥 — AR 提速 3.77x 但官方 SDPA 实现下 AR 分布
@@ -674,26 +727,32 @@ class GSVEngine:
 
     def _ensure_weights(self, vits_weights: Optional[str],
                         t2s_weights: Optional[str]):
-        """热换到目标权重, 同路径幂等跳过 (批次 9)。
+        """热换到目标权重, 同指纹幂等跳过 (批次 9; 批次77 改指纹)。
 
         上游 init_vits_weights/init_t2s_weights 无条件完整重载 — 稳态下
-        连续合成同一音色每次白付 1~3s 权重重载。调用方须持有 self._lock。
+        连续合成同一音色每次白付 1~3s 权重重载。幂等键含 (路径, mtime, size):
+        同路径文件被覆盖时能感知变化, 不会跳过安全预检与重载。
+        调用方须持有 self._lock。
         """
         if not (vits_weights or t2s_weights):
             return
         vw = str(Path(vits_weights).resolve()) if vits_weights else None
         tw = str(Path(t2s_weights).resolve()) if t2s_weights else None
         with self._gsv_context():
-            if vw and self._loaded.get("vits") != vw:
-                # 批次38: 安全预检收编到唯一换权点 — 恶意 pickle 在 third_party
-                # torch.load 前拒绝, 覆盖 v2 请求级 / v3 档案 / set_* 全部入口
-                validate_weights_file(vw)
-                self._tts.init_vits_weights(vw)
-                self._loaded["vits"] = vw
-            if tw and self._loaded.get("t2s") != tw:
-                validate_weights_file(tw)
-                self._tts.init_t2s_weights(tw)
-                self._loaded["t2s"] = tw
+            if vw:
+                vstamp = weights_stamp(vw)
+                if self._loaded.get("vits") != vstamp:
+                    # 批次38: 安全预检收编到唯一换权点 — 恶意 pickle 在 third_party
+                    # torch.load 前拒绝, 覆盖 v2 请求级 / v3 档案 / set_* 全部入口
+                    validate_weights_file(vw)
+                    self._tts.init_vits_weights(vw)
+                    self._loaded["vits"] = vstamp
+            if tw:
+                tstamp = weights_stamp(tw)
+                if self._loaded.get("t2s") != tstamp:
+                    validate_weights_file(tw)
+                    self._tts.init_t2s_weights(tw)
+                    self._loaded["t2s"] = tstamp
 
     @staticmethod
     def _sanitize_text(text: str) -> str:
@@ -801,7 +860,12 @@ class GSVEngine:
         # 合成体全程跑在单一 worker 线程 (chdir 窗口仍串行化, RLock 同线程
         # acquire/release), 音频块入队; 本生成器只在锁外取队列并 yield。
         # _admit/_RuntimeProbe/seg 缓存语义不变, 只是归属 worker 线程。
-        q: "_queue.Queue" = _queue.Queue(maxsize=8)
+        # 批次82 (#1): 无界队列 — 旧 maxsize=8 时消费端停止迭代 (半开连接/
+        # 浏览器取消后 generator 迟迟不被回收) 会让 worker 卡在 q.put 里,
+        # 而它正持着引擎 _lock, 后续所有合成被永久阻塞。无界后 put 永不阻塞,
+        # worker 总能跑完并释放锁; 代价是消费端慢时音频在内存里堆积
+        # (单请求级别, 可接受), cancel 检查仍会让断连请求尽早停。
+        q: "_queue.Queue" = _queue.Queue()
         cancel = threading.Event()
         _DONE = object()
 
@@ -830,20 +894,25 @@ class GSVEngine:
                         inputs["fragment_interval"] = fi
                         with self._gsv_context():
                             self._ensure_weights(vits_weights, t2s_weights)
+                            # 批次85 (#18): 参考音频版本指纹 — 同名档案重建
+                            # ref.wav 后 mtime/size 变化, 不再回放旧缓存人声
+                            ref_stamp = weights_stamp(ref_audio)
                             for i, seg in enumerate(segments):
                                 if cancel.is_set():   # 断连: 与旧语义一致, 探针不计样本
                                     raise GeneratorExit
                                 inputs["text"] = seg
-                                inputs["seed"] = (head_seed
-                                                  if (i == 0 and head_seed >= 0)
-                                                  else -1)
+                                seg_seed = (head_seed
+                                            if (i == 0 and head_seed >= 0)
+                                            else -1)
+                                inputs["seed"] = seg_seed
                                 ckey = None
                                 if _seg_cache_enabled():
                                     ckey = _seg_cache_key(
                                         seg, ref_audio, prompt_text, text_lang,
                                         prompt_lang, split_method, top_k, top_p,
                                         temperature, speed_factor, fi,
-                                        t2s_weights, vits_weights)
+                                        t2s_weights, vits_weights,
+                                        ref_stamp, seg_seed)
                                     hit = _seg_cache_get(ckey)
                                     if hit is not None:
                                         pcm, hit_sr = hit
@@ -893,14 +962,28 @@ class GSVEngine:
                     raise item[1]
                 yield item[0], item[1]
         finally:
-            # 断连/异常退出: 通知 producer 停, 并持续排空队列解除其 put 阻塞,
-            # 直到它在 finally 发出 _DONE, 再 join — 不泄漏 worker 线程。
-            # 正常结束时 _DONE 已被取走, 不能再等 (否则永久阻塞)。
+            # 批次82 (#1): 清理带 deadline。旧实现 q.get() 无超时 + join(30)
+            # 超时后直接返回: worker 若卡在上游 run() 里就永久持锁, 而且调用
+            # 方永远拿不回控制权。现在排空到 deadline 为止 (无界队列下正常
+            # 路径不会阻塞), join 有界; 仍未退出则判定引擎卡死并降级。
             cancel.set()
+            deadline = time.monotonic() + _STREAM_DRAIN_SEC
             while not done_seen:
-                if q.get() is _DONE:
-                    done_seen = True
-            worker.join(timeout=30)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    # 短超时轮询: 不能用 remaining 一把等死, 要留出
+                    # deadline 到点后走 join + 降级判定的机会
+                    if q.get(timeout=min(remaining, 0.5)) is _DONE:
+                        done_seen = True
+                except _queue.Empty:
+                    continue
+            worker.join(timeout=_STREAM_JOIN_SEC)
+            # worker 已退出 = 没有卡死 (deadline 最后一刻完成的也算);
+            # 仍存活说明卡在上游 run() 或持锁逻辑里, 不能再复用它。
+            if worker.is_alive():
+                self._mark_stalled(worker)
 
     def synthesize(
         self,

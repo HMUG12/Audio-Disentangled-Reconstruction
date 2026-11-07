@@ -6,7 +6,7 @@ framework_version: "0.1.0"
 config_preset: "vram_6gb"
 
 data:
-  sample_rate: 24000
+  sample_rate: 22050      # 与 BigVGAN 声码器域一致 (批次80 / CODE_REVIEW #2)
   hop_length: 256
   n_mels: 80
   enable_separation: true

@@ -18,6 +18,8 @@ import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -40,6 +42,28 @@ def _prewarm_gsv(default_profile: str | None) -> None:
     from adr.models import gsv_engine
 
     gsv_engine.prewarm(default_profile)
+
+
+def _detail_message(detail) -> str:
+    """HTTPException.detail → 统一 ``message`` 文本 (批次84 / CODE_REVIEW #13)。"""
+    if isinstance(detail, str):
+        return detail
+    if isinstance(detail, (list, tuple)):
+        return "; ".join(str(x) for x in detail)
+    return str(detail)
+
+
+def _validation_message(errors: list) -> str:
+    """RequestValidationError.errors() → 人类可读摘要 (最多取前 3 条)。"""
+    parts = []
+    for err in errors[:3]:
+        loc = ".".join(str(p) for p in err.get("loc", ()) if p != "body")
+        msg = err.get("msg") or "invalid value"
+        parts.append(f"{loc}: {msg}" if loc else str(msg))
+    text = "; ".join(parts) or "invalid request"
+    if len(errors) > 3:
+        text += f"; ... ({len(errors) - 3} more)"
+    return text
 
 
 def create_app(engine=None) -> FastAPI:
@@ -95,13 +119,26 @@ def create_app(engine=None) -> FastAPI:
         **cors_kwargs,
     )
     # 批次41a: HTTPException 响应增量补结构化 code — 既有 detail 字段与
-    # 文本逐字保留 (wire 兼容), 422 校验错误 (RequestValidationError) 不经
-    # 此 handler, 保持 FastAPI 默认形态
+    # 文本逐字保留 (wire 兼容)。
+    # 批次84 (#13): 再增量补 ``message``, 与 v2/v3 的 {"message","code"} 契约对齐;
+    # 同时接管 422 (RequestValidationError), 补 message + code,
+    # detail 仍是 FastAPI 原有 errors 列表 (只增不改)。
     @app.exception_handler(StarletteHTTPException)
     async def _http_exception_handler(request, exc: StarletteHTTPException):
+        detail = exc.detail
         return JSONResponse(
             status_code=exc.status_code, headers=exc.headers,
-            content={"detail": exc.detail, "code": http_error_code(exc)})
+            content={"detail": detail, "message": _detail_message(detail),
+                     "code": http_error_code(exc)})
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation_exception_handler(request, exc: RequestValidationError):
+        errors = exc.errors()
+        return JSONResponse(
+            status_code=422,
+            content={"detail": jsonable_encoder(errors),
+                     "message": _validation_message(errors),
+                     "code": "validation_error"})
 
     # v2/v3_compat 的请求期引擎缓存 (批次26 注明): 生产模式下初始为 None,
     # 首次合成时由 v2_compat/v3_compat 惰性赋值 get_gsv_engine() 并复用。

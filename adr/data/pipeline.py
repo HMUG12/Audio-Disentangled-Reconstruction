@@ -31,7 +31,7 @@ from adr.data.f0 import F0Config, F0Extractor
 from adr.data.g2p import G2P, G2PConfig
 from adr.data.separate import SeparateConfig, Separator
 from adr.data.slice import SliceConfig, slice_audio
-from adr.utils.audio import AudioData, compute_mel, load_audio
+from adr.utils.audio import compute_mel_bigvgan, load_audio
 
 
 @dataclass
@@ -226,22 +226,36 @@ class DataPipeline:
 
         # Step 6: F0 + Mel
         # 批次41b: 单样本提取失败只跳过该样本 (记入 errors), 不让整条数据集构建中断
-        f0_failed: set = set()
+        # 批次80 (#2): mel 与 F0 解耦 (原先 mel 嵌在 enable_f0 分支里,
+        # --no-f0 时 mel 恒为 None → collate 出全 0 target); mel 改用
+        # compute_mel_bigvgan, 与推理/声码器 (BigVGAN 22k) 同一套算法。
+        failed: set = set()
         if self.config.enable_f0 and self._f0 and slices:
-            self.log.info(f"[6/6] F0 + Mel extraction on {len(slices)} slices")
+            self.log.info(f"[6/6] F0 extraction on {len(slices)} slices")
             for s in slices:
                 try:
                     s.f0 = self._f0(s.waveform, sample_rate=s.sample_rate)
-                    if self.config.enable_mel:
-                        s.mel = compute_mel(
-                            s.waveform, s.sample_rate,
-                            n_mels=80, hop_length=self.config.f0.hop_length,
-                        )
                 except Exception as e:
-                    result.errors.append(f"F0/Mel slice {s.index}: {e}")
+                    result.errors.append(f"F0 slice {s.index}: {e}")
                     self.log.warning(
-                        f"  F0/Mel 提取失败, 跳过切片 {s.index}: {e}")
-                    f0_failed.add(s.index)
+                        f"  F0 提取失败, 跳过切片 {s.index}: {e}")
+                    failed.add(s.index)
+
+        if self.config.enable_mel and slices:
+            self.log.info(f"[6/6] Mel extraction on {len(slices)} slices")
+            for s in slices:
+                if s.index in failed:
+                    continue
+                try:
+                    s.mel = compute_mel_bigvgan(
+                        s.waveform, sample_rate=s.sample_rate,
+                        n_mels=80, hop_length=self.config.f0.hop_length,
+                    )
+                except Exception as e:
+                    result.errors.append(f"Mel slice {s.index}: {e}")
+                    self.log.warning(
+                        f"  Mel 提取失败, 跳过切片 {s.index}: {e}")
+                    failed.add(s.index)
 
         # Build TrainSample list
         # 批次41b: sample_id 加入源文件路径哈希 — 不同目录同名文件
@@ -251,8 +265,8 @@ class DataPipeline:
         for s in slices:
             if not s.text or not s.phonemes:
                 continue
-            if s.index in f0_failed:
-                # F0 失败的切片缺关键训练信号, 跳过而非带空 f0 入库
+            if s.index in failed:
+                # F0/Mel 失败的切片缺关键训练信号, 跳过而非带空值入库
                 continue
             sample = TrainSample(
                 sample_id=f"{input_path.stem}_{path_hash}_{s.index:04d}",

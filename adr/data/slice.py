@@ -26,7 +26,9 @@ class SliceConfig:
     min_silence_sec: float = 0.3   # 静音最小长度
     silence_threshold_db: float = -40.0  # 静音阈值 (dB)
     merge_short: bool = True        # 短切片是否合并
-    target_sr: int = 24000
+    # 批次80 (#2): 与声码器/BigVGAN/ADR-2 的 22050 对齐 —— 训练 mel 帧率
+    # (hop=256 → 11.6ms) 必须与推理侧一致, 否则微调后音色/音质退化
+    target_sr: int = 22050
 
 
 @dataclass

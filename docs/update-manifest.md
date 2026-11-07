@@ -41,7 +41,8 @@ https://adr-studio.pages.dev/update.json
       "sha256": "…",
       "size": 4329181440
     }
-  ]
+  ],
+  "signature": "…（Ed25519 签名 hex，见 §6，缺失客户端直接拒收）"
 }
 ```
 
@@ -56,6 +57,7 @@ https://adr-studio.pages.dev/update.json
 | `packages[].fallback_url` | 否 | 备用直链（123 云盘），主源失败自动切换；1.7GB 包强烈建议提供 |
 | `packages[].sha256` | **是** | 64 位十六进制，大小写不敏感。**为空直接拒绝下载**（完整性硬门槛），不许留空占位 |
 | `packages[].size` | 否 | 字节数，仅作进度条分母；缺失时读 `Content-Length` |
+| `signature` | **是** | 清单 Ed25519 签名（hex）。**缺失 = 客户端拒绝整份清单**（批次76 #3，见 §6）。用 `scripts/sign_update_manifest.py` 生成，不要手填 |
 
 ## 3. 下载链接的实测要求
 
@@ -69,7 +71,8 @@ https://adr-studio.pages.dev/update.json
 1. 上传安装包到 HF 与 123 云盘，确认两条链接都能完整下载
 2. 算 SHA256：`certutil -hashfile <安装包> SHA256`，与清单逐位核对
 3. **最后**更新 `update.json` 的 `version` / `notes` / `packages`
-4. purge CDN 上的 `update.json`
+4. **签名**：`D:\pyhon\python.exe scripts\sign_update_manifest.py update.json`（§6）
+5. purge CDN 上的 `update.json`
 
 顺序颠倒会让先到的用户下到半成品并被判「校验不符」（客户端会删档重下，不会装坏，但体验差）。
 
@@ -82,3 +85,39 @@ https://adr-studio.pages.dev/update.json
 - 清单拉不到时退回 GitHub `releases/latest` 页面，不会误装
 - `variant` 按本机 `runtime/BUILD_VARIANT.txt` 选择；无对应项时退回第一个带 `url` 的包（别只写一个包又写错 variant）
 - 官网页面 HTML 不参与自动更新，改版无影响；下载页建议同时挂 HF 与 123 云盘入口，与清单保持一致
+
+## 6. 清单签名（批次76 #3，强制）
+
+**没有合法签名的清单，客户端一律拒绝**（检查更新报「更新清单未签名」）。原因：清单决定「装哪个 exe、从哪下、哈希多少」，若它被篡改（CDN / 账号 / 中间人），旧客户端等于无条件执行远端指定的程序。现在三件事同时收紧：
+
+1. 清单必须带 Ed25519 签名，验签失败不降级；
+2. 包型 / 地址 / 哈希由壳从**已验签**清单里取，前端只报版本号，不回传包对象；
+3. 安装包只认 `%LOCALAPPDATA%\ADR\updates\` 内、且重算 SHA256 与清单一致的那个文件。
+
+签名对象是下面这段逐字节文本（与 `update.rs::signing_payload`、`scripts/sign_update_manifest.py` 三方一致，已由 Rust 单测 + pytest 双向钉死）：
+
+```
+adr-update-v1
+{version}
+sha256(notes 的 UTF-8 字节)
+{variant}|{name}|{url}|{fallback_url}|{sha256 小写}|{size}
+...（每个包一行，顺序与文件一致）
+```
+
+工具与密钥：
+
+```powershell
+# 首次（已生成过则只打印公钥）
+D:\pyhon\python.exe scripts\sign_update_manifest.py --genkey
+# 私钥: %USERPROFILE%\.adr\update_signing_key.pem  ← 备份好，绝不入库
+
+# 每次发版：改完 update.json 就地签名（会顺带校验私钥与壳内公钥是否配对）
+D:\pyhon\python.exe scripts\sign_update_manifest.py update.json
+
+# 只校验线上文件是否被改过
+D:\pyhon\python.exe scripts\sign_update_manifest.py --check update.json
+```
+
+- 公钥写死在 `desktop/src-tauri/src/update.rs` 的 `UPDATE_PUBKEY_HEX`；**换钥 = 老客户端拒收新清单**，只能随新版本壳一起发。
+- 签名只覆盖清单字段，安装包完整性仍靠 `packages[].sha256`（两者都要）。
+- 老版本客户端（批次76 之前）不校验签名，也不受影响——它们照旧读清单；签名是新客户端的要求。

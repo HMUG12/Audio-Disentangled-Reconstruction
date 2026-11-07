@@ -724,7 +724,6 @@ const bnUpd = document.getElementById("bn-upd");
 const bnPkg = document.getElementById("bn-pkg");
 const updOv = document.getElementById("upd-ov");
 let updData = null;   // check_update 结果 (横幅与模态框共用)
-let updPkg = null;    // 清单挑中的包, download_update 原样回传
 let updPath = "";     // 已下载并通过 SHA256 校验的本地安装包
 
 function updInfo(text, isErr) {
@@ -746,7 +745,7 @@ window.__adrUpdate = p => {
 
 function openUpdateModal() {
   if (!updData?.available) return;
-  updPkg = updData.package || null;
+  // 批次76 (#3): 包型/地址/哈希都由壳从已验签清单里取, 页面只报版本号
   updPath = "";
   $upd("upd-ver").textContent = "v" + updData.latest;
   $upd("upd-notes").textContent = (updData.notes || "").trim() || "该版本未提供更新说明。";
@@ -791,12 +790,12 @@ $upd("upd-x").addEventListener("click", () => updOv.classList.remove("on"));
 updOv.addEventListener("click", e => { if (e.target === updOv) updOv.classList.remove("on"); });
 
 $upd("upd-dl").addEventListener("click", async () => {
-  if (!updPkg) { updInfo("安装包信息缺失, 请重新检查更新", true); return; }
+  if (!updData?.package_ready) { updInfo("安装包信息缺失, 请重新检查更新", true); return; }
   const btn = $upd("upd-dl"), inst = $upd("upd-inst");
   btn.disabled = true; btn.textContent = "下载中…"; inst.disabled = true;
   updInfo("正在连接更新服务器…");
   try {
-    const r = await window.__TAURI__.core.invoke("download_update", { pkg: updPkg });
+    const r = await window.__TAURI__.core.invoke("download_update", { version: updData.latest });
     updPath = r.path;
     $upd("upd-fill").style.width = "100%";
     updInfo("已下载并通过 SHA256 校验, 可立即安装");
@@ -815,7 +814,9 @@ $upd("upd-inst").addEventListener("click", async () => {
   b.disabled = true; b.textContent = "安装中…";
   updInfo("应用即将退出, 随后静默覆盖安装（声音档案与模型不受影响）");
   try {
-    await window.__TAURI__.core.invoke("install_update", { path: updPath });
+    // 批次76 (#3): 不再回传本地路径 — 壳只装自己的 updates/ 目录里、且与
+    // 已验签清单哈希一致的那个包
+    await window.__TAURI__.core.invoke("install_update");
   } catch (e) {
     updInfo(String(e), true);
     b.disabled = false; b.textContent = "立即安装";

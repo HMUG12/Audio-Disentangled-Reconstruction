@@ -15,8 +15,10 @@
  11. docker/docker-compose*.yml         镜像 tag adr-server:<ver>-cpu|cuda
  12. docker/README.md / README.md       镜像 tag 示例（含 ghcr 拉取命令）
 
-用法：python scripts/check_versions.py
+用法：python scripts/check_versions.py [--tag v1.3.1]
 全部一致返回 0，存在差异列出明细返回 1（CI smoke 与双包构建前置均可复用）。
+`--tag`：发布流水线用（批次76 #22）——校验 git tag 去掉 v 前缀后与
+pyproject 事实源一致，防止 v1.4.0 的 tag 打出 1.3.1 的镜像/安装包。
 """
 from __future__ import annotations
 
@@ -32,14 +34,29 @@ def _read(rel: str) -> str:
     return (ROOT / rel).read_text(encoding="utf-8")
 
 
-def main() -> int:
-    m = re.search(r'^version\s*=\s*"([^"]+)"', _read("pyproject.toml"), re.M)
+def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    tag = ""
+    if "--tag" in argv:
+        try:
+            tag = argv[argv.index("--tag") + 1]
+        except IndexError:
+            print("check_versions: --tag 需要一个参数（如 --tag v1.3.1）", file=sys.stderr)
+            return 2
+
+    m = re.search(r'^version\s*=\s*"([^"]+)"', _read("pyproject.toml"), re.MULTILINE)
     if not m:
         print("check_versions: pyproject.toml 未找到 [project] version", file=sys.stderr)
         return 2
     ver = m.group(1)
 
     problems: list[str] = []
+
+    # 批次76 (#22): 发布 tag 必须与事实源一致, 否则 v1.4.0 会打出 1.3.1 的镜像
+    if tag:
+        tag_ver = tag.strip().lstrip("vV")
+        if tag_ver != ver:
+            problems.append(f"git tag {tag}: 剥 v 后 {tag_ver} != pyproject {ver}")
 
     if f'__version__ = "{ver}"' not in _read("adr/__init__.py"):
         problems.append(f"adr/__init__.py: __version__ != {ver}")

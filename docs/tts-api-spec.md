@@ -100,23 +100,43 @@ with open("out.wav", "wb") as f:
 
 ### 2.4 错误格式
 
-所有业务错误统一 `400 + JSON`:
+错误响应统一带 `message` + `code` 两个字段 (批次84)，`detail` 在 HTTPException
+与 422 场景保留 (只增不改)：
 
-```json
-{"message": "text is required"}
-{"message": "tts failed", "Exception": "..."}
-```
+| 状态码 | 场景 | 示例 |
+|---|---|---|
+| 400 | 参数/请求数据错误 | `{"message": "text is required", "code": "invalid_params"}` |
+| 401 | API Key 缺失或错误 | `{"detail": "unauthorized", "message": "unauthorized", "code": "unauthorized"}` |
+| 422 | 请求体字段校验失败 | `{"detail": [...], "message": "text: Field required", "code": "validation_error"}` |
+| 500 | 服务端内部故障 | `{"message": "tts failed", "Exception": "...", "code": "internal_error"}` |
+| 503 | 依赖缺失/设备/模型不可用 | `{"message": "tts failed", "Exception": "...", "code": "dependency_missing"}` |
+
+`Exception` 字段仅在 v2 合成失败时出现 (GSV wire 兼容, 逐字保留)。客户端应按
+`code` 决定是否重试 —— 500/503 是服务端问题, 不要当成 400 参数错误反复重试。
 
 ### 2.5 权重切换端点 (全局语义)
 
 ```
-GET /api/v2/set_gpt_weights?weights_path=GPT_weights_v2/demo-e8.ckpt
-GET /api/v2/set_sovits_weights?weights_path=SoVITS_weights_v2/demo-e8.pth
+GET  /api/v2/set_gpt_weights?weights_path=GPT_weights_v2/demo-e8.ckpt
+GET  /api/v2/set_sovits_weights?weights_path=SoVITS_weights_v2/demo-e8.pth
+POST /api/v2/set_gpt_weights?weights_path=GPT_weights_v2/demo-e8.ckpt
+POST /api/v2/set_sovits_weights?weights_path=SoVITS_weights_v2/demo-e8.pth
 ```
 
-成功 `200 {"message": "success"}`; 路径缺失/加载失败
-`400 {"message": "change gpt weight failed", ...}`。
-热换幂等: 同路径重复切换不重复加载。
+成功 `200 {"message": "success"}`; 路径缺失/安全预检不通过
+`400 {"message": "change gpt weight failed", ...}`; 加载阶段的依赖/设备/权重
+损坏等内部故障按 §2.4 分流为 500/503 (批次84)。
+
+幂等与缓存 (批次77): 幂等键是 `(绝对路径, mtime_ns, size)` —— 同一路径的
+文件被覆盖 (音色包导入 / 训练产物替换) 会重新做安全预检并重载; 换权成功后
+自动清空 TTS 缓存, 不会继续返回旧人声。
+
+浏览器防护 (批次77): 这类有副作用的端点默认拒绝浏览器跨站触发 ——
+`Sec-Fetch-Site: cross-site` 且 Origin 不在白名单 (`tauri://localhost` /
+`http://tauri.localhost` / 本机 localhost 页 / `ADR_CORS_ORIGINS`) 的请求回
+`403`。`<img>` / 顶层导航 / no-cors fetch 这类不带 Origin 的跨站 GET 同样被拒。
+不带 `Sec-Fetch-*` 头的后端客户端 (N.E.K.O / curl / SDK) 不受影响;
+配置了 `ADR_TTS_API_KEY` 时由鉴权兜底, 该防护让位。
 
 ## 3. N.E.K.O 对接步骤
 
@@ -264,3 +284,17 @@ curl -H "Authorization: Bearer my-secret-key" \
 `ref_audio_path`/权重切换端点接受服务器本地路径 — 等同于把文件系统
 部分读权交给调用方, 请勿对不可信方开放 (公网部署建议: 反向代理 +
 HTTPS + 限定 key 消费方)。
+
+边界（批次78 / CODE_REVIEW #11）:
+
+- **v2 `ref_audio_path` 有意保持本地绝对路径**：这是 N.E.K.O 等既有客户端
+  的配置契约（零改造红线），仅保留「存在时必须是普通文件 + 大小上限」校验。
+- **控制台训练/建档收白名单**：`POST /api/adr/v1/train/start`、
+  `POST /api/adr/v1/profiles/create` 的 `audio_path` 必须位于
+  `output/uploads/` 内且是普通文件，否则统一返回
+  `400 音频不存在或不可用: 请先通过 /api/adr/v1/train/upload 上传 ...`。
+  越界 / 不存在 / 非普通文件共用同一文案，不构成磁盘路径存在性探针
+  （控制台页面本身先上传再调用，不受影响）。
+- ffmpeg 转码子进程带超时（`ADR_FFMPEG_TIMEOUT_SEC`，默认 120 秒），
+  超时强杀并返回可读错误，不会永久占用线程池线程。
+

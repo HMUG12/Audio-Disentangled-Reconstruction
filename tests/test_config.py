@@ -15,7 +15,7 @@ def test_default_config_loads():
     cfg = load_config(preset="default")
     assert isinstance(cfg, ADRConfig)
     assert cfg.config_preset == "default"
-    assert cfg.data.sample_rate == 24000
+    assert cfg.data.sample_rate == 22050   # 批次80 (#2): 与声码器域统一
     assert cfg.train.batch_size == 4
 
 

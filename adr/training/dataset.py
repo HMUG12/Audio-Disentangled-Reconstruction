@@ -233,13 +233,18 @@ class VoiceCloneDataset(Dataset):
 
     @staticmethod
     def _load_npz_dir(npz_dir: Union[str, Path]) -> List[TrainSample]:
-        """加载目录下所有 .npz 训练样本。"""
+        """递归加载目录下所有 .npz 训练样本 (批次77 / CODE_REVIEW #10)。
+
+        数据流水线写到 ``<output>/samples/*.npz``, 而 CLI 文档示例传
+        ``output/processed``; 只 glob ``*.npz`` 时会加载 0 条。递归匹配两种
+        用法都成立 (直接传 samples/ 目录也仍然工作)。
+        """
         npz_dir = Path(npz_dir)
         if not npz_dir.exists():
             raise FileNotFoundError(f"npz dir not found: {npz_dir}")
 
         samples = []
-        for npz_file in sorted(npz_dir.glob("*.npz")):
+        for npz_file in sorted(npz_dir.glob("**/*.npz")):
             try:
                 s = TrainSample.load(npz_file)
                 if s.text and s.phonemes:
@@ -309,11 +314,22 @@ class VoiceCloneDataset(Dataset):
         return collate_samples(batch, phoneme_to_id=self.phoneme_to_id)
 
     def split(self, val_ratio: float = 0.1, seed: int = 42) -> tuple["VoiceCloneDataset", "VoiceCloneDataset"]:
-        """划分 train/val。"""
+        """划分 train/val。
+
+        批次81 (#9): 原先 ``n_val = max(1, ...)`` 会把唯一一条样本划进 val,
+        train 为 0 (配合 ``drop_last=True`` 与 ``total_steps=0``, 训练静默
+        空转)。现在样本数 <2 直接报错, 并保证 train 至少 1 条。
+        """
         rng = random.Random(seed)
         indices = list(range(len(self.samples)))
+        if len(indices) < 2:
+            raise ValueError(
+                f"数据集只有 {len(indices)} 条样本, 无法划分 train/val; "
+                "请补充样本, 或将 val_ratio 设为 0 (全量样本用于训练)"
+            )
         rng.shuffle(indices)
         n_val = max(1, int(len(indices) * val_ratio))
+        n_val = min(n_val, len(indices) - 1)  # train 至少保留 1 条
         val_idx = indices[:n_val]
         train_idx = indices[n_val:]
 

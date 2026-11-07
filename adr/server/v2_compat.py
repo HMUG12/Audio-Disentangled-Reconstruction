@@ -22,7 +22,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Union
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -40,6 +40,8 @@ from adr.models.gsv_engine import (
 )
 from adr.server import tts_cache
 from adr.server.audio_codec import pack_audio, to_int16
+from adr.server.exceptions import error_status_code
+from adr.server.origin_guard import require_browser_safe
 from adr.server.param_norm import env_num, normalize_params
 from adr.services import SynthesisService
 
@@ -137,6 +139,9 @@ def engine_busy(engine) -> bool:
 def _check_ref_audio(path: str):
     """批次66: ref_audio_path 若存在须为普通文件且不超大小上限 (挡设备文件/巨型文件)。
 
+    批次78 (#11): 这里**故意**不收白名单 —— v2 兼容面按 docs/tts-api-spec.md §7.3
+    明确接受调用方本机绝对路径 (N.E.K.O 配置项), 收紧会破坏零改造红线; 控制台
+    训练/建档两个入口已在 console.py 侧统一收口到 UPLOAD_DIR。
     路径不存在时放行, 维持既有行为 (由引擎报错); 返回错误文案或 None。
     """
     try:
@@ -297,7 +302,8 @@ async def tts_handle(req: dict, request: Request) -> Response:
                 _stream_generator(engine, req, media_type),
                 media_type=f"audio/{media_type}")
         cache_key = tts_cache.make_key(req)
-        cached = tts_cache.get(cache_key)
+        # 批次79 (#5): 首次命中的磁盘条目要读盘 (最大 256MB), 走线程池避免堵事件循环
+        cached = await asyncio.to_thread(tts_cache.get, cache_key)
         if cached is not None:
             return Response(cached, media_type=f"audio/{media_type}")
         if engine_busy(engine):   # 批次66: 缓存命中不占引擎, 故放在命中之后
@@ -333,9 +339,11 @@ async def tts_handle(req: dict, request: Request) -> Response:
             return JSONResponse(status_code=503,
                                 content={"message": NLTK_MISSING_MESSAGE,
                                          "code": "nltk_missing"})
-        # 批次66: 服务端留堆栈; 400 状态码为 GSV wire 兼容保留 (code 区分 internal_error)
+        # 批次84 (#12): 不再一律 400 — 依赖缺失/设备/模型类 → 503, 其余内部故障
+        # → 500; 引擎深处抛的 ValueError/TypeError (请求数据问题) 仍是 400。
+        # 服务端留堆栈, wire 字段 (message / Exception / code) 逐字不变。
         logger.exception("tts failed")
-        return JSONResponse(status_code=400,
+        return JSONResponse(status_code=error_status_code(e),
                             content={"message": "tts failed", "Exception": str(e),
                                      "code": error_code(e)})
 
@@ -430,53 +438,66 @@ def _validate_weights_file(weights_path: str) -> None:
     validate_weights_file(weights_path)
 
 
-@router.get("/set_gpt_weights", summary="切换 GPT (t2s) 权重")
-async def set_gpt_weights(request: Request, weights_path: str = None):
+async def _switch_weights(request: Request, weights_path: str | None,
+                          kind: str) -> JSONResponse:
+    """换权单点 (批次77: GET/POST 两个别名共用) — kind = "gpt" | "sovits"。"""
+    if weights_path in ["", None]:
+        return JSONResponse(status_code=400,
+                            content={"message": f"{kind} weight path is required",
+                                     "code": "invalid_params"})
+    loading = False
     try:
-        if weights_path in ["", None]:
-            return JSONResponse(status_code=400,
-                                content={"message": "gpt weight path is required",
-                                         "code": "invalid_params"})
         # Track B: 安全预检, 恶意 pickle 在进入引擎加载前即被拒 (400)
         await asyncio.to_thread(_validate_weights_file, weights_path)
+        loading = True
         engine = _get_engine(request)
-        await asyncio.to_thread(engine.warmup, None, weights_path)
+        if kind == "gpt":
+            await asyncio.to_thread(engine.warmup, None, weights_path)
+        else:
+            await asyncio.to_thread(engine.warmup, weights_path, None)
     except Exception as e:
         if is_cuda_oom(e):
             # 批次66: 热换权重 OOM 与 tts_handle 同口径 — 释放碎片显存 + 503
             return JSONResponse(status_code=503,
                                 content={"message": handle_cuda_oom(e),
                                          "code": "cuda_oom"})
-        logger.exception("change gpt weight failed")  # 批次66
-        return JSONResponse(status_code=400,
-                            content={"message": "change gpt weight failed",
+        logger.exception("change %s weight failed", kind)  # 批次66
+        # 批次84 (#12): 预检失败属请求参数问题 (400); 加载阶段的依赖/设备/权重
+        # 损坏等内部故障按 error_status_code 分流 (500/503), 不再一律 400。
+        status = error_status_code(e) if loading else 400
+        return JSONResponse(status_code=status,
+                            content={"message": f"change {kind} weight failed",
                                      "Exception": str(e),
                                      "code": error_code(e)})
-    request.app.state.t2s_weights = weights_path
+    if kind == "gpt":
+        request.app.state.t2s_weights = weights_path
+    else:
+        request.app.state.vits_weights = weights_path
+    # 批次77 (#6): 换权成功后清空 TTS 缓存 — 缓存 key 只含权重路径,
+    # 同路径文件被覆盖 (音色包导入 / 训练产物替换) 时会继续返回旧人声
+    await asyncio.to_thread(tts_cache.clear)
     return JSONResponse(status_code=200, content={"message": "success"})
 
 
-@router.get("/set_sovits_weights", summary="切换 SoVITS (vits) 权重")
-async def set_sovits_weights(request: Request, weights_path: str = None):
-    try:
-        if weights_path in ["", None]:
-            return JSONResponse(status_code=400,
-                                content={"message": "sovits weight path is required",
-                                         "code": "invalid_params"})
-        # Track B: 安全预检, 恶意 pickle 在进入引擎加载前即被拒 (400)
-        await asyncio.to_thread(_validate_weights_file, weights_path)
-        engine = _get_engine(request)
-        await asyncio.to_thread(engine.warmup, weights_path, None)
-    except Exception as e:
-        if is_cuda_oom(e):
-            # 批次66: 热换权重 OOM 与 tts_handle 同口径 — 释放碎片显存 + 503
-            return JSONResponse(status_code=503,
-                                content={"message": handle_cuda_oom(e),
-                                         "code": "cuda_oom"})
-        logger.exception("change sovits weight failed")  # 批次66
-        return JSONResponse(status_code=400,
-                            content={"message": "change sovits weight failed",
-                                     "Exception": str(e),
-                                     "code": error_code(e)})
-    request.app.state.vits_weights = weights_path
-    return JSONResponse(status_code=200, content={"message": "success"})
+@router.get("/set_gpt_weights", summary="切换 GPT (t2s) 权重 (GET, N.E.K.O 兼容)")
+async def set_gpt_weights(request: Request, weights_path: str = None,
+                          _guard: None = Depends(require_browser_safe)):
+    return await _switch_weights(request, weights_path, "gpt")
+
+
+@router.post("/set_gpt_weights", summary="切换 GPT (t2s) 权重 (POST)")
+async def set_gpt_weights_post(request: Request, weights_path: str = None,
+                               _guard: None = Depends(require_browser_safe)):
+    return await _switch_weights(request, weights_path, "gpt")
+
+
+@router.get("/set_sovits_weights", summary="切换 SoVITS (vits) 权重 (GET, N.E.K.O 兼容)")
+async def set_sovits_weights(request: Request, weights_path: str = None,
+                             _guard: None = Depends(require_browser_safe)):
+    return await _switch_weights(request, weights_path, "sovits")
+
+
+@router.post("/set_sovits_weights", summary="切换 SoVITS (vits) 权重 (POST)")
+async def set_sovits_weights_post(request: Request, weights_path: str = None,
+                                  _guard: None = Depends(require_browser_safe)):
+    return await _switch_weights(request, weights_path, "sovits")

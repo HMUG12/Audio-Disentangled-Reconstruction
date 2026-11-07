@@ -13,8 +13,42 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
+  # 批次76 (#22): 发布门禁 — v* tag 不再直接构建推送。版本面 / tag 对齐 /
+  # 依赖漂移 / 语法 四项任一项红, build-push 不会启动, 因此不会产出正式镜像。
+  # 纯源码断言, 不装项目依赖, 十几秒即可跑完 (全量单测仍由 smoke.yml 负责)。
+  gate:
+    name: release gate (版本面 + tag + 依赖)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # tag 发布必须与 pyproject 事实源同版, 否则 v1.4.0 会打出 1.3.1 的镜像
+      - name: 版本面一致性 + tag 对齐
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            python scripts/check_versions.py --tag "$GITHUB_REF_NAME"
+          else
+            python scripts/check_versions.py
+          fi
+
+      - name: 合规门禁断言
+        run: python scripts/check_compliance.py
+
+      # #23: 依赖声明必须带上限, 且包含 build_runtime.ps1 / 容器钉版
+      - name: 依赖版本漂移门禁
+        run: python scripts/check_requirements.py
+
+      - name: 语法编译门禁
+        run: python -m compileall -q adr scripts
+
   build-push:
     name: build & push (${{ matrix.variant }})
+    needs: gate
     runs-on: ubuntu-latest
     timeout-minutes: 150
     permissions:

@@ -167,10 +167,11 @@ def test_v2_nonstream_raw(client, engine):
     assert r.content[:4] != b"RIFF"
 
 
-def test_v2_tts_failed_400(client, engine):
+def test_v2_tts_failed_500(client, engine):
     engine.fail = True
     r = client.post("/api/v2/tts", json={"text": "hi", "ref_audio_path": "a.wav"})
-    assert r.status_code == 400
+    # 批次84 (#12): 未预期内部故障不再伪装成 400 参数错误
+    assert r.status_code == 500
     body = r.json()
     assert body["message"] == "tts failed"
     assert "boom" in body["Exception"]
@@ -261,7 +262,8 @@ def test_v2_set_weights_load_fail(tmp_path):
     torch.save({"w": torch.zeros(1)}, w)
     c2 = TestClient(create_app(engine=_Boom()))
     r = c2.get("/api/v2/set_gpt_weights", params={"weights_path": str(w)})
-    assert r.status_code == 400
+    # 批次84 (#12): 权重预检通过后的加载故障是服务端问题 → 500
+    assert r.status_code == 500
     assert r.json()["message"] == "change gpt weight failed"
 
 
@@ -492,7 +494,9 @@ def test_auth_open_by_default(engine, monkeypatch):
 def test_auth_missing_key_401(auth_client):
     r = auth_client.post("/api/v2/tts", json={"text": "hi", "ref_audio_path": "a.wav"})
     assert r.status_code == 401
-    assert r.json() == {"message": "unauthorized"}
+    # 批次84 (#13): 401 补齐 detail/code, 与全站 {"detail","message","code"} 契约一致
+    assert r.json() == {"detail": "unauthorized", "message": "unauthorized",
+                        "code": "unauthorized"}
 
 
 def test_auth_static_pages_exempt(auth_client):
@@ -753,7 +757,7 @@ def test_cache_failed_synth_not_stored(client, engine):
     """合成失败不写缓存: 失败后修好, 同 body 重试会真正再合成 (共 2 次调用)。"""
     body = {"text": "hi", "ref_audio_path": "a.wav"}
     engine.fail = True
-    assert client.post("/api/v2/tts", json=body).status_code == 400
+    assert client.post("/api/v2/tts", json=body).status_code == 500  # 批次84: 内部故障
     engine.fail = False
     assert client.post("/api/v2/tts", json=body).status_code == 200
     assert len(engine.synth_calls) == 2
@@ -798,7 +802,10 @@ def test_v2_stream_speed_factor_passthrough(client, engine):
 
 # ─── 批次50: console 续训校验 (train/start resume_from 透传前置检查) ───
 
-def _mk_train_audio(tmp_path):
+def _mk_train_audio(tmp_path, monkeypatch):
+    """批次78 (#11): 训练音频须落在 UPLOAD_DIR 内, 用例内把上传目录指向 tmp_path。"""
+    from adr.server import console
+    monkeypatch.setattr(console, "UPLOAD_DIR", tmp_path)
     p = tmp_path / "in.wav"
     p.write_bytes(b"RIFF0000WAVEfmt ")  # 只过存在性检查, 不会真起训练
     return str(p)
@@ -809,7 +816,7 @@ def test_train_resume_ghost_profile_400(client, tmp_path, monkeypatch):
     from adr.models import voice_library
     monkeypatch.setattr(voice_library, "VOICES_DIR", tmp_path / "voices")
     r = client.post("/api/adr/v1/train/start", json={
-        "audio_path": _mk_train_audio(tmp_path),
+        "audio_path": _mk_train_audio(tmp_path, monkeypatch),
         "gate_on": False, "resume_from": "幽灵"})
     assert r.status_code == 400
     assert "续训档案不存在" in r.json()["detail"]
@@ -826,7 +833,7 @@ def test_train_resume_profile_without_weights_400(client, tmp_path, monkeypatch)
         encoding="utf-8")
     monkeypatch.setattr(voice_library, "VOICES_DIR", vd)
     r = client.post("/api/adr/v1/train/start", json={
-        "audio_path": _mk_train_audio(tmp_path),
+        "audio_path": _mk_train_audio(tmp_path, monkeypatch),
         "gate_on": False, "resume_from": "裸档"})
     assert r.status_code == 400
     assert "无微调权重" in r.json()["detail"]

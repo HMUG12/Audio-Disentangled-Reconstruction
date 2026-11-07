@@ -8,6 +8,7 @@ import json
 import threading
 import time
 import zipfile
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -167,3 +168,105 @@ def test_import_normal_package_still_works(env):
     out = vp.import_voice(str(pkg))
     assert out["name"] == "ok"
     assert (vl.VOICES_DIR / "ok" / "ref.wav").read_bytes() == ref
+
+
+# ---- 批次83 (#16/#17): 原子提交与原子 ref 写入 ----
+
+def test_import_commit_failure_rolls_back_new_files(env, monkeypatch):
+    """#16: meta 落位失败 → 已替换的权重/ref 逆序回滚, 档案仍是旧内容。"""
+    import os
+
+    tmp = env
+    monkeypatch.setattr("adr.models.gsv_engine.validate_weights_file",
+                        lambda p: None)
+    vdir = vl.VOICES_DIR / "post"
+    vdir.mkdir(parents=True)
+    old_ref = _mk_wav(tmp / "old.wav").read_bytes()
+    (vdir / "ref.wav").write_bytes(old_ref)
+    (vdir / "meta.json").write_text(
+        json.dumps({"name": "post", "prompt_text": "旧句"}), encoding="utf-8")
+    wdir = tmp / "gsv" / "SoVITS_weights_v2"
+    wdir.mkdir(parents=True)
+    (wdir / "post.pth").write_bytes(b"OLDW")
+
+    pkg = tmp / "pp.adrvoice"
+    with zipfile.ZipFile(pkg, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(vp._MANIFEST, json.dumps({
+            "format": vp.FORMAT, "version": vp.VERSION, "name": "post",
+            "weights": {"vits": "weights/post.pth"}}))
+        zf.writestr(vp._META, json.dumps({"name": "post", "prompt_text": "新句"}))
+        zf.writestr(vp._REF, old_ref + b"NEW")
+        zf.writestr("weights/post.pth", b"NEWW")
+
+    real_replace = os.replace
+
+    def flaky(src, dst):
+        if os.path.basename(str(dst)) == "meta.json" \
+                and str(src).endswith(".tmp"):
+            raise OSError(28, "no space left on device")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(vp.os, "replace", flaky)
+    with pytest.raises(OSError, match="no space"):
+        vp.import_voice(str(pkg), overwrite=True)
+
+    assert (vdir / "ref.wav").read_bytes() == old_ref
+    assert (wdir / "post.pth").read_bytes() == b"OLDW"
+    meta = json.loads((vdir / "meta.json").read_text(encoding="utf-8"))
+    assert meta["prompt_text"] == "旧句"
+    assert [p.name for p in vdir.iterdir()] == ["meta.json", "ref.wav"]
+    assert [p.name for p in wdir.iterdir()] == ["post.pth"]
+
+
+def test_materialize_ref_failure_keeps_existing_ref(env, monkeypatch):
+    """#17: ref 写临时文件失败时不破坏既有 ref.wav, 也不留临时文件。"""
+    vdir = vl.VOICES_DIR / "v"
+    vdir.mkdir(parents=True)
+    dst = vdir / "ref.wav"
+    dst.write_bytes(b"OLDBYTES")
+    src = _mk_wav(env / "src.wav")
+
+    def boom(*a, **k):
+        raise OSError(28, "no space left on device")
+
+    monkeypatch.setattr(vl.shutil, "copy2", boom)
+    with pytest.raises(OSError, match="no space"):
+        vl._materialize_ref(str(src), dst)
+    assert dst.read_bytes() == b"OLDBYTES"
+    assert [p.name for p in vdir.iterdir()] == ["ref.wav"]
+
+
+def test_save_voice_auto_sweep_dir_isolated_and_cleaned(env, monkeypatch):
+    """#17: 扫描临时目录唯一 (非固定 _sweep_tmp), 且异常/成功后都清理。"""
+    tmp = env
+    long_wav = tmp / "long.wav"
+    t = np.linspace(0, 20, 20 * 16000, endpoint=False, dtype="float32")
+    sf.write(str(long_wav), (0.3 * np.sin(2 * np.pi * 220 * t)).astype("float32"),
+             16000)
+
+    seen = []
+
+    class _Eng:
+        def synthesize(self, text, path):
+            seen.append(Path(path).parent.name)
+            return np.zeros(16000, dtype="float32"), 16000
+
+    monkeypatch.setattr("adr.models.gsv_engine.get_gsv_engine", lambda: _Eng())
+    monkeypatch.setattr("adr.eval.speaker_sim.similarity", lambda a, b: 0.9)
+    _, info = vl.save_voice_auto("自动音", str(long_wav))
+    assert info["mode"] == "auto-sweep"
+    assert seen and all(n.startswith("_sweep_tmp_") and n != "_sweep_tmp"
+                        for n in seen)
+    assert not [p for p in vl.VOICES_DIR.iterdir()
+                if p.name.startswith("_sweep_tmp")]
+
+    class _Boom:
+        def synthesize(self, text, path):
+            raise RuntimeError("engine down")
+
+    monkeypatch.setattr("adr.models.gsv_engine.get_gsv_engine", lambda: _Boom())
+    with pytest.raises(RuntimeError, match="engine down"):
+        vl.save_voice_auto("自动音2", str(long_wav))
+    assert not [p for p in vl.VOICES_DIR.iterdir()
+                if p.name.startswith("_sweep_tmp")]
+

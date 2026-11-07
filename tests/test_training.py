@@ -81,6 +81,26 @@ def test_dataset_split():
     assert len(train_ds._ref_pools) == len(train_ds)
 
 
+def test_dataset_split_keeps_one_train_sample():
+    """批次81 (#9): 样本很少时 train 至少保留 1 条, 不能全划进 val。"""
+    from adr.training.dataset import VoiceCloneDataset
+
+    samples = [_make_dummy_sample(i) for i in range(2)]
+    ds = VoiceCloneDataset(samples=samples)
+    train_ds, val_ds = ds.split(val_ratio=0.9, seed=0)
+    assert len(train_ds) == 1
+    assert len(val_ds) == 1
+
+
+def test_dataset_split_single_sample_raises():
+    """批次81 (#9): 只有 1 条样本时明确报错, 而不是静默训练 0 步。"""
+    from adr.training.dataset import VoiceCloneDataset
+
+    ds = VoiceCloneDataset(samples=[_make_dummy_sample(0)])
+    with pytest.raises(ValueError, match="无法划分"):
+        ds.split(val_ratio=0.1)
+
+
 def test_dataset_ref_mel_pool_avoids_shortcut():
     """ref_mel 应取同说话人异样本, 切断 ref→target 的抄写捷径。"""
     from adr.training.dataset import VoiceCloneDataset
@@ -299,6 +319,67 @@ def test_trainer_smoke():
         log_file = Path(tmp_dir) / "train_log.jsonl"
         assert log_file.exists()
         print(f"  Final train loss: {metrics['train/loss']:.4f}")
+
+
+def test_trainer_collate_fn_picklable():
+    """批次81 (#8): num_workers>0 (Windows spawn) 需要 collate_fn 可 pickle。"""
+    import pickle
+
+    from adr.models.sovits import SoVITS, SoVITSConfig
+    from adr.training import Trainer, TrainerConfig
+    from adr.training.dataset import VoiceCloneDataset
+
+    model = SoVITS(SoVITSConfig(
+        hidden_dim=32, n_layers=2, n_heads=2, ffn_dim=64,
+        vocab_size=607, content_dim=16, timbre_dim=16,
+        n_mels=80,
+    ))
+    ds = VoiceCloneDataset(samples=[_make_dummy_sample(i) for i in range(4)])
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config = TrainerConfig(
+            epochs=1, batch_size=2, use_amp=False,
+            use_gradient_checkpointing=False,
+            output_dir=tmp_dir, val_ratio=0.5,
+        )
+        trainer = Trainer(model=model, train_data=ds, config=config)
+
+        train_fn = pickle.loads(pickle.dumps(trainer.train_loader.collate_fn))
+        assert train_fn([trainer.train_data[0]]).target_mel.shape[0] == 1
+
+        assert trainer.val_loader is not None
+        val_fn = pickle.loads(pickle.dumps(trainer.val_loader.collate_fn))
+        assert val_fn([trainer.val_data[0]]).target_mel.shape[0] == 1
+
+
+def test_trainer_grad_accum_flush_at_epoch_end():
+    """批次81 (#7): epoch 末尾不足一组的余数梯度补一次更新, 不再被丢弃。"""
+    from adr.models.sovits import SoVITS, SoVITSConfig
+    from adr.training import Trainer, TrainerConfig
+    from adr.training.dataset import VoiceCloneDataset
+
+    model = SoVITS(SoVITSConfig(
+        hidden_dim=32, n_layers=2, n_heads=2, ffn_dim=64,
+        vocab_size=607, content_dim=16, timbre_dim=16,
+        n_mels=80,
+    ))
+    # 11 条 / batch 2 → drop_last 后 5 个 batch; accum 2 → 2 次边界 + 1 次 flush
+    ds = VoiceCloneDataset(samples=[_make_dummy_sample(i) for i in range(11)])
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config = TrainerConfig(
+            epochs=1, batch_size=2, grad_accum_steps=2, use_amp=False,
+            use_gradient_checkpointing=False,
+            output_dir=tmp_dir, val_ratio=0.0,
+        )
+        trainer = Trainer(model=model, train_data=ds, config=config)
+        assert len(trainer.train_loader) == 5
+
+        trainer.fit()
+
+        # LambdaLR.last_epoch 每次 scheduler.step() +1, 与 optimizer 有效
+        # 更新次数 1:1 → ceil(5 / 2) = 3; 无 flush 时只有 2
+        assert trainer.scheduler.last_epoch == 3
 
 
 def test_trainer_checkpoint_save_load():

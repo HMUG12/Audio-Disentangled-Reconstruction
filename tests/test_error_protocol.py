@@ -6,6 +6,7 @@
 - native HTTP: /profiles/{name}/ref 404 带 code
 - v3 WS: init 类型化上报 (profile_invalid / profile_not_found) + error 帧 code
 - webui 面: _err dict 为 UI 形态, 无 wire 协议, 不加 code (设计备案, 无需测试)
+- 批次84 (#12/#13): 内部故障 400→500/503 分流; HTTPException/401/422 统一补 message
 """
 import json
 
@@ -141,13 +142,52 @@ def test_v2_streaming_mode_code(client):
 
 
 def test_v2_engine_fail_code(client, voice_dir):
-    """引擎抛非框架异常 → 消息逐字保留 + internal_error。"""
+    """引擎抛非框架异常 → 消息逐字保留 + internal_error + 500 (批次84)。"""
     r = client.post("/api/v2/tts", json={"text": "你好", "ref_audio_path": "a.wav"})
-    assert r.status_code == 400
+    assert r.status_code == 500
     body = r.json()
     assert body["message"] == "tts failed"
     assert body["Exception"] == "boom"
     assert body["code"] == "internal_error"
+
+
+def test_v2_engine_dependency_missing_503(client, engine, monkeypatch):
+    """批次84 (#12): 依赖缺失不再 400 — 503 + dependency_missing, 客户端可重试。"""
+    def _boom(*args, **kwargs):
+        raise DependencyMissingError("ffmpeg not found")
+    monkeypatch.setattr(engine, "synthesize", _boom)
+    r = client.post("/api/v2/tts", json={"text": "你好", "ref_audio_path": "a.wav"})
+    assert r.status_code == 503
+    assert r.json()["code"] == "dependency_missing"
+
+
+def test_v2_engine_value_error_stays_400(client, engine, monkeypatch):
+    """批次84 (#12): 引擎抛的 ValueError 属请求数据问题, 保留 400 语义。"""
+    def _boom(*args, **kwargs):
+        raise ValueError("参考音频在3~10秒范围外")
+    monkeypatch.setattr(engine, "synthesize", _boom)
+    r = client.post("/api/v2/tts", json={"text": "你好", "ref_audio_path": "a.wav"})
+    assert r.status_code == 400
+    assert r.json()["code"] == "internal_error"
+
+
+def test_http_exception_has_message(client):
+    """批次84 (#13): HTTPException 响应补 message, 与 v2/v3 契约对齐。"""
+    r = client.post("/api/adr/v1/train/stop")
+    assert r.status_code == 409
+    body = r.json()
+    assert body["message"] == body["detail"]
+    assert body["code"] == "conflict"
+
+
+def test_validation_error_has_message(client):
+    """批次84 (#13): 422 校验错误不再只有 detail 列表。"""
+    r = client.post("/api/adr/v1/tts", json={})
+    assert r.status_code == 422
+    body = r.json()
+    assert isinstance(body["detail"], list)
+    assert body["code"] == "validation_error"
+    assert "text" in body["message"]
 
 
 @pytest.mark.parametrize("ep, field", [

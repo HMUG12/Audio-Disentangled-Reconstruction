@@ -14,7 +14,8 @@
   / ``Sec-WebSocket-Protocol`` 子协议首元素。首条消息通道不采用 —
   v3 协议首条必须是 init, 加鉴权帧会破坏协议兼容
 - key 精确匹配 (大小写敏感, 恒定时间比较); 未通过 HTTP 统一
-  ``401 {"message": "unauthorized"}``, WS 在握手前 close (4401)
+  ``401 {"detail": ..., "message": ..., "code": "unauthorized"}`` (批次84:
+  与全站错误契约对齐, 只增字段), WS 在握手前 close (4401)
 """
 from __future__ import annotations
 
@@ -107,7 +108,10 @@ class APIKeyMiddleware:
             await self.app(scope, receive, send)
             return
 
-        body = json.dumps({"message": "unauthorized"}).encode("utf-8")
+        # 批次84 (#13): 与 HTTPException / v2/v3 统一错误契约 — 三个字段齐全,
+        # 客户端按 message 或 detail 取文案都不会拿到空值。
+        body = json.dumps({"detail": "unauthorized", "message": "unauthorized",
+                           "code": "unauthorized"}).encode("utf-8")
         await send({
             "type": "http.response.start",
             "status": 401,

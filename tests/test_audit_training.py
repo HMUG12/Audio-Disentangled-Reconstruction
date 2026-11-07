@@ -195,3 +195,29 @@ def test_dead_code_functions_removed():
     assert not hasattr(gcp, "estimate_memory_saved"), "#48 estimate_memory_saved 应已删"
     # #49 freeze_non_lora
     assert not hasattr(lora, "freeze_non_lora"), "#49 freeze_non_lora 应已删"
+
+
+# ========== 批次77 (#10): 训练样本目录递归 ==========
+def test_npz_dir_loads_samples_subdir(tmp_path, monkeypatch):
+    """数据流水线写 <output>/samples/*.npz, CLI 示例传 output/processed —
+    只用 glob("*.npz") 会加载 0 条, 必须递归。"""
+    from adr.training import dataset as ds
+
+    (tmp_path / "samples").mkdir()
+    (tmp_path / "samples" / "a.npz").write_bytes(b"")
+    (tmp_path / "b.npz").write_bytes(b"")
+
+    seen = []
+
+    class _Sample:
+        text = "你好"
+        phonemes = ["n", "i"]
+
+    def _fake_load(path):
+        seen.append(Path(path).name)
+        return _Sample()
+
+    monkeypatch.setattr(ds.TrainSample, "load", staticmethod(_fake_load))
+    got = ds.VoiceCloneDataset._load_npz_dir(tmp_path)
+    assert sorted(seen) == ["a.npz", "b.npz"]
+    assert len(got) == 2

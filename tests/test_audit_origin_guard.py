@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from adr.server import create_app
 from adr.server.origin_guard import (
     OriginGuardMiddleware,
+    cross_site_allowed,
     host_allowed,
     origin_allowed,
     split_host,
@@ -201,3 +202,74 @@ def test_integration_same_origin_ok(client):
 def test_integration_non_browser_ok(client):
     """不带 Origin (N.E.K.O 后端 / curl) 且 Host 为回环 → 放行。"""
     assert client.get("/v1/models").status_code == 200
+
+
+# ─── 批次77 (#4): 有副作用接口的浏览器跨站防护 ───
+
+DOCTOR = "/api/adr/v1/system/doctor"
+
+
+@pytest.mark.parametrize("site, origin, ok", [
+    (None, None, True),                                  # 非浏览器 (N.E.K.O/curl/SDK)
+    ("", None, True),                                    # 空头视同缺头
+    ("same-origin", None, True),                         # 控制台页自身
+    ("same-site", None, True),                           # 本机其它端口页面
+    ("none", None, True),                                # 地址栏直达
+    ("cross-site", None, False),                         # <img>/导航/no-cors fetch
+    ("cross-site", "https://evil.example.com", False),   # 白名单外 Origin
+    ("cross-site", "http://127.0.0.1:9999", True),       # 本机页面
+    ("cross-site", TAURI_ORIGIN, True),                  # Tauri 壳 → 127.0.0.1
+])
+def test_cross_site_allowed(site, origin, ok):
+    allowed = {TAURI_ORIGIN}
+    assert cross_site_allowed(site, origin, "127.0.0.1:9881", allowed) is ok
+
+
+def test_cross_site_allowed_valve():
+    """ADR_CORS_ORIGINS=* 逃生阀 — 恢复旧的全开语义。"""
+    assert cross_site_allowed("cross-site", None, "127.0.0.1:9881", set(), True)
+
+
+@pytest.mark.parametrize("path", [
+    "/api/v2/set_gpt_weights",
+    "/api/v2/set_sovits_weights",
+    DOCTOR,
+])
+def test_integration_cross_site_side_effect_403(client, path):
+    """浏览器跨站 (无 Origin) 触发换权 / doctor 修复 → 403, 不进业务逻辑。"""
+    r = client.get(path, headers={"sec-fetch-site": "cross-site"})
+    assert r.status_code == 403
+    assert "cross-site" in r.json()["detail"]
+
+
+def test_integration_cross_site_allowed_origin_passes(client):
+    """Tauri 壳的合法跨站 (带白名单 Origin) 不被依赖拦。"""
+    r = client.get("/api/v2/set_gpt_weights",
+                   headers={"sec-fetch-site": "cross-site",
+                            "origin": TAURI_ORIGIN})
+    assert r.status_code == 400
+    assert r.json()["message"] == "gpt weight path is required"
+
+
+@pytest.mark.parametrize("ep, kind", [("set_gpt_weights", "gpt"),
+                                      ("set_sovits_weights", "sovits")])
+def test_post_alias_reaches_handler(client, ep, kind):
+    """批次77: 有副作用接口新增 POST 别名 (N.E.K.O 的 GET 仍保留)。"""
+    r = client.post(f"/api/v2/{ep}")
+    assert r.status_code == 400
+    assert r.json()["message"] == f"{kind} weight path is required"
+
+
+def test_doctor_post_alias(client):
+    r = client.post(DOCTOR)
+    assert r.status_code == 200 and "checks" in r.json()
+
+
+def test_cross_site_allowed_when_api_key_set(monkeypatch):
+    """配了 API Key 时由鉴权兜底 — 依赖放行, 反代/自定义域名部署不被误伤。"""
+    monkeypatch.setenv("ADR_TTS_API_KEY", "k1")
+    c = TestClient(create_app(engine=_DummyEngine()))
+    r = c.get("/api/v2/set_gpt_weights",
+              headers={"sec-fetch-site": "cross-site", "x-api-key": "k1"})
+    assert r.status_code == 400
+    assert r.json()["message"] == "gpt weight path is required"

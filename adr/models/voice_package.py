@@ -26,6 +26,7 @@ import json
 import os
 import threading
 import time
+import uuid
 import zipfile
 from pathlib import Path
 from typing import Callable, Optional
@@ -300,16 +301,46 @@ def _import_voice(pkg: Path, name: Optional[str], overwrite: bool,
                     pmeta[field] = placements[kind].name   # weight_root 下纯文件名
                 else:
                     pmeta[field] = str(placements[kind])   # 本机绝对路径
-            meta_tmp = vdir / "meta.json.tmp"
+            meta_tmp = vdir / f"meta.json.{os.getpid()}.{uuid.uuid4().hex}.tmp"
             meta_tmp.write_text(json.dumps(pmeta, ensure_ascii=False, indent=2),
                                 encoding="utf-8")
             created.append(meta_tmp)
 
             # ---- 提交: 全部校验/解析通过后才做破坏性替换 ----
-            for _kind, tmp, dst in commits:
-                os.replace(str(tmp), str(dst))
-            os.replace(str(ref_tmp), str(vdir / _REF))
-            os.replace(str(meta_tmp), str(vdir / "meta.json"))
+            # 批次83 (#16): 每个目标落位前先把既有文件挪到 .adrbak 备份,
+            # 中途失败按逆序回滚。旧实现依次 os.replace, 失败会留下
+            # "新权重/新 ref + 旧 meta" 的半新档案 (meta 与实际字节不符)。
+            backups: list[tuple[Path, Optional[Path]]] = []   # (final, 备份或 None=原不存在)
+
+            def _commit(tmp: Path, final: Path) -> None:
+                backup = None
+                if final.exists():
+                    backup = final.with_name(
+                        f"{final.name}.{os.getpid()}.{uuid.uuid4().hex}.adrbak")
+                    os.replace(str(final), str(backup))
+                backups.append((final, backup))
+                os.replace(str(tmp), str(final))
+
+            try:
+                for _kind, tmp, dst in commits:
+                    _commit(tmp, dst)
+                _commit(ref_tmp, vdir / _REF)
+                _commit(meta_tmp, vdir / "meta.json")
+            except Exception:
+                # 逆序恢复: 有备份的还原, 原本不存在的删掉新落位文件
+                for final, backup in reversed(backups):
+                    try:
+                        if backup is not None:
+                            os.replace(str(backup), str(final))
+                        else:
+                            final.unlink(missing_ok=True)
+                    except OSError:
+                        _log(progress, f"回滚失败, 旧文件保留在 {backup}")
+                raise
+            else:
+                for _final, backup in backups:
+                    if backup is not None:
+                        backup.unlink(missing_ok=True)
     except Exception:
         for f in created:
             f.unlink(missing_ok=True)

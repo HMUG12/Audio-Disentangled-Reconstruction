@@ -68,6 +68,11 @@ pub struct UpdateManifest {
     pub notes: String,
     #[serde(default)]
     pub packages: Vec<UpdatePackage>,
+    /// 批次76 (#3): 清单 Ed25519 签名 (hex)。签的是 `signing_payload()` 的
+    /// 逐字节内容, 落款私钥只在发布机 (~/.adr/update_signing_key.pem)。
+    /// **缺失即拒绝** — 没有签名的清单等于让远端任意指定要装哪个 exe。
+    #[serde(default)]
+    pub signature: String,
 }
 
 /// 磁盘缓存: 原文整体存下来, 离线时还能用上次的清单提示包型下载链接。
@@ -151,6 +156,85 @@ pub fn hint_kind(variant: &str, has_nvidia: bool) -> &'static str {
         ("cpu", true) => "cpu_pkg_has_gpu",
         _ => "",
     }
+}
+
+// ---------------------------------------------------------------------------
+// 批次76 (#3): 清单验签 — 更新链的信任根
+// ---------------------------------------------------------------------------
+//
+// 威胁模型: 清单是官网上的一个静态 JSON。若它被篡改 (CDN/账号/中间人),
+// 旧实现会照单全收 url + sha256, 前端再整包回传给 install_update —— 等于
+// "云端说装什么就装什么", 是一条完整 RCE 链。现在:
+//   1. 清单必须带 Ed25519 签名, 缺失/不匹配一律拒绝 (验签失败不降级)
+//   2. 包选择 / 包地址 / 哈希全部由 Rust 侧从**已验签**清单里取, 前端不参与
+//   3. 安装前重算 SHA256 并与清单比对, 路径必须落在 <数据目录>\updates\ 内
+// 私钥只在发布机 (~/.adr/update_signing_key.pem), 签名单生成见
+// scripts/sign_update_manifest.py; 公钥下面的 hex 与它成对, 换钥 = 老客户端
+// 全部拒绝新清单, 只能随新版本一起换。
+
+/// 清单验签公钥 (Ed25519, 32 字节 hex)
+const UPDATE_PUBKEY_HEX: &str =
+    "a7afe6393380f2efd5606d70035c87ba06df3cb11e68b77fc2cfcc2e3117c965";
+
+fn hex_decode(s: &str) -> Option<Vec<u8>> {
+    let s = s.trim();
+    if s.is_empty() || s.len() % 2 != 0 {
+        return None;
+    }
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len() / 2);
+    let mut i = 0;
+    while i < b.len() {
+        let hi = (b[i] as char).to_digit(16)?;
+        let lo = (b[i + 1] as char).to_digit(16)?;
+        out.push((hi * 16 + lo) as u8);
+        i += 2;
+    }
+    Some(out)
+}
+
+fn sha256_hex_bytes(data: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(data))
+}
+
+/// 待签名文本 (逐字节稳定, 不受 JSON 排版/字段顺序影响)。
+/// 改动这里必须同步 scripts/sign_update_manifest.py, 否则全部清单验签失败。
+fn signing_payload(m: &UpdateManifest) -> Vec<u8> {
+    let mut s = String::from("adr-update-v1\n");
+    s.push_str(m.version.trim());
+    s.push('\n');
+    s.push_str(&sha256_hex_bytes(m.notes.as_bytes()));
+    s.push('\n');
+    for p in &m.packages {
+        s.push_str(&format!(
+            "{}|{}|{}|{}|{}|{}\n",
+            p.variant.trim(),
+            p.name.trim(),
+            p.url.trim(),
+            p.fallback_url.as_deref().unwrap_or("").trim(),
+            p.sha256.trim().to_ascii_lowercase(),
+            p.size
+        ));
+    }
+    s.into_bytes()
+}
+
+/// 用指定公钥验签 (单测注入测试公钥; 生产走下面的 `verify_manifest`)。
+fn verify_manifest_with(m: &UpdateManifest, pubkey_hex: &str) -> Result<(), String> {
+    let sig = m.signature.trim();
+    if sig.is_empty() {
+        return Err("更新清单未签名, 已拒绝 (安全策略: 见 docs/update-manifest.md §6)".into());
+    }
+    let sig_bytes = hex_decode(sig).ok_or("更新清单 signature 不是合法十六进制")?;
+    let pk = hex_decode(pubkey_hex).ok_or("内置更新公钥损坏")?;
+    ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, pk)
+        .verify(&signing_payload(m), &sig_bytes)
+        .map_err(|_| "更新清单签名校验失败 (清单被篡改或签错钥)".to_string())
+}
+
+fn verify_manifest(m: &UpdateManifest) -> Result<(), String> {
+    verify_manifest_with(m, UPDATE_PUBKEY_HEX)
 }
 
 // ---------------------------------------------------------------------------
@@ -274,6 +358,8 @@ fn other_variant_url(variant: &str) -> String {
     let want = if variant == "gpu" { "cpu" } else { "gpu" };
     let url = read_cache()
         .and_then(|c| parse_manifest(&c.manifest).ok())
+        // 未验签的缓存不给任何地址 (批次76 #3)
+        .filter(|m| verify_manifest(m).is_ok())
         .and_then(|m| {
             m.packages
                 .iter()
@@ -283,6 +369,18 @@ fn other_variant_url(variant: &str) -> String {
     url.unwrap_or_else(|| RELEASES_URL.to_string())
 }
 
+/// 拉清单 + 解析 + **验签** (批次76 #3: 唯一合法入口, 调用方拿到的必然是
+/// 已签名清单; 未签名/验签失败直接 Err, 不降级)。
+fn fetch_verified_manifest(force: bool) -> Result<(UpdateManifest, bool), String> {
+    let (body, from_cache) = fetch_manifest_text(force)?;
+    let m = parse_manifest(&body)?;
+    if m.version.trim().is_empty() {
+        return Err("更新清单缺少 version 字段".into());
+    }
+    verify_manifest(&m)?;
+    Ok((m, from_cache))
+}
+
 // ---------------------------------------------------------------------------
 // 命令: 检查更新
 // ---------------------------------------------------------------------------
@@ -290,11 +388,7 @@ fn other_variant_url(variant: &str) -> String {
 #[tauri::command]
 pub fn check_update(app: tauri::AppHandle, force: Option<bool>) -> Result<serde_json::Value, String> {
     let current = app.package_info().version.to_string();
-    let (body, from_cache) = fetch_manifest_text(force.unwrap_or(false))?;
-    let m = parse_manifest(&body)?;
-    if m.version.trim().is_empty() {
-        return Err("更新清单缺少 version 字段".into());
-    }
+    let (m, from_cache) = fetch_verified_manifest(force.unwrap_or(false))?;
     let available = version_gt(&m.version, &current);
     let variant = package_variant();
     let pkg = if available { pick_package(&m, &variant) } else { None };
@@ -402,6 +496,13 @@ fn download_one(
     Ok(got)
 }
 
+/// 安装包落盘目录; 也是 install_update 唯一允许执行的文件前缀。
+fn updates_dir() -> Result<PathBuf, String> {
+    super::adr_data_dir()
+        .map(|d| d.join("updates"))
+        .ok_or_else(|| "数据目录不可用, 无法保存安装包".to_string())
+}
+
 /// 下载安装包到 `<数据目录>\updates\`; 已存在且校验通过则秒回 (重试不重下)。
 fn download_blocking(
     app: &tauri::AppHandle,
@@ -413,9 +514,7 @@ fn download_blocking(
     } else {
         pkg.name.clone()
     };
-    let dir = super::adr_data_dir()
-        .ok_or_else(|| "数据目录不可用, 无法保存安装包".to_string())?
-        .join("updates");
+    let dir = updates_dir()?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建更新目录失败: {e}"))?;
     let dest = dir.join(safe_file_name(&name));
     let expect = pkg.sha256.trim().to_ascii_lowercase();
@@ -463,13 +562,29 @@ fn download_blocking(
     Err(format!("下载失败: {}", errors.join("; ")))
 }
 
+/// 批次76 (#3): 前端只报「当前界面上的清单版本」, 不再回传整个 UpdatePackage
+/// (旧实现 pkg 由前端给 → 页面被注入即可指定任意 URL/哈希)。包型、地址、
+/// 哈希一律由 Rust 从**已验签**清单里取; 版本对不上说明清单已更新, 让前端
+/// 重新检查一次, 避免拿旧页面的版本号下新包再装错。
 #[tauri::command]
 pub async fn download_update(
     app: tauri::AppHandle,
-    pkg: UpdatePackage,
+    version: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    let (m, _) = fetch_verified_manifest(false)?;
+    if let Some(v) = version.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if version_parts(v) != version_parts(&m.version) {
+            return Err(format!(
+                "更新清单版本已变化 (页面 {v} / 线上 {}), 请重新检查更新",
+                m.version
+            ));
+        }
+    }
+    let variant = package_variant();
+    let p = pick_package(&m, &variant)
+        .cloned()
+        .ok_or_else(|| "更新清单里没有可用安装包".to_string())?;
     let a = app.clone();
-    let p = pkg.clone();
     let path = tauri::async_runtime::spawn_blocking(move || download_blocking(&a, &p))
         .await
         .map_err(|e| format!("内部任务失败: {e}"))??;
@@ -520,12 +635,52 @@ fn spawn_installer(_path: &str) -> Result<(), String> {
 }
 
 /// 拉起安装程序并退出壳 (退出后助手脚本等 1s 再执行安装)。
+///
+/// 批次76 (#3): 不再接受前端传入路径。旧实现只校验 `is_file()`, 页面被注入
+/// 时随便给个 exe 就会被 /VERYSILENT 静默执行 = 任意代码执行。现在只认:
+/// 已验签清单里的包 → `<数据目录>\updates\<清单文件名>` → 规范化后必须仍在
+/// 该目录内 → 重算 SHA256 与清单一致 → 才允许执行。
 #[tauri::command]
-pub fn install_update(app: tauri::AppHandle, path: String) -> Result<(), String> {
-    let p = PathBuf::from(&path);
-    if !p.is_file() {
-        return Err("安装包不存在, 请重新下载".into());
+pub fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    let (m, _) = fetch_verified_manifest(false)?;
+    let variant = package_variant();
+    let pkg = pick_package(&m, &variant)
+        .ok_or_else(|| "更新清单里没有可用安装包".to_string())?;
+    let expect = pkg.sha256.trim().to_ascii_lowercase();
+    if expect.is_empty() {
+        return Err("更新清单缺少 sha256, 已拒绝安装".into());
     }
+    let name = if pkg.name.trim().is_empty() {
+        let g = file_name_from_url(&pkg.url);
+        if g.is_empty() { "adr_update_setup.exe".to_string() } else { g }
+    } else {
+        pkg.name.clone()
+    };
+    let dir = updates_dir()?;
+    let canon_dir = dir
+        .canonicalize()
+        .map_err(|e| format!("更新目录不可用: {e}"))?;
+    let canon = dir
+        .join(safe_file_name(&name))
+        .canonicalize()
+        .map_err(|_| "安装包不存在, 请重新下载".to_string())?;
+    if !canon.starts_with(&canon_dir) {
+        return Err("安装包路径不在更新目录内, 已拒绝".into());
+    }
+    if !canon
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.eq_ignore_ascii_case("exe"))
+        .unwrap_or(false)
+    {
+        return Err("安装包不是可执行文件, 已拒绝".into());
+    }
+    let h = sha256_hex(&canon)?;
+    if h != expect {
+        let _ = std::fs::remove_file(&canon);
+        return Err("安装包校验不符 (已删除), 请重新下载".into());
+    }
+    let path = canon.to_string_lossy().to_string();
     spawn_installer(&path)?;
     super::proc_log("update", &format!("已派发静默安装, 壳即将退出: {path}"));
     // 留 800ms 让前端把「安装中」提示刷出来, 再退出
@@ -588,6 +743,7 @@ mod tests {
                 UpdatePackage { variant: "cpu".into(), url: "u-cpu".into(), ..Default::default() },
                 UpdatePackage { variant: "gpu".into(), url: "u-gpu".into(), ..Default::default() },
             ],
+            ..Default::default()
         };
         assert_eq!(pick_package(&m, "gpu").unwrap().url, "u-gpu");
         assert_eq!(pick_package(&m, "cpu").unwrap().url, "u-cpu");
@@ -617,5 +773,82 @@ mod tests {
     fn file_name_from_url_ignores_query() {
         assert_eq!(file_name_from_url("https://x/y/ADR-Setup.exe?token=1"), "ADR-Setup.exe");
         assert_eq!(file_name_from_url("https://x/"), "");
+    }
+
+    // ---- 批次76 (#3): 清单验签 ----
+
+    fn hex_encode(b: &[u8]) -> String {
+        b.iter().map(|x| format!("{x:02x}")).collect()
+    }
+
+    use ring::signature::KeyPair;
+
+    fn sample_manifest() -> UpdateManifest {
+        UpdateManifest {
+            version: "1.4.0".into(),
+            notes: "fix: 训练脚本缺失".into(),
+            packages: vec![UpdatePackage {
+                variant: "cpu".into(),
+                name: "ADR-Studio-1.4.0-x64-setup.exe".into(),
+                url: "https://example.com/a.exe".into(),
+                fallback_url: Some("https://example.com/b.exe".into()),
+                sha256: "AB12".into(),
+                size: 4096,
+            }],
+            signature: String::new(),
+        }
+    }
+
+    #[test]
+    fn signing_payload_is_byte_stable() {
+        // 固定向量: scripts/sign_update_manifest.py 必须产出逐字节相同结果,
+        // 改格式等于把所有已发布清单作废, 这里把格式钉死。
+        let s = String::from_utf8(signing_payload(&sample_manifest())).unwrap();
+        let notes_hash = sha256_hex_bytes("fix: 训练脚本缺失".as_bytes());
+        assert_eq!(
+            s,
+            format!(
+                "adr-update-v1\n1.4.0\n{notes_hash}\n\
+                 cpu|ADR-Studio-1.4.0-x64-setup.exe|https://example.com/a.exe|\
+                 https://example.com/b.exe|ab12|4096\n"
+            )
+        );
+    }
+
+    #[test]
+    fn verify_manifest_rejects_unsigned_tampered_and_wrong_key() {
+        let kp = ring::signature::Ed25519KeyPair::from_seed_unchecked(&[7u8; 32]).unwrap();
+        let pk = hex_encode(kp.public_key().as_ref());
+        let mut m = sample_manifest();
+
+        // 未签名 → 拒绝 (不是"跳过校验")
+        assert!(verify_manifest_with(&m, &pk).is_err());
+
+        m.signature = hex_encode(kp.sign(&signing_payload(&m)).as_ref());
+        verify_manifest_with(&m, &pk).expect("正确签名必须通过");
+
+        // 篡改内容 (notes 参与签名) → 拒绝
+        m.notes.push('!');
+        assert!(verify_manifest_with(&m, &pk).is_err());
+        m.notes.pop();
+
+        // 篡改包地址 → 拒绝
+        m.packages[0].url = "https://evil.example/x.exe".into();
+        assert!(verify_manifest_with(&m, &pk).is_err());
+        m.packages[0].url = "https://example.com/a.exe".into();
+
+        // 换公钥 → 拒绝
+        let other = ring::signature::Ed25519KeyPair::from_seed_unchecked(&[9u8; 32]).unwrap();
+        assert!(verify_manifest_with(&m, &hex_encode(other.public_key().as_ref())).is_err());
+
+        // 非法 hex 签名 → 拒绝而不是 panic
+        m.signature = "zz".into();
+        assert!(verify_manifest_with(&m, &pk).is_err());
+    }
+
+    #[test]
+    fn embedded_pubkey_is_well_formed() {
+        assert_eq!(UPDATE_PUBKEY_HEX.len(), 64);
+        assert!(hex_decode(UPDATE_PUBKEY_HEX).is_some());
     }
 }

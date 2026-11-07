@@ -48,13 +48,14 @@ def adr_data_dir() -> Path:
 @dataclass
 class DataConfig:
     """数据流水线配置。"""
-    sample_rate: int = 24000
+    # 批次80 (#2): 与推理/声码器 (BigVGAN 22k) 统一, mel 走 compute_mel_bigvgan
+    sample_rate: int = 22050
     hop_length: int = 256
     n_mels: int = 80
     n_fft: int = 1024
     win_length: int = 1024
     fmin: float = 0.0
-    fmax: float = 12000.0
+    fmax: float = 8000.0
 
     # 数据处理开关
     enable_separation: bool = True   # UVR5 人声分离

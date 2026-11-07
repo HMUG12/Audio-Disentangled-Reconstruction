@@ -292,7 +292,13 @@ def test_separator_vad_fallback():
 # ---------------------------------------------------------------------------
 
 
-def _make_mock_pipeline(tmp_dir: str):
+def _make_mock_pipeline(
+    tmp_dir: str,
+    *,
+    enable_f0: bool = True,
+    enable_mel: bool = False,
+    target_sr: int = 22050,
+):
     """构造全 mock 组件的 pipeline (隔离模型下载, 专测编排逻辑)。
 
     ASR 恒返回固定文本, G2P 恒返回固定音素; _f0 由各测试自行注入。
@@ -307,9 +313,9 @@ def _make_mock_pipeline(tmp_dir: str):
         enable_slicing=True,
         enable_asr=True,
         enable_g2p=True,
-        enable_f0=True,
-        enable_mel=False,
-        slice=SliceConfig(min_sec=2.0, max_sec=4.0, target_sr=24000),
+        enable_f0=enable_f0,
+        enable_mel=enable_mel,
+        slice=SliceConfig(min_sec=2.0, max_sec=4.0, target_sr=target_sr),
         output_dir=str(tmp_dir),
     )
     pipeline = DataPipeline(config)
@@ -337,7 +343,7 @@ def test_pipeline_f0_failure_skips_sample(tmp_path):
         result = pipeline.run(wav_path, output_dir=tmp_path / "out1")
         assert result.samples == []          # 失败切片不带空 f0 入库
         assert result.errors                 # 有错误记录
-        assert all("F0/Mel" in e for e in result.errors)
+        assert all(e.startswith("F0 slice") for e in result.errors)
     finally:
         Path(wav_path).unlink(missing_ok=True)
 
@@ -361,7 +367,7 @@ def test_pipeline_f0_partial_failure(tmp_path):
         make_synthetic_wav(wav_path, duration_sec=10.0)
         result = pipeline.run(wav_path, output_dir=tmp_path / "out2")
         assert len(result.errors) == 1
-        assert "F0/Mel" in result.errors[0]
+        assert result.errors[0].startswith("F0 slice")
         assert len(result.samples) >= 1      # 其余切片照常入库
     finally:
         Path(wav_path).unlink(missing_ok=True)
@@ -386,3 +392,77 @@ def test_pipeline_sample_id_unique_across_paths(tmp_path):
     ids_b = {s.sample_id for s in r_b.samples}
     assert ids_a and ids_b                   # 两条流水线都有产出
     assert not (ids_a & ids_b)               # 同名文件不再互相覆盖
+
+
+# ---------------------------------------------------------------------------
+# 批次80 (CODE_REVIEW #2): 训练 mel 与推理/声码器统一 + mel 与 F0 解耦
+# ---------------------------------------------------------------------------
+
+
+def test_pipeline_mel_independent_of_f0(tmp_path):
+    """--no-f0 时 mel 仍要产出 (原先 mel 嵌在 enable_f0 分支内 → 全空)。"""
+    pipeline = _make_mock_pipeline(
+        str(tmp_path), enable_f0=False, enable_mel=True)
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        wav_path = f.name
+    try:
+        make_synthetic_wav(wav_path, duration_sec=8.0)
+        result = pipeline.run(wav_path, output_dir=tmp_path / "out_mel")
+        assert result.samples
+        for s in result.samples:
+            assert s.sample_rate == 22050
+            assert s.mel is not None
+            assert s.mel.shape[0] == 80
+            assert s.mel.shape[1] > 0
+            assert np.isfinite(s.mel).all()
+            assert s.f0.size == 0            # 未启用 F0, 但 mel 不因此为空
+    finally:
+        Path(wav_path).unlink(missing_ok=True)
+
+
+def test_pipeline_mel_matches_bigvgan(tmp_path):
+    """训练 mel 必须与推理侧 compute_mel_bigvgan 逐值一致 (批次80 #2)。"""
+    from adr.utils.audio import compute_mel_bigvgan
+
+    pipeline = _make_mock_pipeline(
+        str(tmp_path), enable_f0=False, enable_mel=True)
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        wav_path = f.name
+    try:
+        make_synthetic_wav(wav_path, duration_sec=8.0)
+        result = pipeline.run(wav_path, output_dir=tmp_path / "out_cmp")
+        assert result.samples
+        s = result.samples[0]
+        ref = compute_mel_bigvgan(
+            s.waveform, sample_rate=s.sample_rate,
+            n_mels=80, hop_length=256,
+        )
+        assert s.mel.shape == ref.shape
+        np.testing.assert_allclose(s.mel, ref, rtol=1e-5, atol=1e-5)
+    finally:
+        Path(wav_path).unlink(missing_ok=True)
+
+
+def test_pipeline_mel_failure_skips_sample(tmp_path, monkeypatch):
+    """mel 提取失败 → 记 error 并跳过切片, 不把空 mel 写入 npz (批次80 #2)。"""
+    import adr.data.pipeline as pipeline_mod
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("mel boom")
+
+    monkeypatch.setattr(pipeline_mod, "compute_mel_bigvgan", _boom)
+    pipeline = _make_mock_pipeline(
+        str(tmp_path), enable_f0=False, enable_mel=True)
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        wav_path = f.name
+    try:
+        make_synthetic_wav(wav_path, duration_sec=8.0)
+        result = pipeline.run(wav_path, output_dir=tmp_path / "out_fail")
+        assert result.samples == []
+        assert result.errors
+        assert all(e.startswith("Mel slice") for e in result.errors)
+    finally:
+        Path(wav_path).unlink(missing_ok=True)

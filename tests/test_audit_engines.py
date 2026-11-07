@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import tempfile
 import threading
 
@@ -108,6 +109,103 @@ def test_cleanup_cache_removes_part_file(tmp_path, monkeypatch):
     assert not part.exists()
 
 
+# ---- 批次83 (#15): 下载 sha256 校验 / 唯一临时名 / 残留包拒绝复用 ----
+
+class _FakeResp:
+    def __init__(self, data):
+        self._buf = data
+        self.headers = {"Content-Length": str(len(data))}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self, n=-1):
+        chunk, self._buf = self._buf[:n], self._buf[n:]
+        return chunk
+
+
+class _FakeOpener:
+    def __init__(self, data):
+        self.data = data
+
+    def open(self, req, timeout=60):
+        return _FakeResp(self.data)
+
+
+def _patch_download_body(monkeypatch, body):
+    from adr.models import gsv_bootstrap
+
+    monkeypatch.setattr(gsv_bootstrap.urllib.request, "build_opener",
+                        lambda *a, **k: _FakeOpener(body))
+    monkeypatch.setattr(gsv_bootstrap.urllib.request, "getproxies", lambda: {})
+
+
+def test_download_rejects_sha_mismatch_and_cleans_part(tmp_path, monkeypatch):
+    """内容与清单 sha256 不符 → 报错且不落 dest, 不留 .part。"""
+    import hashlib
+
+    from adr.models import gsv_bootstrap
+
+    body = b"model-bytes" * 512
+    _patch_download_body(monkeypatch, body)
+    dest = tmp_path / "pretrained.zip"
+    with pytest.raises(RuntimeError, match="sha256 mismatch"):
+        gsv_bootstrap._download("http://x", dest,
+                                sha256=hashlib.sha256(body + b"!").hexdigest())
+    assert not dest.exists()
+    assert list(tmp_path.glob("*.part")) == []
+
+
+def test_download_accepts_matching_sha(tmp_path, monkeypatch):
+    """sha256 一致时落位成功, 临时名不是固定 .part。"""
+    import hashlib
+
+    from adr.models import gsv_bootstrap
+
+    body = b"model-bytes" * 512
+    _patch_download_body(monkeypatch, body)
+    dest = tmp_path / "pretrained.zip"
+    gsv_bootstrap._download("http://x", dest,
+                            sha256=hashlib.sha256(body).hexdigest())
+    assert dest.read_bytes() == body
+    assert list(tmp_path.glob("*.part")) == []
+
+
+def _zip_bytes(member="good/keep.txt", data=b"ok"):
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(member, data)
+    return buf.getvalue()
+
+
+def test_residual_zip_with_bad_sha_redownloaded(tmp_path, monkeypatch):
+    """残留 zip 的 sha256 不符时丢弃并重新下载 (旧实现只看能否打开)。"""
+    from adr.models import gsv_bootstrap
+
+    entry = {"key": "k", "label": "l", "zip_name": "p.zip",
+             "urls": {"hf": "http://x"}, "extract_to": tmp_path,
+             "marker": tmp_path / "good", "sha256": "0" * 64}
+    (tmp_path / "p.zip").write_bytes(_zip_bytes(data=b"stale"))
+    body = _zip_bytes()
+    calls = []
+
+    def fake_download(url, dest, sha256="", no_proxy=False):
+        calls.append(sha256)
+        dest.write_bytes(body)
+
+    monkeypatch.setattr(gsv_bootstrap, "_download", fake_download)
+    gsv_bootstrap._acquire(entry)
+    assert calls == ["0" * 64]          # 坏残留被丢弃, 重新下载
+    assert (tmp_path / "good" / "keep.txt").read_bytes() == b"ok"
+    assert not (tmp_path / "p.zip").exists()
+
+
 # ---- P21: vc_single 返回 None/NaN 音频时显式报错, 不静默输出 NaN ----
 
 class _FakeVC:
@@ -183,3 +281,47 @@ def test_sing_like_cleans_temp_wav(tmp_path, monkeypatch, fail):
     else:
         assert eng.sing_like("la", "ref.wav", voice_name="me")[1] == 40000
     assert list(tmpdir.glob("*.wav")) == []
+
+
+# ---- 批次77 (#6): 权重指纹 —— 同路径文件被覆盖必须重新预检 + 重载 ----
+
+def test_weights_stamp_notices_mtime_and_missing(tmp_path):
+    from adr.models import gsv_engine
+
+    p = tmp_path / "w.pth"
+    p.write_bytes(b"v1")
+    s1 = gsv_engine.weights_stamp(str(p))
+    os.utime(p, (1_600_000_000, 1_600_000_000))
+    s2 = gsv_engine.weights_stamp(str(p))
+    assert s2 != s1 and s2[2] == s1[2]        # 仅 mtime 变也感知
+    missing = gsv_engine.weights_stamp(str(tmp_path / "nope.pth"))
+    assert missing[1:] == (0, 0)
+
+
+def test_ensure_weights_reloads_when_same_path_replaced(tmp_path, monkeypatch):
+    from adr.models import gsv_engine
+
+    monkeypatch.setattr(gsv_engine.GSVEngine, "_gsv_context",
+                        lambda self: contextlib.nullcontext())
+    validated, loaded = [], []
+    monkeypatch.setattr(gsv_engine, "validate_weights_file", validated.append)
+
+    class _TTS:
+        def init_vits_weights(self, path):
+            loaded.append(("vits", path))
+
+        def init_t2s_weights(self, path):
+            loaded.append(("t2s", path))
+
+    eng = gsv_engine.GSVEngine()
+    eng._tts = _TTS()
+    weights = tmp_path / "s2G.pth"
+    weights.write_bytes(b"v1")
+
+    eng._ensure_weights(str(weights), None)
+    eng._ensure_weights(str(weights), None)      # 指纹未变 → 幂等跳过
+    assert len(validated) == 1 and len(loaded) == 1
+
+    weights.write_bytes(b"v2-replaced-longer")   # 音色包导入 / 训练产物替换
+    eng._ensure_weights(str(weights), None)
+    assert len(validated) == 2 and len(loaded) == 2
