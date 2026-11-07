@@ -244,14 +244,28 @@ class VoiceCloneDataset(Dataset):
             raise FileNotFoundError(f"npz dir not found: {npz_dir}")
 
         samples = []
+        n_files = 0
+        first_err: Exception | None = None
         for npz_file in sorted(npz_dir.glob("**/*.npz")):
+            n_files += 1
             try:
                 s = TrainSample.load(npz_file)
                 if s.text and s.phonemes:
                     samples.append(s)
             except Exception as e:
+                if first_err is None:
+                    first_err = e
                 print(f"  [!] Failed to load {npz_file.name}: {e}")
 
+        # 批次90 (SEC-03): 有文件但一条都没读成 — 多半是旧版 object 数组 npz
+        # 被 allow_pickle=False 拒绝。静默返回空列表只会变成后面的
+        # "Empty sample list", 这里带上首个原因和迁移工具提示。
+        if not samples and n_files and first_err is not None:
+            raise ValueError(
+                f"{npz_dir} 下 {n_files} 个 npz 全部加载失败, 首个原因: "
+                f"{first_err}; 若为旧版 object 数组, 先运行 "
+                f"python scripts/migrate_npz_pickle.py <目录> 迁移"
+            ) from first_err
         return samples
 
     @staticmethod

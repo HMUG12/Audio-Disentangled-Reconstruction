@@ -53,3 +53,37 @@ def test_is_windows_reserved():
         assert is_windows_reserved(r), r
     for ok in ("console", "com", "com10", "my_con"):
         assert not is_windows_reserved(ok), ok
+
+
+# ---- 批次89 (#23): 路径安全判定单点化 ----
+
+def test_pathsafe_and_voice_library_share_one_implementation():
+    """server.pathsafe / models.voice_library 只是再导出, 规则不会漂移。"""
+    from adr.core import naming
+    from adr.models import voice_library
+    from adr.server import pathsafe
+
+    assert pathsafe.is_safe_name is naming.is_safe_name
+    assert voice_library.is_safe_name is naming.is_safe_name
+    assert pathsafe.resolve_within is naming.resolve_within
+
+
+def test_is_safe_name_rules():
+    from adr.core.naming import is_safe_name
+
+    for ok in ("我的音色", "spk_01", "voice-2", "a.b"):
+        assert is_safe_name(ok), ok
+    for bad in ("", "../x", "a/b", "a\\b", "D:evil", "x\x00y", "CON", "nul.wav"):
+        assert not is_safe_name(bad), bad
+
+
+def test_resolve_within_containment(tmp_path):
+    from adr.core.naming import resolve_within
+
+    root = tmp_path / "root"
+    (root / "sub").mkdir(parents=True)
+    assert resolve_within(root, "sub/a.wav") == (root / "sub" / "a.wav").resolve()
+    assert resolve_within(root, root / "sub" / "b.wav") == (
+        root / "sub" / "b.wav").resolve()
+    assert resolve_within(root, "../escape.wav") is None
+    assert resolve_within(root, tmp_path / "outside.wav") is None

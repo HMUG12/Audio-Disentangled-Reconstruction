@@ -5,6 +5,7 @@ import contextlib
 import os
 import tempfile
 import threading
+import time
 
 import numpy as np
 import pytest
@@ -416,3 +417,97 @@ def test_safe_torch_load_roundtrip_and_allow_globals(tmp_path):
     got = gsv_engine.safe_torch_load(
         str(ckpt), allow_globals=(("adr.training.trainer", "TrainerConfig"),))
     assert isinstance(got["config"], TrainerConfig) and got["config"].epochs == 1
+
+
+# ---- 批次89 (#26): 权重预检的截断/截头 zip 与 CUDA OOM 判定 ----
+
+def test_validate_weights_file_rejects_truncated_zip(tmp_path):
+    """截断的 zip 权重: 快路径失败 → 慢路径 BadZipFile → 干净 ValueError。"""
+    import pickle
+
+    from adr.models import gsv_engine
+
+    raw = _weights_zip(pickle.dumps({"w": 1}))
+    p = tmp_path / "truncated.pth"
+    p.write_bytes(raw[: len(raw) // 2])
+    with pytest.raises(ValueError, match="rejected by safe loader"):
+        gsv_engine.validate_weights_file(str(p))
+
+
+def test_validate_weights_file_heals_headerless_zip(tmp_path):
+    """截头 zip (丢 2 字节 'PK'): 慢路径补头后正常放行 (与 GSV 生态自愈一致)。"""
+    import torch
+
+    from adr.models import gsv_engine
+
+    p = tmp_path / "plain.pth"
+    torch.save({"w": torch.zeros(2)}, p)
+    raw = p.read_bytes()
+    assert raw[:2] == b"PK"
+    headerless = tmp_path / "headerless.pth"
+    headerless.write_bytes(raw[2:])
+    gsv_engine.validate_weights_file(str(headerless))   # 不抛即通过
+    assert gsv_engine.weights_stamp(str(headerless)) in gsv_engine._WEIGHTS_CHECKED
+
+
+def test_is_cuda_oom_uses_type_name_and_module():
+    """真实 torch.cuda.OutOfMemoryError 命中; 同名异模块/普通 RuntimeError 不命中。"""
+    import torch
+
+    from adr.models import gsv_engine
+
+    assert gsv_engine.is_cuda_oom(torch.cuda.OutOfMemoryError("out of memory"))
+    assert not gsv_engine.is_cuda_oom(RuntimeError("out of memory"))
+
+    class OutOfMemoryError(RuntimeError):   # 同名但非 torch 模块
+        pass
+
+    assert not gsv_engine.is_cuda_oom(OutOfMemoryError("boom"))
+
+
+# ---- 批次89 (#26): bootstrap.ensure 并发只执行一次下载/解压 ----
+
+def test_bootstrap_ensure_serializes_workers(tmp_path, monkeypatch):
+    """多线程并发 ensure(): 进程级文件锁串行, 每个 entry 只解一次。"""
+    from adr.models import gsv_bootstrap
+
+    marker = tmp_path / "extract" / "marker.dir"
+    entry = {
+        "key": "unit", "zip_name": "unit.zip", "urls": [],
+        "sha256": "", "extract_to": tmp_path / "extract", "marker": marker,
+    }
+    calls, state = [], {"cur": 0, "max": 0}
+    lock = threading.Lock()
+
+    def _fake_acquire(e):
+        with lock:
+            state["cur"] += 1
+            state["max"] = max(state["max"], state["cur"])
+        time.sleep(0.15)
+        with lock:
+            state["cur"] -= 1
+        calls.append(e["key"])
+        marker.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(gsv_bootstrap, "_MANIFEST", [entry])
+    monkeypatch.setattr(gsv_bootstrap, "_acquire", _fake_acquire)
+    monkeypatch.setattr(gsv_bootstrap, "pending", lambda: True)
+    monkeypatch.setattr(gsv_bootstrap, "GSV_DIR", tmp_path)
+
+    errors = []
+
+    def worker():
+        try:
+            gsv_bootstrap.ensure()
+        except Exception as e:      # pragma: no cover - 失败时把原因带回主线程
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker) for _ in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+
+    assert not errors
+    assert state["max"] == 1, "并发 ensure() 未被锁串行化"
+    assert len(calls) == 1, "marker 就位后不应重复解压"

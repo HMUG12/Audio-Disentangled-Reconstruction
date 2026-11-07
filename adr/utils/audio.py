@@ -383,33 +383,3 @@ def get_audio_info(path: PathLike) -> dict:
         "subtype": info.subtype,
     }
 
-
-def slice_audio_by_time(
-    waveform: np.ndarray,
-    sample_rate: int,
-    start_sec: float,
-    end_sec: float,
-) -> np.ndarray:
-    """按时间切片。"""
-    start = int(start_sec * sample_rate)
-    end = int(end_sec * sample_rate)
-    return waveform[..., start:end]
-
-
-def pad_or_trim(
-    waveform: np.ndarray,
-    target_length: int,
-    pad_value: float = 0.0,
-) -> np.ndarray:
-    """填充或裁剪到目标长度。"""
-    cur_length = waveform.shape[-1]
-    if cur_length == target_length:
-        return waveform
-    if cur_length > target_length:
-        return waveform[..., :target_length]
-
-    pad_width = target_length - cur_length
-    pad_shape = list(waveform.shape)
-    pad_shape[-1] = pad_width
-    pad = np.full(pad_shape, pad_value, dtype=waveform.dtype)
-    return np.concatenate([waveform, pad], axis=-1)

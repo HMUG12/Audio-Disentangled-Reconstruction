@@ -270,3 +270,92 @@ def test_engine_lock_wait_timeout_bounded(eng, monkeypatch):
         release.set()
         th.join(5)
     assert _lock_free()
+
+
+# ---- 批次90 (R3-CON-01): 合批轮 / 看门狗 ----
+
+def test_coalesce_round_lock_wait_is_bounded(eng, monkeypatch):
+    """合批轮也不能无界等锁: 锁被卡死 worker 占用时, 该轮 future 必须
+    在有限时间内拿到 EngineStalledError (旧实现 ``with engine._lock`` 永久排队)。"""
+    from adr.core.exceptions import EngineStalledError
+    from adr.models.gsv_coalescer import _Coalescer
+
+    monkeypatch.setattr(gsv_engine, "_LOCK_WAIT_SEC", 0.2)
+    eng._tts = FakeTTS(blocks=1)
+    coalescer = _Coalescer(eng)
+
+    held, release = threading.Event(), threading.Event()
+
+    def _hold():
+        eng._lock.acquire()
+        held.set()
+        release.wait(10)
+        eng._lock.release()
+
+    th = threading.Thread(target=_hold, daemon=True)
+    th.start()
+    assert held.wait(2)
+    try:
+        fut = coalescer.submit({"text": "你好世界。", "ref_audio_path": "ref.wav"})
+        with pytest.raises(EngineStalledError):
+            fut.result(timeout=5)
+    finally:
+        release.set()
+        th.join(5)
+
+
+def test_watchdog_grace_env_parsing(monkeypatch):
+    """看门狗阈值: 默认 300s, 非法值回落默认, 0/负数 = 关闭。"""
+    monkeypatch.delenv("ADR_ENGINE_WATCHDOG_SEC", raising=False)
+    assert gsv_engine.watchdog_grace_sec() == 300.0
+    monkeypatch.setenv("ADR_ENGINE_WATCHDOG_SEC", "60")
+    assert gsv_engine.watchdog_grace_sec() == 60.0
+    monkeypatch.setenv("ADR_ENGINE_WATCHDOG_SEC", "abc")
+    assert gsv_engine.watchdog_grace_sec() == 300.0
+    monkeypatch.setenv("ADR_ENGINE_WATCHDOG_SEC", "0")
+    assert gsv_engine.watchdog_grace_sec() == 0.0
+    assert gsv_engine.start_watchdog() is False   # 关闭态不启动线程
+    assert not [t for t in threading.enumerate()
+                if t.name == "adr-engine-watchdog"]
+
+
+# ---- 批次89 (#26): 无标点长文切分 / 首包切分的兜底分支 ----
+
+def test_split_long_no_punctuation_hard_cut():
+    """完全无标点的长串按 max_len+15 硬切, 不丢字也不无限膨胀。"""
+    text = "啊" * 120
+    segs = GSVEngine._split_long(text, max_len=40)
+    assert "".join(segs) == text
+    assert len(segs) == 3
+    assert all(len(s) <= 40 + 15 for s in segs)
+    assert max(len(s) for s in segs) == 40 + 15
+
+
+def test_split_long_prefers_pause_punctuation():
+    """有逗号时在标点处切 (不落到硬切上限)。"""
+    text = "，".join(["一二三四五六七八九十"] * 8)
+    segs = GSVEngine._split_long(text, max_len=40)
+    assert "".join(segs) == text
+    assert all(s.endswith("，") or s == segs[-1] for s in segs[:-1])
+    assert max(len(s) for s in segs) < 40 + 15
+
+
+def test_split_long_keeps_sentence_with_punctuation_whole():
+    """含句末标点的段交给 GSV 自切, 不再细分。"""
+    text = "这是一句带句号的话。" * 3
+    assert GSVEngine._split_long(text, max_len=10) == [text]
+
+
+def test_stream_head_split_no_punctuation_returns_whole_text():
+    """无标点时不做首包切分 (剩余为空), 避免把句子切在字中间。"""
+    text = "啊" * 40
+    head, rest = GSVEngine._stream_head_split(text, max_head=14)
+    assert head == text
+    assert rest == ""
+
+
+def test_stream_head_split_cuts_at_sentence_end():
+    text = "今天天气很好。后面是很长很长的一段内容需要继续合成"
+    head, rest = GSVEngine._stream_head_split(text, max_head=14)
+    assert head == "今天天气很好。"
+    assert rest == text[len(head):]

@@ -255,24 +255,4 @@ def empty_cache() -> None:
         torch.mps.empty_cache()
 
 
-def get_free_vram_gb() -> float:
-    """获取当前空闲显存 (GB)。"""
-    if torch.cuda.is_available():
-        free, _ = torch.cuda.mem_get_info()
-        return free / 1e9
-    return 0.0
 
-
-def print_memory_usage(prefix: str = "") -> None:
-    """打印当前显存占用 (debug 用)。"""
-    if torch.cuda.is_available():
-        alloc = torch.cuda.memory_allocated() / 1e9
-        reserved = torch.cuda.memory_reserved() / 1e9
-        peak = torch.cuda.max_memory_allocated() / 1e9
-        from adr.core.logging import get_logger
-
-        log = get_logger("adr.device")
-        log.info(
-            f"{prefix}GPU mem: alloc={alloc:.2f}GB, "
-            f"reserved={reserved:.2f}GB, peak={peak:.2f}GB"
-        )

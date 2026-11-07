@@ -51,6 +51,7 @@ from typing import Dict, List, Optional, Tuple
 
 from adr.core import settings
 from adr.core.audit import log_event
+from adr.core.exceptions import EngineStalledError
 
 # 合批窗口 (秒): 首请求到达后再等这么久凑批 — 无窗口的 get_nowait 抽干常在
 # 第二请求入队前跑空 (GIL 调度 / 提交错峰几 ms), 两请求各占一轮, 合批落空
@@ -236,14 +237,17 @@ class _Coalescer:
                         chunk = bucket[i:i + cap]
                         try:
                             self._round(chunk)
-                        except BaseException:
+                        except BaseException as e:
                             # 兜底: 轮级意外不得吞掉未决 future (请求线程
-                            # .result() 会挂死), 逐个回填异常后继续
+                            # .result() 会挂死), 逐个回填异常后继续。
+                            # 批次90 (R3-CON-01): 引擎停滞保留原异常类型,
+                            # API 层据此映射 503 而非 500。
                             traceback.print_exc()
+                            err = (e if isinstance(e, EngineStalledError)
+                                   else RuntimeError("coalesce round failed"))
                             for j in chunk:
                                 if not j.future.done():
-                                    j.future.set_exception(
-                                        RuntimeError("coalesce round failed"))
+                                    j.future.set_exception(err)
             except BaseException:  # 兜底: worker 永不因单轮异常死亡
                 traceback.print_exc()
 
@@ -256,7 +260,9 @@ class _Coalescer:
         engine = self._engine
         t0 = time.perf_counter()
         groups: Dict[tuple, List[_Job]] = {}
-        with engine._lock:
+        # 批次90 (R3-CON-01): 走带超时的 _engine_lock (55s 转 EngineStalledError)
+        # — 旧实现 ``with engine._lock`` 无上限, 卡死 worker 持锁时这一轮永久排队。
+        with engine._engine_lock():
             try:
                 engine._lazy_init()
             except BaseException as e:

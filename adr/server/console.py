@@ -570,13 +570,55 @@ def _probe_audio(path: Path) -> dict:
         raise ValueError("音频文件无法解析 (损坏或编码不支持)")
 
 
+def _doctor_engine_check() -> dict:
+    """批次92: 把引擎启动失败原因/降级状态并入 doctor 报告。
+
+    引擎状态在 models 层, core.doctor 刻意不 import models (单向依赖), 因此
+    这项检查由 server 层追加 — UI 一处即可看到"为什么起不来 + 怎么办"。
+    """
+    from adr.models import gsv_engine as g
+
+    stage = g.stage()
+    err = (g.stage_error() or "").strip()
+    stalled = g.is_stalled()
+    degraded = g.degraded_seconds()
+    watchdog = g.watchdog_grace_sec()
+    tail = " | ".join(err.splitlines()[-3:]) if err else ""
+    if stalled or degraded > 0:
+        return {"id": "engine", "name": "引擎运行状态", "status": "warn",
+                "detail": f"卡死降级 {degraded:.0f}s (stage={stage})"
+                          + (f": {tail}" if tail else ""),
+                "fixable": False,
+                "hint": f"超过 {watchdog:.0f}s 未恢复将自动重启进程; "
+                        "仍不恢复请重启服务并运行完整诊断"}
+    if stage == "failed":
+        return {"id": "engine", "name": "引擎运行状态", "status": "fail",
+                "detail": "启动失败" + (f": {tail}" if tail else " (无错误详情)"),
+                "fixable": False,
+                "hint": "按上方原因处理后重启服务; 常见为权重下载失败、"
+                        "显存不足或模型文件损坏"}
+    if g.is_ready():
+        return {"id": "engine", "name": "引擎运行状态", "status": "ok",
+                "detail": f"已就绪 (看门狗 {watchdog:.0f}s)", "fixable": False,
+                "hint": None}
+    return {"id": "engine", "name": "引擎运行状态", "status": "info",
+            "detail": f"未加载 (stage={stage}); 首次合成会触发加载",
+            "fixable": False, "hint": None}
+
+
 @router.get("/system/doctor", summary="一键环境自检 (fix=true 自动修复可修项)")
 async def system_doctor(fix: bool = False,
                         _guard: None = Depends(require_browser_safe)):
     """检测依赖/GPU/权重/档案/端口/磁盘; fix=true 时裁剪超长 ref、清理 STOP 残留。"""
     from adr.core.doctor import run_checks
 
-    return run_checks(fix=fix)
+    rep = run_checks(fix=fix)
+    rep["checks"].append(_doctor_engine_check())
+    summary: dict[str, int] = {}
+    for c in rep["checks"]:
+        summary[c["status"]] = summary.get(c["status"], 0) + 1
+    rep["summary"] = summary
+    return rep
 
 
 @router.post("/system/doctor", summary="一键环境自检 (POST; fix=true 自动修复可修项)")
@@ -834,6 +876,30 @@ async def models_download_status():
                             if _dl["state"] == "downloading" else None),
             "log_tail": list(_dl["logs"])[-30:],
         }
+
+
+# ---------------------------------------------------------------------------
+# 退出回收 (批次90 / R3-LIFE-01)
+# ---------------------------------------------------------------------------
+
+def stop_background_procs() -> None:
+    """服务退出时回收训练/门禁/下载子进程 (可重复调用)。
+
+    这些子进程以 ``start_new_session=True`` 起 (POSIX setsid / Windows 独立
+    进程组), 父进程退出不会传导终止信号 — 不主动回收就会留下孤儿训练继续
+    写输出目录并占住 GPU 显存, 下次训练直接 OOM。由 FastAPI lifespan 的
+    shutdown 阶段与 atexit 兜底调用。
+    """
+    with _train_lock:
+        procs = [_train["proc"], _train.get("gate")]
+    with _dl_lock:
+        procs.append(_dl["proc"])
+    for p in procs:
+        try:
+            _stop_proc(p)
+        except Exception:
+            logger.warning("退出回收子进程失败 pid=%s",
+                           getattr(p, "pid", None), exc_info=True)
 
 
 # ---------------------------------------------------------------------------

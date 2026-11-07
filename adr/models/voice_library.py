@@ -18,28 +18,10 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from adr.core.naming import is_windows_reserved
+from adr.core.naming import is_safe_name, resolve_within
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 VOICES_DIR = REPO_ROOT / "data" / "voices"
-
-
-def is_safe_name(name: str) -> bool:
-    """档案名安全校验 (批次41a): 单段纯名, 拒绝路径分隔符/``..``/空字节,
-    并拒绝 Windows 设备保留名 (批次58, 落盘点 data/voices 需可 mkdir)。
-
-    与 adr/server/pathsafe.py 同规则; models 层不 import server 包
-    (server.__init__ 会级联引入 fastapi), 保留名判断复用 core.naming。
-    """
-    if not name:
-        return False
-    # ":" 拦 Windows 盘符相对名 (如 "D:evil"): pathlib join 会丢基路径换盘符,
-    # 把 ref/meta 写出档案库外 (批次62); 冒号在合法档案名中本就无意义。
-    if any(ch in name for ch in ("/", "\\", "\x00", ":")):
-        return False
-    if ".." in name:
-        return False
-    return not is_windows_reserved(name)
 
 
 def _trim_silence(wav, sr: int, top_db: float = 30.0):
@@ -158,11 +140,9 @@ def save_voice(
     # is_safe_name 拦 "..", resolve 检查兜底拼接后必须仍落在档案库根内。
     if not is_safe_name(name):
         raise ValueError(f"音色名含非法路径成分: {name!r}")
-    vdir = VOICES_DIR / name
-    try:
-        vdir.resolve().relative_to(VOICES_DIR.resolve())
-    except (ValueError, OSError):
-        raise ValueError(f"音色名解析后越出档案库目录: {name!r}") from None
+    vdir = resolve_within(VOICES_DIR, name)
+    if vdir is None:
+        raise ValueError(f"音色名解析后越出档案库目录: {name!r}")
     with profile_lock(name):   # 批次66: ref + meta 整体与同名其他写者串行
         return _save_voice_locked(vdir, name, ref_audio, prompt_text, t2s_weights,
                                   vits_weights, rvc_weights, rvc_index, style,

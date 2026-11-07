@@ -224,6 +224,13 @@
   <button id="back" data-i18n="easy.back">← 返回</button>
 </header>
 
+<!-- 批次92: 启动失败原因透出 (引擎 failed/降级时展开, 新手不用翻日志) -->
+<div id="engErr" style="display:none;margin:0 26px 16px;padding:12px 16px;border:2px solid var(--red);border-radius:14px;background:#fef2f2;line-height:1.65">
+  <b id="engErrT" style="color:var(--red);font-size:14.5px"></b>
+  <div id="engErrD" style="color:var(--txt);font-size:13px;margin-top:5px;white-space:pre-wrap;word-break:break-word"></div>
+  <div id="engErrH" style="color:var(--sub);font-size:12.5px;margin-top:5px"></div>
+</div>
+
 <div class="wrap">
 
   <div class="steps">
@@ -241,7 +248,14 @@
       <h1 data-i18n="easy.pick_title">先选一个声音 🎙</h1>
       <div class="desc" data-i18n-html="easy.pick_desc">点一下想用的声音。第一次用？点下面的 <b>创建新声音</b>，一分钟就好。</div>
       <div class="voices" id="vGrid"></div>
-      <div style="margin-top:24px">
+      <!-- 批次91: 音色包导入/导出 — 换电脑或备份, 一个文件带走声音本体 -->
+      <div style="margin-top:16px;display:flex;gap:12px">
+        <button class="btn w sm" id="vExportBtn" data-i18n="easy.pkg_export">📦 导出当前声音</button>
+        <button class="btn w sm" id="vImportBtn" data-i18n="easy.pkg_import">📥 导入音色包</button>
+        <input type="file" id="vImportFile" accept=".adrvoice,.zip" style="display:none">
+      </div>
+      <div class="mini" id="vPkgHint" data-i18n="easy.pkg_hint">音色包可以备份、也能换电脑用；里面是这个声音的模型文件，请只发给自己信任的人。</div>
+      <div style="margin-top:20px">
         <button class="btn g big" id="goStep2" disabled data-i18n="easy.next_typing">下一步：打字 →</button>
       </div>
     </div>
@@ -391,6 +405,21 @@ back.onclick = () => {
         : "tauri://localhost/launcher.html")
     : "/";
 };
+
+/* ---- 批次92: 引擎启动失败/卡死原因展示 (轮询 /health, 失败才出现) ---- */
+async function pollEngine() {
+  try {
+    const h = await jf("/api/adr/v1/health");
+    const bad = h.engine_stage === "failed" || h.engine_stalled;
+    $("engErr").style.display = bad ? "" : "none";
+    if (!bad) return;
+    $("engErrT").textContent = I.t(h.engine_stalled ? "easy.eng_stall_title" : "easy.eng_err_title");
+    $("engErrD").textContent = h.engine_error || h.engine_stage_text || "";
+    $("engErrH").textContent = I.t("easy.eng_err_hint");
+  } catch (e) { /* 服务尚未就绪: 静默, 不打扰新手 */ }
+}
+pollEngine();
+setInterval(pollEngine, 15000);
 
 /* ---- 步骤切换 ---- */
 let step = 1;
@@ -685,6 +714,73 @@ $("tGo").onclick = async () => {
 $("playBtn").onclick = () => $("player").play().catch(() => {});
 $("rEdit").onclick = () => showStep(2);
 $("rVoice").onclick = () => showStep(1);
+
+/* 批次91: 音色包 (.adrvoice) 导入/导出 — 备份与换机搬家 */
+$("vExportBtn").onclick = async () => {
+  if (!selected) { toast(I.t("easy.pkg_pick_first")); return; }
+  if (!confirm(I.t("easy.pkg_export_confirm", { name: selected }))) return;
+  toast(I.t("easy.pkg_exporting"));
+  try {
+    const ctrl = new AbortController();
+    const kill = setTimeout(() => ctrl.abort(), 600000);
+    const r = await fetch(api("/api/adr/v1/profiles/" + encodeURIComponent(selected) + "/export"),
+                          { signal: ctrl.signal });
+    clearTimeout(kill);
+    if (!r.ok) {
+      let m = r.status;
+      try { const j = await r.json(); if (j.message || j.detail) m = j.message || j.detail; } catch (_) { /* 非 JSON */ }
+      throw new Error(m);
+    }
+    // fetch→blob→a[download]: 壳内由 on_download 接手
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = selected + ".adrvoice";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    toast(I.t("easy.pkg_export_done"));
+  } catch (e) { toast(I.t("easy.pkg_export_fail", { msg: human(e) })); }
+};
+
+$("vImportBtn").onclick = () => $("vImportFile").click();
+$("vImportFile").onchange = async () => {
+  const f = $("vImportFile").files[0];
+  $("vImportFile").value = "";
+  if (!f) return;
+  const doImport = async (overwrite, force) => {
+    const fd = new FormData();
+    fd.append("package", f);
+    if (overwrite) fd.append("overwrite", "true");
+    if (force) fd.append("force", "true");
+    const r = await fetch(api("/api/adr/v1/profiles/import"), { method: "POST", body: fd });
+    let j = {};
+    try { j = await r.json(); } catch (_) { /* 500 非 JSON */ }
+    return { ok: r.ok, j };
+  };
+  toast(I.t("easy.pkg_importing"));
+  try {
+    let { ok, j } = await doImport(false);
+    if (!ok && (j.message || "").includes("档案已存在")
+        && confirm(j.message + "\n" + I.t("easy.pkg_confirm_overwrite"))) {
+      ({ ok, j } = await doImport(true));
+    }
+    // 批次88 (SEC-05): 权重被其它档案共用 → 二次确认才带 force 重试
+    if (!ok && (j.message || "").includes("将影响")
+        && confirm(j.message + "\n" + I.t("easy.pkg_confirm_shared"))) {
+      ({ ok, j } = await doImport(true, true));
+    }
+    if (!ok) { toast(j.message || I.t("easy.pkg_import_fail")); return; }
+    const nm = (j.imported && j.imported.name) || "";
+    toast(I.t("easy.pkg_import_ok", { name: nm }));
+    await loadVoices();
+    if (nm && voices.some(p => p.name === nm)) {
+      selected = nm;
+      renderVoices();
+      $("goStep2").disabled = false;
+    }
+  } catch (e) { toast(I.t("easy.pkg_import_fail_msg", { msg: human(e) })); }
+};
 
 /* 启动 */
 showStep(1);

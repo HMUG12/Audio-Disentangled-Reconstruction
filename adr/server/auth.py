@@ -5,7 +5,7 @@
 
 规则:
 - api_keys 为空列表 → 完全放行 (默认关闭, N.E.K.O 零改造兼容)
-- 豁免路径: /api/adr/v1/health (监控探活不带凭据)
+- 豁免路径: /api/adr/v1/health、/api/adr/v1/readyz (监控探活不带凭据)
   + /, /pro, /easy (控制台静态页, 页面 JS 会把 URL 上的 api_key 透传给后续请求)
 - HTTP 凭据三选一: ``Authorization: Bearer <key>`` / ``X-API-Key: <key>``
   / 查询参数 ``?api_key=<key>``
@@ -23,10 +23,12 @@ import hmac
 import json
 from urllib.parse import unquote
 
-# 监控探活豁免 (无敏感数据, 供 N.E.K.O / 负载均衡探活)
+# 监控探活豁免 (无敏感数据, 供 N.E.K.O / 负载均衡 / 容器 HEALTHCHECK 探活)
 # 控制台静态页豁免 (批次26 补 /call): 页面本身无数据, 启用 API key 时页面才能
 # 加载; 页面 JS 发起的 API 调用仍走鉴权 — 与 /pro /easy 语义一致。
-EXEMPT_PATHS = {"/api/adr/v1/health", "/", "/pro", "/easy", "/call"}
+# 批次90: /readyz 与 /health 同档 — 容器 HEALTHCHECK 不带 key, 只回就绪态。
+EXEMPT_PATHS = {"/api/adr/v1/health", "/api/adr/v1/readyz",
+                "/", "/pro", "/easy", "/call"}
 
 
 def _is_exempt(path) -> bool:

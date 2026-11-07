@@ -158,14 +158,17 @@ def process_one_utterance(
         )
 
         # 5. 保存 npz
+        # 批次90 (SEC-03): 文本/音素必须存成 numpy 字符串数组, 不能用 object
+        # dtype — object 成员是 pickle, 训练侧已禁用 allow_pickle (加载陌生 npz
+        # 即任意代码执行), 写成 object 会导致新数据自己也读不了。
         out_path = out_dir / f"{utt_id}.npz"
         np.savez_compressed(
             out_path,
-            sample_id=np.array([utt_id], dtype=object),
+            sample_id=np.array([utt_id], dtype=str),
             waveform=waveform.astype(np.float32),
             sample_rate=target_sr,
-            text=np.array([info["text"]], dtype=object),
-            phonemes=np.array([info["phonemes"]], dtype=object),
+            text=np.array([info["text"]], dtype=str),
+            phonemes=np.array([info["phonemes"]], dtype=str),
             f0=f0,
             mel=mel,
             start_sec=0.0,

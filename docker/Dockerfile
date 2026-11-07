@@ -114,19 +114,23 @@ RUN mkdir -p /data \
 
 EXPOSE 9881
 
-# /health 恒 200 (engine_ready 是字段非状态码) — 判 HTTP 可答即进程健康;
-# 权重下载/引擎初始化由业务侧轮询 engine_ready 观察, 不影响容器健康态
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD python -c "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('ADR_PORT','9881') + '/api/adr/v1/health', timeout=4)" || exit 1
+# 批次90 (R3-OBS-01): 用 /readyz 而非 /health 做健康检查。
+# /health 恒 200 (只证明 HTTP 能应答), 引擎卡死/永久降级时仍显示 healthy;
+# /readyz 在引擎未就绪或已降级时返回 503, 才是"能否提供服务"的真实信号。
+# start-period 给足 600s: 首启要下载 ~2GB 权重并初始化模型, 期间 readyz 是 503,
+# 不能算失败; 超过 start-period + retries 仍 503 → unhealthy (可配 autoheal 重启)。
+HEALTHCHECK --interval=30s --timeout=5s --start-period=600s --retries=3 \
+    CMD python -c "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('ADR_PORT','9881') + '/api/adr/v1/readyz', timeout=4)" || exit 1
 
 # 设备走向由引擎 auto 自检 (ADR_TTS_DEVICE 可覆盖):
 #   cpu 镜像 -> 自动 cpu; cuda 镜像有 GPU -> cuda, 无 GPU 环境回退 cpu
 # 容器内必须监听 0.0.0.0 才能被端口映射访问 (0.0.0.0 是容器自身命名空间,
 # 非对外暴露); 暴露面由 compose/`docker run -p` 的发布地址决定。
 # 批次87 (SEC-04): 对外监听 + 未设 ADR_TTS_API_KEY 时服务默认拒绝启动。
-# 容器场景监听 0.0.0.0 是命名空间必需, 这里显式声明「已知悉」保留仅告警;
-# 对外发布 (-p 0.0.0.0:9881:9881) 仍必须设 ADR_TTS_API_KEY。
-ENV ADR_ALLOW_UNAUTHENTICATED=1
+# 批次90 (SEC-04 残留): 不再在镜像里写死 ADR_ALLOW_UNAUTHENTICATED=1 ——
+# 那等于把"无鉴权对外"做成镜像默认值, `docker run -p 9881:9881` 直接裸奔。
+# 现在由 docker-compose.yml 显式传入 (其默认只发布 127.0.0.1); 手写
+# `docker run` 需自行 -e ADR_ALLOW_UNAUTHENTICATED=1 或配置 ADR_TTS_API_KEY。
 ENTRYPOINT ["python", "-m", "adr.server"]
 CMD ["--addr", "0.0.0.0", "--port", "9881"]
 

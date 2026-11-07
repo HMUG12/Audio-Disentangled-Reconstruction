@@ -236,6 +236,28 @@ def test_train_sample_save_load():
         Path(tmp).unlink(missing_ok=True)
 
 
+def test_train_sample_load_rejects_object_arrays(tmp_path):
+    """批次90 (SEC-03 残留): npz 内含 object 数组 (= pickle) 必须直接拒绝,
+    不得回落到 allow_pickle=True — 否则加载陌生样本即是训练机 RCE。"""
+    from adr.data.pipeline import TrainSample
+
+    p = tmp_path / "legacy.npz"
+    np.savez(
+        p,
+        sample_id=np.array(["legacy"], dtype=object),
+        waveform=np.zeros(160, dtype=np.float32),
+        sample_rate=np.array(24000),
+        text=np.array(["旧样本"], dtype=object),
+        phonemes=np.array([["ni3"]], dtype=object),
+        f0=np.zeros(10, dtype=np.float32),
+        mel=np.array([], dtype=np.float32),
+        start_sec=np.array(0.0),
+        end_sec=np.array(1.0),
+    )
+    with pytest.raises(ValueError, match="allow_pickle"):
+        TrainSample.load(p)
+
+
 def test_asr_lazy_load():
     """测试 ASR 懒加载 (不实际加载模型)。"""
     from adr.data.asr import ASR, ASRConfig

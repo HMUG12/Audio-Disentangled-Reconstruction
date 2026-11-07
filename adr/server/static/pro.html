@@ -281,6 +281,7 @@
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <button class="btn" id="btnDoctor" data-i18n="pro.btn_doctor">一键诊断</button>
       <button class="btn" id="btnDoctorFix" style="display:none" data-i18n="pro.btn_doctor_fix">自动修复问题项</button>
+      <button class="btn" id="btnDoctorCopy" style="display:none" data-i18n="pro.btn_doctor_copy">复制诊断报告</button>
       <span id="doctorSum" style="color:var(--sub)"></span>
     </div>
     <div id="doctorOut" style="display:none;margin-top:12px;font-size:12.5px;line-height:1.8;color:var(--sub)"></div>
@@ -510,17 +511,38 @@ async function jfetch(url, opts) {
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const fmtGB = v => v == null ? "—" : v.toFixed(1);
 
-/* ---- 环境诊断 (一键 / 自动修复, 批次18) ---- */
+/* ---- 环境诊断 (一键 / 自动修复, 批次18; 修复指引+复制报告 批次92) ---- */
+let lastDoctor = null;
 function renderDoctor(rep) {
+  lastDoctor = rep;
+  $("doctorOut").style.display = "";
   const icon = { ok: "✓", warn: "!", fail: "✗", fixed: "⟳", info: "·" };
   const color = { ok: "var(--dr-ok)", warn: "var(--dr-warn)", fail: "var(--dr-fail)",
                   fixed: "var(--dr-fixed)", info: "var(--sub)" };
-  $("doctorOut").innerHTML = rep.checks.map(c =>
-    `<div style="margin:3px 0"><b style="color:${color[c.status] || "inherit"}">` +
-    `[${icon[c.status] || "?"}] ${esc(c.name)}</b> — ${esc(c.detail)}</div>`).join("");
+  $("doctorOut").innerHTML = rep.checks.map(c => {
+    let row = `<div style="margin:3px 0"><b style="color:${color[c.status] || "inherit"}">` +
+      `[${icon[c.status] || "?"}] ${esc(c.name)}</b> — ${esc(c.detail)}`;
+    if (c.hint && (c.status === "warn" || c.status === "fail")) {
+      row += `<div style="margin-left:18px;color:var(--sub);opacity:.85">↳ ${esc(c.hint)}</div>`;
+    }
+    return row + `</div>`;
+  }).join("");
   const s = rep.summary;
   $("doctorSum").textContent = I.t("pro.doctor_sum", { ok: s.ok || 0, fixed: s.fixed || 0, warn: s.warn || 0, fail: s.fail || 0 });
   $("btnDoctorFix").style.display = (s.warn || s.fail) ? "" : "none";
+  $("btnDoctorCopy").style.display = "";
+}
+async function copyDoctor() {
+  if (!lastDoctor) return;
+  const text = JSON.stringify(lastDoctor, null, 2);
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (e) {
+    const ta = document.createElement("textarea");
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    document.execCommand("copy"); ta.remove();
+  }
+  toast(I.t("pro.doctor_copied"));
 }
 async function runDoctor(fix) {
   const btn = $(fix ? "btnDoctorFix" : "btnDoctor");
@@ -537,6 +559,7 @@ async function runDoctor(fix) {
 }
 $("btnDoctor").onclick = () => runDoctor(false);
 $("btnDoctorFix").onclick = () => runDoctor(true);
+$("btnDoctorCopy").onclick = copyDoctor;
 
 /* ---- 返回启动器 (仅桌面壳内: 壳导航带 ?desktop=1) ----
    远程控制台页不在 Tauri capability 授权内, invoke 会被 ACL 拒绝,

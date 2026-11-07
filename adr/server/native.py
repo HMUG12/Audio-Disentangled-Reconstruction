@@ -2,6 +2,7 @@
 
 面向新接入方 (以及 ADR 自己的插件/WebUI):
 - /health                服务与引擎状态
+- /readyz                就绪检查 (引擎可用且未永久降级; 供容器/编排器探活)
 - /profiles              音色档案清单
 - /profiles/{name}/ref   下载档案参考音频
 - /tts  POST+GET         按档案名合成 (内部复用 v2 兼容层的核心处理)
@@ -61,6 +62,34 @@ async def health(request: Request):
             "vits": _basename(getattr(state, "vits_weights", None)),
         },
     }
+
+
+@router.get("/readyz", summary="就绪检查 (引擎可用且未永久降级)")
+async def readyz():
+    """批次90 (R3-OBS-01): 真正反映"服务还能不能干活"。
+
+    /health 是存活探针 (进程活着就是 200, 桌面壳启动探活依赖它), 卡死降级后
+    仍会 200; 容器 HEALTHCHECK 只看状态码, 于是"永久 503 但始终健康"。
+    这里 stalled / 未就绪一律 503, 让 Docker healthcheck 与编排器能识别
+    "不可恢复"降级, 配合进程级看门狗 (ADR_ENGINE_WATCHDOG_SEC) 重启进程。
+
+    与 /health 一样免鉴权 (容器内探针没有 API key), 不含任何路径信息。
+    """
+    from adr.models import gsv_engine as _gsv
+
+    ready = _gsv.is_ready()
+    stalled = _gsv.is_stalled()
+    ok = ready and not stalled
+    return JSONResponse({
+        "status": "ok" if ok else "unavailable",
+        "service": "adr-tts",
+        "api_version": _API_VERSION,
+        "engine_ready": ready,
+        "engine_stalled": stalled,
+        "engine_loading": _gsv.is_loading(),
+        "engine_stage": _gsv.stage(),
+        "degraded_seconds": round(_gsv.degraded_seconds(), 1),
+    }, status_code=200 if ok else 503)
 
 
 @router.get("/profiles", summary="音色档案清单")

@@ -428,7 +428,7 @@ class TestASRCudaFallback:
             text = cb._run_transcribe(cb._asr_cache, tmp)
             assert text == "你好"
             assert calls["n"] == 2  # 第 1 次失败, 回退后第 2 次成功
-            assert cb._asr_cpu_fallback is True
+            assert cb.asr_model_sizes[0] in cb._asr_cpu_fallback_set
         finally:
             import os
             os.unlink(tmp)
@@ -455,7 +455,7 @@ class TestASRCudaFallback:
             import pytest as _pytest
             with _pytest.raises(RuntimeError):
                 cb._run_transcribe(cb._asr_cache, tmp)
-            assert cb._asr_cpu_fallback is True
+            assert cb.asr_model_sizes[0] in cb._asr_cpu_fallback_set
             # 第二次: 已回退过, _reload_asr_cpu 返回 None → 直接 raise
             with _pytest.raises(RuntimeError):
                 cb._run_transcribe(cb._asr_cache, tmp)

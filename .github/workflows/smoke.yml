@@ -1,10 +1,13 @@
-# ADR 轻量 CI (批次51): 每次 push/PR 跑全量单测 (431+ 基线)。
+# ADR 轻量 CI (批次51; 批次89 治理: cargo test / Windows / 覆盖率门槛)。
 # 约定与 REPRODUCE.md 一致:
 # - tests/conftest.py 的 --run-asr 默认 False → 真实 ASR 用例自动 skip,
 #   CI 无需任何额外参数;
 # - tests 不依赖 third_party/ (GSVEngine 懒加载, 测试全部旁路或占位),
 #   也不依赖个人数据/底模权重 → 纯 checkout 即可跑;
 # - torch 先装 CPU 轮子, 避免 PyPI 默认拉 ~2.5GB CUDA 运行时。
+#
+# 基线口径 (批次89 实测): 905 passed / 1 skipped, 覆盖率 TOTAL 76%
+# (coverage --cov=adr, 10784 语句 / 2548 未覆盖), 门槛取 73% 留 3pt 波动余量。
 name: smoke
 
 on:
@@ -19,6 +22,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Linux 全量门禁: 版本/合规/依赖漂移断言 + 全量单测 + 覆盖率门槛
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -45,12 +49,66 @@ jobs:
       - name: 安装依赖 (CPU torch + 全量 extras)
         run: |
           python -m pip install --upgrade pip
-          pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+          pip install torch==2.10.0 torchaudio==2.10.0 --index-url https://download.pytorch.org/whl/cpu
           # 批次76 (#23): 用容器钉版清单当 constraints — CI 与 Docker 构建共用同一份
           # 版本清单, 避免"CI 测新版、容器发旧版"的隐性漂移。
           pip install -c docker/requirements-linux.txt -e .[all,dev]
 
-      - name: 单测全量
+      - name: 单测全量 + 覆盖率门槛 (>=73%)
         env:
           NUMBA_CACHE_DIR: /tmp/numba_cache
+        run: |
+          pytest -q --tb=short \
+            --cov=adr --cov-report=term:skip-covered --cov-fail-under=73
+
+  # 批次89 (#25): Windows 落盘/路径/子进程语义与 Linux 差异大, 单开一个全量 job。
+  # 不装 multilang extras (pyopenjtalk 等无 cp311 win 轮子), 相关用例自带 skip。
+  # 批次90 (R3-PACK-01): 加 3.13 — 桌面便携包/安装器实际内置的是 CPython 3.13,
+  # 只测 3.11 等于没测发货运行时 (3.13 的 pathlib/tempfile/子进程行为差异曾漏到用户)。
+  test-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      # 批次90 (R3-PACK-02): 钉版与 docker/Dockerfile、便携包 runtime 一致,
+      # 不钉会在 PyTorch 发新版后测出"CI 通过但发货包另一套 torch"的假绿。
+      - name: 安装依赖 (CPU torch)
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch==2.10.0 torchaudio==2.10.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install -c docker/requirements-linux.txt -e .[m1,m2,dev]
+
+      - name: 单测全量 (Windows)
+        env:
+          NUMBA_CACHE_DIR: ${{ runner.temp }}/numba_cache
+          PYTHONUTF8: "1"
         run: pytest -q --tb=short
+
+  # 批次89 (#25): 桌面壳 Rust 单测 (update.rs 9 + lib.rs 10) 之前完全不在 CI 中。
+  rust:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: desktop/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: cargo test
+        run: cargo test --locked

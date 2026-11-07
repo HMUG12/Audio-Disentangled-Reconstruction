@@ -209,5 +209,32 @@ def test_frame_bytes_full_wav():
     assert struct.unpack_from("<I", frame, 24)[0] == 32000
 
 
+# ─── 客户端断连 (批次89 #26): 生成器 close 必须把 GeneratorExit 透传到上游 ───
+
+def test_stream_generator_client_cancel_closes_upstream(monkeypatch):
+    """客户端断开时 Starlette 会 close() 生成器: 上游 finally 必须执行,
+    且 GeneratorExit 不能被 except Exception 吞掉后继续产字节。"""
+    from adr.server import v2_compat
+
+    closed = []
+
+    def fake_stream_bytes(*_a, **_kw):
+        try:
+            yield b"a"
+            yield b"b"
+        finally:
+            closed.append("upstream-closed")
+
+    monkeypatch.setattr(v2_compat.SynthesisService, "stream_bytes",
+                        staticmethod(fake_stream_bytes))
+    gen = v2_compat._stream_generator(
+        object(), {"text": "x", "ref_audio_path": "r"}, "raw")
+    assert next(gen) == b"a"
+    gen.close()
+    assert closed == ["upstream-closed"]
+    with pytest.raises(StopIteration):
+        next(gen)
+
+
 def test_media_types_whitelist():
     assert MEDIA_TYPES == ("wav", "mp3", "raw", "ogg", "aac")

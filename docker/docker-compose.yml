@@ -2,7 +2,7 @@
 #
 # 镜像为纯 HTTP 服务形态 (无 WebUI):
 #   入口: python -m adr.server --addr 0.0.0.0 --port 9881
-#   健康检查: http://127.0.0.1:9881/api/adr/v1/health
+#   健康检查: http://127.0.0.1:9881/api/adr/v1/readyz (引擎未就绪/降级时 503)
 #
 # 用法 (CPU):
 #   docker compose up -d --build        # 构建并后台启动
@@ -42,6 +42,11 @@ services:
       - pretrained_models:/app/third_party/gpt_sovits/pretrained_models
       - g2pw_model:/app/third_party/gpt_sovits/text/G2PWModel
     environment:
+      # 批次90 (SEC-04 残留): 镜像不再写死 ADR_ALLOW_UNAUTHENTICATED=1,
+      # 改由本文件显式声明"已知悉"——安全前提是下面 ports 只发布到 127.0.0.1。
+      # 若要对外发布 (0.0.0.0:9881:9881), 请删除本行并设置 ADR_TTS_API_KEY,
+      # 否则等于把无鉴权的合成/换权/管理接口开放给整个网络。
+      ADR_ALLOW_UNAUTHENTICATED: "1"
       # 批次62 无 UI 形态条款 gate: 容器默认**拒绝启动** (exit 2), 需显式
       # 同意使用条款 — 取消下行注释即视为你已阅读并同意 (要点见 README)。
       # 同意标记会写入挂载的 /data (.terms_agreed_v1), 仅需同意一次。

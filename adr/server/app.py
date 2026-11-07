@@ -14,6 +14,9 @@
 """
 from __future__ import annotations
 
+import asyncio
+import atexit
+import logging
 import threading
 from contextlib import asynccontextmanager
 
@@ -147,7 +150,19 @@ def create_app(engine=None) -> FastAPI:
         if engine is None:
             threading.Thread(target=_prewarm_gsv, args=(default_profile,),
                              daemon=True, name="adr-prewarm").start()
-        yield
+            # 批次90 (R3-LIFE-01): 兜底 — 非 uvicorn 优雅退出路径 (异常/直接
+            # 退出) 也要回收训练/门禁/下载子进程, 否则孤儿进程继续占 GPU。
+            atexit.register(console.stop_background_procs)
+        try:
+            yield
+        finally:
+            # 批次90 (R3-LIFE-01): 控制台起的训练/门禁/下载子进程都是
+            # start_new_session 独立进程组, 父进程退出不传导 — 必须显式回收。
+            try:
+                await asyncio.to_thread(console.stop_background_procs)
+            except Exception:
+                logging.getLogger("adr").warning(
+                    "shutdown: 回收后台子进程失败", exc_info=True)
 
     app = FastAPI(
         title="ADR TTS Server",

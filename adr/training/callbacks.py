@@ -161,6 +161,44 @@ class ProgressCallback(Callback):
         print(f"  Epoch {epoch + 1} done ({elapsed:.1f}s): {metric_str}")
 
 
+def _mel_to_wav(
+    mel,
+    *,
+    use_placeholder: bool,
+    get_vocoder,
+    tag: str,
+):
+    """mel → wav 的唯一实现 (WavQualityCallback / ASRCallback 共用)。
+
+    placeholder 模式用 180Hz 基频 + mel 能量包络合成波形 (能给 RMS/centroid/F0
+    提供信号, 但不是真实音色); 真实 vocoder 由调用方的 get_vocoder() 懒加载。
+    """
+    import numpy as np
+
+    if use_placeholder or mel is None:
+        mel = mel.detach().cpu().numpy() if hasattr(mel, "detach") else mel
+        mel = mel.mean(axis=0) if mel.ndim == 2 else mel  # (T,)
+        n_samples = max(1000, len(mel) * 256)
+        t = np.linspace(0, len(mel) * 256 / 22050, n_samples)
+        fundamental = 0.5 * np.sin(2 * np.pi * 180 * t)
+        envelope = np.interp(
+            np.linspace(0, len(mel), n_samples),
+            np.arange(len(mel)),
+            mel / (mel.max() + 1e-8),
+        )
+        return (fundamental * envelope * 0.3).astype(np.float32)
+    vocoder = get_vocoder()
+    if vocoder is None or not vocoder.is_loaded():
+        return None
+    try:
+        mel_t = mel.unsqueeze(0) if mel.ndim == 2 else mel
+        wav = vocoder.infer(mel_t)
+        return wav.squeeze().cpu().numpy() if hasattr(wav, "cpu") else wav
+    except Exception as e:
+        print(f"  [{tag}] vocoder.infer failed: {type(e).__name__}: {e}")
+        return None
+
+
 class WavQualityCallback(Callback):
     """Wav 质量监控回调 (M3)。
 
@@ -359,37 +397,12 @@ class WavQualityCallback(Callback):
 
     def _mel_to_wav(self, mel):
         """mel → wav (placeholder 或真实 vocoder, 真实 vocoder 缓存)。"""
-        import numpy as np
-        if self.use_placeholder_vocoder or mel is None:
-            # placeholder: 用 mel 能量做相位重建 (粗略但能给 RMS/centroid 信号)
-            mel = mel.detach().cpu().numpy() if hasattr(mel, "detach") else mel
-            # 反 STFT 不可行, 用 mel 能量调制白噪声 (给真实 wav 频谱)
-            mel = mel.mean(axis=0) if mel.ndim == 2 else mel  # (T,)
-            n_samples = len(mel) * 256
-            if n_samples < 1000:
-                n_samples = 1000
-            t = np.linspace(0, len(mel) * 256 / 22050, n_samples)
-            # 基础波形: 180Hz 的人声基频 + 谐波
-            fundamental = 0.5 * np.sin(2 * np.pi * 180 * t)
-            # 调制 mel 能量
-            envelope = np.interp(
-                np.linspace(0, len(mel), n_samples),
-                np.arange(len(mel)),
-                mel / (mel.max() + 1e-8),
-            )
-            wav = fundamental * envelope * 0.3
-            return wav.astype(np.float32)
-        # 真实 vocoder 调用 (懒加载 + 缓存)
-        vocoder = self._get_vocoder()
-        if vocoder is None or not vocoder.is_loaded():
-            return None
-        try:
-            mel_t = mel.unsqueeze(0) if mel.ndim == 2 else mel
-            wav = vocoder.infer(mel_t)
-            return wav.squeeze().cpu().numpy() if hasattr(wav, "cpu") else wav
-        except Exception as e:
-            print(f"  [WavQuality] vocoder.infer failed: {type(e).__name__}: {e}")
-            return None
+        return _mel_to_wav(
+            mel,
+            use_placeholder=self.use_placeholder_vocoder,
+            get_vocoder=self._get_vocoder,
+            tag="WavQuality",
+        )
 
     def on_epoch_end(self, trainer, epoch, metrics, **kwargs):
         if self.should_stop:
@@ -629,9 +642,6 @@ class ASRCallback(Callback):
         - GPU: 1-5s/epoch (small)
     """
 
-    # use_real_vocoder 旧别名, 保留兼容
-    _USE_REAL_DEFAULT = True
-
     def __init__(
         self,
         n_samples: int = 5,
@@ -741,37 +751,17 @@ class ASRCallback(Callback):
         self._asr_caches.pop(size, None)
         if size == self.asr_model_sizes[0]:
             self._asr_cache = None
-            self._asr_cpu_fallback = True  # 兼容旧属性
         print(f"  [ASR] CUDA transcribe failed ({size}), fallback to CPU int8")
         return self._get_asr(force_cpu=True, size=size)
 
     def _mel_to_wav(self, mel):
         """mel → wav。"""
-        import numpy as np
-        if not self.use_real_vocoder or mel is None:
-            # placeholder: 简单正弦 + 调制 (复用 WavQualityCallback 逻辑)
-            mel = mel.detach().cpu().numpy() if hasattr(mel, "detach") else mel
-            mel = mel.mean(axis=0) if mel.ndim == 2 else mel
-            n_samples = max(1000, len(mel) * 256)
-            t = np.linspace(0, len(mel) * 256 / 22050, n_samples)
-            fundamental = 0.5 * np.sin(2 * np.pi * 180 * t)
-            envelope = np.interp(
-                np.linspace(0, len(mel), n_samples),
-                np.arange(len(mel)),
-                mel / (mel.max() + 1e-8),
-            )
-            return (fundamental * envelope * 0.3).astype(np.float32)
-        # 真实 vocoder
-        vocoder = self._get_vocoder()
-        if vocoder is None or not vocoder.is_loaded():
-            return None
-        try:
-            mel_t = mel.unsqueeze(0) if mel.ndim == 2 else mel
-            wav = vocoder.infer(mel_t)
-            return wav.squeeze().cpu().numpy() if hasattr(wav, "cpu") else wav
-        except Exception as e:
-            print(f"  [ASR] vocoder.infer failed: {e}")
-            return None
+        return _mel_to_wav(
+            mel,
+            use_placeholder=not self.use_real_vocoder,
+            get_vocoder=self._get_vocoder,
+            tag="ASR",
+        )
 
     def _asr_transcribe(self, wav, sr=22050, size: Optional[str] = None) -> str:
         """wav → text (CUDA 失败自动回退 CPU)。

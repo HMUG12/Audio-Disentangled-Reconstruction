@@ -27,7 +27,7 @@
 | Scout 架构 | 模块分层与依赖方向、热点/风险区 | 12 个包，`models`(6,666 行)/`server`(3,628)/`training`(3,215)/`core`(2,456) 占 77% |
 | Bugs 缺陷 | 资源与错误处理缺陷 6 条 | `except Exception` 137 处、`except BaseException` 18 处 |
 | Security 安全 | 严重 1、高危 3、中危 3 | 未鉴权写/读入口 2 个；`weights_only=False` 5 处 |
-| DeadCode 死代码 | 见第五章 | 零引用符号 7 个；不可达回调约 1,000 行；`__init__` 导出 40/56（71%）无包级消费者 |
+| DeadCode 死代码 | 见第五章 | 零引用符号 7 个（批次89 已删 6、留 1 为对外 API）；不可达回调约 1,000 行（批次89 已接入 `adr train`，默认关闭）；`__init__` 导出 40/56（71%）无包级消费者 |
 | TestGaps 测试缺口 | 见第六章 | 59 文件 / 781 个 `def test_` / pytest 收集 854 条 / 13,913 行；测试:源码 ≈ 1.76:1（按公开函数约 3:1） |
 | Performance 性能 | 4 条瓶颈 | 每请求一次读盘 + 每次 mel 重建滤波器组 + 逐块 ffmpeg + O(n²) 拼接 |
 | Verify 对抗验证 | 33 条候选 → 24 条保留 | 保留率 73%，全部为 3/3 全票；9 条未过半/证据不足已剔除（不列入本报告） |
@@ -549,6 +549,13 @@
 
 ### OPS-01 · `audit.log` 每事件打开一次，无轮转、无进程内锁
 
+> **状态：已修复（批次 89，2026-11-07，代码侧）**
+> `core/audit.py` 增加进程内 `threading.Lock` 串行化整条「判大小 → 轮转 → 追加」；按大小轮转
+> `MAX_BYTES = 5MB` / `BACKUPS = 3`（`audit.log` → `.1` → `.2` → `.3`，最旧档覆盖）。
+> `stat()` 失败（如首次运行目录不可读）时跳过轮转继续追加，不因轮转抛错丢掉本次审计。
+> 回归用例见 `tests/test_safety.py::test_audit_rotates_by_size` /
+> `::test_audit_thread_safe_no_interleaving`。
+
 - **位置**：[core/audit.py L29-L43](file:///e:/新创意构思/新建文件夹/ADR/adr/core/audit.py#L29-L43)
 - **证据**：`with open(log_dir / "audit.log", "a", ...)`，无 `RotatingFileHandler`、无 `threading.Lock`（多线程追加依赖 OS 原子性，但不保证多条记录不交错）。
 - **影响**：长期运行单文件无限增长；多个 worker/线程并发写可能产生半行；审计失败被 `except Exception` 静默吞掉，磁盘满时"以为有日志其实没有"。
@@ -578,33 +585,34 @@
 
 **零引用符号清单（逐个复核，计数含定义行 = 1）**
 
-| 符号 | 位置 | 判定 |
+| 符号 | 位置（审计时） | 判定 |
 |---|---|---|
-| `get_version` | `adr/__init__.py:37` | 公共便利 API，内部零调用；可保留但应标注为对外 API，否则删除 |
-| `get_free_vram_gb` | `adr/core/device.py:258` | 内部死代码，可删 |
-| `print_memory_usage` | `adr/core/device.py:266` | 内部死代码，可删 |
-| `build_sovits_preset` | `adr/models/sovits.py:69` | 内部死代码，可删 |
-| `slice_audio_by_time` | `adr/utils/audio.py:368` | 内部死代码，可删 |
-| `pad_or_trim` | `adr/utils/audio.py:380` | 内部死代码，可删 |
-| `_USE_REAL_DEFAULT` | `adr/training/callbacks.py:633` | 常量零引用，可删 |
+| `get_version` | `adr/__init__.py:37` | 公共便利 API，内部零调用；可保留但应标注为对外 API，否则删除 —— **批次89：保留，docstring 标注为对外 API** |
+| `get_free_vram_gb` | `adr/core/device.py:258` | 内部死代码，可删 —— **批次89 已删除** |
+| `print_memory_usage` | `adr/core/device.py:266` | 内部死代码，可删 —— **批次89 已删除** |
+| `build_sovits_preset` | `adr/models/sovits.py:69` | 内部死代码，可删 —— **批次89 已删除**（`SOVITS_PRESETS` 常量保留） |
+| `slice_audio_by_time` | `adr/utils/audio.py:368` | 内部死代码，可删 —— **批次89 已删除** |
+| `pad_or_trim` | `adr/utils/audio.py:380` | 内部死代码，可删 —— **批次89 已删除** |
+| `_USE_REAL_DEFAULT` | `adr/training/callbacks.py:633` | 常量零引用，可删 —— **批次89 已删除** |
 
-另有 1 个"生产不读、仅测试读"的兼容属性 `_asr_cpu_fallback`（[callbacks.py L744](file:///e:/新创意构思/新建文件夹/ADR/adr/training/callbacks.py#L744)，仅 `tests/test_asr_callback.py:431/458` 断言）——生产逻辑已改用 `_asr_cpu_fallback_set`，该属性属于遗留兼容层。
+另有 1 个"生产不读、仅测试读"的兼容属性 `_asr_cpu_fallback`（[callbacks.py L744](file:///e:/新创意构思/新建文件夹/ADR/adr/training/callbacks.py#L744)，仅 `tests/test_asr_callback.py:431/458` 断言）——生产逻辑已改用 `_asr_cpu_fallback_set`，该属性属于遗留兼容层。**批次89：已删除，测试改为断言 `_asr_cpu_fallback_set` 成员关系。**
 
 ### 8.2 重复实现
 
-| 重复项 | 位置 | 说明 |
+| 重复项 | 位置（审计时） | 说明 |
 |---|---|---|
-| `is_safe_name` | `models/voice_library.py:27` / `server/pathsafe.py:37` | 同一白名单校验两份实现（含 `adr/` 19 处引用、`tests/` 11 处） |
-| `_mel_to_wav` | `training/callbacks.py:360` / `:748` | 两个回调类各写一份 |
-| mel 算法两套 | `utils/audio.py:247`（v1）/ `:300`（bigvgan） | 生产已统一 bigvgan，v1 仍被脚本/测试引用 |
-| 目录包含校验 | `voice_library.py:161-L165` / `pathsafe.resolve_within:17-L34` | 逻辑等价 |
-| 缓存淘汰 | `tts_cache` LRU（内存/磁盘两套记账） / `gsv_runtime` LRU | 两套独立实现，语义不同（一个含磁盘条目） |
+| `is_safe_name` | `models/voice_library.py:27` / `server/pathsafe.py:37` | 同一白名单校验两份实现（含 `adr/` 19 处引用、`tests/` 11 处）—— **批次89 已单点化到 `adr/core/naming.py`**，`server/pathsafe.py` 降为再导出门面 |
+| `_mel_to_wav` | `training/callbacks.py:360` / `:748` | 两个回调类各写一份 —— **批次89 已合并为模块级单实现**，两个类改为薄委托（只传 `use_placeholder` 与日志 tag） |
+| mel 算法两套 | `utils/audio.py:247`（v1）/ `:300`（bigvgan） | 生产已统一 bigvgan，v1 仍被脚本/测试引用（未在批次89 处理） |
+| 目录包含校验 | `voice_library.py:161-L165` / `pathsafe.resolve_within:17-L34` | 逻辑等价 —— **批次89 已单点化到 `core/naming.resolve_within`** |
+| 缓存淘汰 | `tts_cache` LRU（内存/磁盘两套记账） / `gsv_runtime` LRU | 两套独立实现，语义不同（一个含磁盘条目）（未在批次89 处理） |
 
 ### 8.3 不可达/近不可达代码
 
 - `training/callbacks.py` 约 **1,000 行**（`WavQualityCallback` L164、`ASRCallback` L586、`WarmRestartCallback` L1072）在产品入口（`adr train` / console）**未注册**：[cli.py L574-L700](file:///e:/新创意构思/新建文件夹/ADR/adr/cli.py#L574-L700) 只挂 Progress/Checkpoint/Logger。这些类仅测试与 `scripts/` 可达。
+  - **批次89：已接入 `adr train`** —— 新增 `--eval-wav-quality` / `--eval-asr` / `--eval-samples`（默认 5）/ `--warm-restart`，四个开关**默认全关**，不传时 `callbacks=[]`，训练行为与整改前逐字节一致。前两者各自追加对应回调并抢占早停指标（WavQuality → `wav_quality`/max，ASR → `asr_cer`/min，同时开启时 ASR 生效）；`--warm-restart` 单独使用回退 `val/loss`/min，且**始终追加在最后**（依赖前者已产出的指标）。回归用例见 `tests/test_audit_cli_misc.py` 的 4 个 `test_train_wires_*` / `test_train_defaults_*`。
 - 死分支：`v2_compat.py:283-L286`（mode 3 与 2 同一路径，见 API-01）。
-- 死常量/死属性：`callbacks.py:633`、`callbacks.py:744`。
+- 死常量/死属性：`callbacks.py:633`、`callbacks.py:744` —— **批次89 已删除**（见 8.1）。
 
 ### 8.4 其它简化机会
 
@@ -628,23 +636,23 @@
 | 测试/源码行比 | ≈ **1.76 : 1** |
 | 测试/公开函数比（781 / 260） | ≈ **3 : 1** |
 | `xfail` 标记 | 0 |
-| CI 中永不执行的 skip | 2（`test_audit_packaging.py:54`、`test_server_security.py:54`，均 Windows-only，而 CI 仅 ubuntu） |
-| Rust 单测 | 19（`update.rs` 9 + `lib.rs` 10），**CI 完全不跑** |
+| CI 中永不执行的 skip | 2（`test_audit_packaging.py:54`、`test_server_security.py:54`，均 Windows-only，而 CI 仅 ubuntu）—— **批次89 已加 Windows job，不再跳过** |
+| Rust 单测 | 19（`update.rs` 9 + `lib.rs` 10），**CI 完全不跑** —— **批次89 已加 `rust` job** |
 
 ### 9.2 高风险但无直接测试的代码（按风险排序）
 
-| 代码 | 位置 | 缺口 |
-|---|---|---|
-| 流式 worker 生命周期 / 断连 / 卡死降级 | `gsv_engine.py:868-L986` | 只有 mock 级线程测试（`test_gsv_stream_threading.py:37-L50` 用假 `run`），无"上游永卡"场景，CON-01 因此长期未被发现 |
-| `validate_weights_file` 慢路径 | `gsv_engine.py:238-L260` | 无超大文件/UNC/截头 zip 的边界用例 |
-| `_seg_cache_key` 的权重维度 | `gsv_runtime.py:38-L51` | 无"同路径换权重"用例（CACHE-01 逃逸） |
-| `gsv_bootstrap.ensure` 并发锁 | `gsv_bootstrap.py:149-L291` | 无多线程同时下载/校验失败回滚用例 |
-| `voice_package` 完整性失败路径 | `voice_package.py:200-L330` | 仅 happy path + 简单 rollback，无"提交中途断电/部分替换" |
-| `_split_long` / `_stream_head_split` | `gsv_engine.py:768-L810` | 无无标点长文、超长英文词用例 |
-| `update.rs` 下载/安装链 | `update.rs:450-L682` | 19 个 Rust 单测覆盖纯函数，网络/落盘/安装全未测且 CI 不跑 |
-| `is_cuda_oom` / `handle_cuda_oom` | 全仓 | 无真实 OOM 异常样例 |
-| `utils/audio` 四个 helper | `audio.py:352-L400` | `get_audio_info`/`slice_audio_by_time`/`pad_or_trim` 无测试 |
-| `v2._stream_generator` 客户端断连 | `v2_compat.py:200-L241` | 无"生成器被 cancel"用例 |
+| 代码 | 位置 | 缺口 | 批次89 状态 |
+|---|---|---|---|
+| 流式 worker 生命周期 / 断连 / 卡死降级 | `gsv_engine.py:868-L986` | 只有 mock 级线程测试（`test_gsv_stream_threading.py:37-L50` 用假 `run`），无"上游永卡"场景，CON-01 因此长期未被发现 | 未补（"上游永卡 + 降级重建"需可控阻塞桩，留待专门用例） |
+| `validate_weights_file` 慢路径 | `gsv_engine.py:238-L260` | 无超大文件/UNC/截头 zip 的边界用例 | **已补**：截半 zip 拒绝、丢 `PK` 头自愈并登记指纹 |
+| `_seg_cache_key` 的权重维度 | `gsv_runtime.py:38-L51` | 无"同路径换权重"用例（CACHE-01 逃逸） | 批次88 已补（换权清缓存 + 指纹入 key） |
+| `gsv_bootstrap.ensure` 并发锁 | `gsv_bootstrap.py:149-L291` | 无多线程同时下载/校验失败回滚用例 | **已补**：3 线程并发断言互斥（max 并发 == 1）且只解压一次 |
+| `voice_package` 完整性失败路径 | `voice_package.py:200-L330` | 仅 happy path + 简单 rollback，无"提交中途断电/部分替换" | 未补 |
+| `_split_long` / `_stream_head_split` | `gsv_engine.py:768-L810` | 无无标点长文、超长英文词用例 | **已补 5 例**：120 字无标点硬切（3 段 / 每段 ≤55）、标点优先、整段不切、首包切分 |
+| `update.rs` 下载/安装链 | `update.rs:450-L682` | 19 个 Rust 单测覆盖纯函数，网络/落盘/安装全未测且 CI 不跑 | **CI 已跑** `cargo test`；网络/落盘链仍未测 |
+| `is_cuda_oom` / `handle_cuda_oom` | 全仓 | 无真实 OOM 异常样例 | **已补**：真实 `torch.cuda.OutOfMemoryError` 命中、普通 `RuntimeError` 与同名异模块类不命中 |
+| `utils/audio` 四个 helper | `audio.py:352-L400` | `get_audio_info`/`slice_audio_by_time`/`pad_or_trim` 无测试 | `slice_audio_by_time`/`pad_or_trim` 批次89 **已删除**；`get_audio_info` 仍无直接用例 |
+| `v2._stream_generator` 客户端断连 | `v2_compat.py:200-L241` | 无"生成器被 cancel"用例 | **已补**：`gen.close()` 后上游 `finally` 必须执行且不再产字节 |
 
 ### 9.3 "只测 mock 形状"的用例（覆盖假阳性）
 
@@ -655,7 +663,19 @@
 
 ### 9.4 CI 口径
 
-[.github/workflows/smoke.yml](file:///e:/新创意构思/新建文件夹/ADR/.github/workflows/smoke.yml) 仅 `ubuntu-latest + pytest`：
+> **状态：已整改（批次 89）**
+> [smoke.yml](file:///e:/新创意构思/新建文件夹/ADR/.github/workflows/smoke.yml) 现为三个 job：
+> - `test`（ubuntu-latest）：原有三个治理脚本 + 全量单测，新增
+>   `--cov=adr --cov-report=term:skip-covered --cov-fail-under=73`；
+> - `test-windows`（windows-latest）：全量单测，覆盖落盘/路径/子进程语义差异，
+>   不装 `multilang`（无 cp311 win 轮子，相关用例自带 skip）；
+> - `rust`（windows-latest）：`cargo test --locked`，`desktop/src-tauri` 的 19 个单测首次进 CI。
+>
+> 覆盖率门槛取 **73%**：本地全量实测 `905 passed / 1 skipped`、`TOTAL 76%`
+> （10784 语句 / 2548 未覆盖），留 3pt 波动余量；基线口径已写入工作流头注释，
+> 取代过时的"431+"。GPU 路径仍不在 CI 中（无 runner）。
+
+原始发现：`ubuntu-latest + pytest` 单 job：
 
 - 注释仍写"431+ 基线"，实际 781/854 —— 口径过时。
 - 不跑 Rust（`cargo test` 缺位）、不跑 Windows、不跑 GPU 路径。
@@ -711,11 +731,18 @@
 
 | # | 条目 |
 |---|---|
-| 22 | 删除 6 个零引用符号（保留 `get_version` 则标注为对外 API） |
-| 23 | 统一 `is_safe_name`、`_mel_to_wav`、目录包含校验 |
-| 24 | 为 `callbacks.py` 三个未注册回调二选一：接入 `adr train`，或移到 `scripts/` 并标注"实验" |
-| 25 | CI：跑 `cargo test`；Windows job；覆盖率门槛；更新"431+"注释 |
-| 26 | 补 9.2 表中的关键用例（优先 CON-01、CACHE-01、SEC-02） |
+| 22 | ✅ 批次89：删除 6 个零引用符号（`get_version` 保留并标注为对外 API） |
+| 23 | ✅ 批次89：统一 `is_safe_name`、`_mel_to_wav`、目录包含校验 |
+| 24 | ✅ 批次89：为 `callbacks.py` 三个未注册回调**接入 `adr train`**（默认关闭） |
+| 25 | ✅ 批次89：CI 跑 `cargo test`；Windows job；覆盖率门槛；更新"431+"注释 |
+| 26 | ✅ 批次89：补 9.2 表中的关键用例（SEC-02 慢路径、bootstrap 并发、`_split_long`、`is_cuda_oom`、断连，另加审计轮转/线程安全） |
+
+> 批次 89 落地口径：
+> - **#22** 删 `get_free_vram_gb`、`print_memory_usage`、`build_sovits_preset`、`slice_audio_by_time`、`pad_or_trim`、`_USE_REAL_DEFAULT`，并删兼容属性 `_asr_cpu_fallback`（测试改断言 `_asr_cpu_fallback_set`）；`get_version` 保留，docstring 标明"对外 API"。
+> - **#23** `is_safe_name` / `resolve_within` 下沉 `adr/core/naming.py` 为唯一实现，`server/pathsafe.py` 与 `models/voice_library.py` 改为引用（`voice_library.save_voice` 的目录包含校验也走 `resolve_within`）；`_mel_to_wav` 合并为 `callbacks.py` 模块级单函数，两回调只传 `use_placeholder` 与日志 tag。防回归：`test_naming.py` 断言三处是**同一对象**。
+> - **#24** 新增 `--eval-wav-quality` / `--eval-asr` / `--eval-samples`（默认 5）/ `--warm-restart`，**默认全关**（`callbacks=[]`，训练行为不变）；早停指标按 WavQuality(`max`) → ASR(`min`) 优先级，WarmRestart 最后追加并回退 `val/loss`。
+> - **#25** 见 9.4；门槛 73%，基线 905 passed / 1 skipped / 76%。
+> - **#26** 见 9.2 状态列；外加 OPS-01 的轮转与并发用例（`test_safety.py`）。
 
 ---
 

@@ -35,5 +35,5 @@ from adr.vocoder import bigvgan  # noqa: F401
 
 
 def get_version() -> str:
-    """返回框架版本号。"""
+    """返回框架版本号 (对外 API: 供外部集成方探测版本, 内部不依赖)。"""
     return __version__

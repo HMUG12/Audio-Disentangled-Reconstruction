@@ -44,6 +44,8 @@ const I18N_DICT = {
   "pro.ov_doctor": ["环境诊断", "Environment Check"],
   "pro.btn_doctor": ["一键诊断", "Run Check"],
   "pro.btn_doctor_fix": ["自动修复问题项", "Auto-fix Issues"],
+  "pro.btn_doctor_copy": ["复制诊断报告", "Copy Report"],
+  "pro.doctor_copied": ["诊断报告已复制到剪贴板", "Diagnostic report copied"],
   "pro.doctor_sum": ["{ok} 正常 · {fixed} 已修复 · {warn} 警告 · {fail} 失败", "{ok} OK · {fixed} fixed · {warn} warnings · {fail} failed"],
   "pro.doctor_running": ["诊断中…", "Diagnosing…"],
   "pro.toast_fix_done": ["修复完成", "Fixes applied"],

@@ -109,6 +109,49 @@ def test_audit_failure_degrades(monkeypatch):
     log_event("synthesis", text_fp="x")  # 不应抛
 
 
+def test_audit_rotates_by_size(monkeypatch):
+    """OPS-01 (批次89): 超过 MAX_BYTES 轮转, 只保留 3 份备份。"""
+    from adr.core import audit
+
+    monkeypatch.setattr(audit, "MAX_BYTES", 200)
+    for i in range(20):
+        log_event("synthesis", seq=i)
+    log_dir = flag_path().parent / "logs"
+    assert (log_dir / "audit.log").exists()
+    for i in (1, 2, 3):
+        assert (log_dir / f"audit.log.{i}").exists(), f"缺少 audit.log.{i}"
+    assert not (log_dir / "audit.log.4").exists()
+    # 最新档里必须有最后一条事件
+    last = json.loads((log_dir / "audit.log").read_text(
+        encoding="utf-8").splitlines()[-1])
+    assert last["seq"] == 19
+
+
+def test_audit_thread_safe_no_interleaving(monkeypatch):
+    """OPS-01 (批次89): 多线程并发写不产生半行/交错行。"""
+    import threading
+
+    from adr.core import audit
+
+    monkeypatch.setattr(audit, "MAX_BYTES", 10 * 1024 * 1024)  # 关闭轮转
+    log_dir = flag_path().parent / "logs"
+
+    def writer(tid):
+        for i in range(20):
+            log_event("synthesis", tid=tid, seq=i)
+
+    threads = [threading.Thread(target=writer, args=(t,)) for t in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+
+    lines = [ln for ln in (log_dir / "audit.log").read_text(
+        encoding="utf-8").splitlines() if ln.strip()]
+    assert len(lines) == 80
+    assert all(json.loads(ln)["event"] == "synthesis" for ln in lines)
+
+
 # ===== 条款标记 =====
 
 def test_terms_mark_and_agreed():

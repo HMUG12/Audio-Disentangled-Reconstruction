@@ -338,6 +338,33 @@ def test_native_health(client):
     assert isinstance(body["synth_busy"], int) and body["synth_busy"] >= 0
 
 
+def test_native_readyz_reflects_engine_state(client, monkeypatch):
+    """批次90 (R3-OBS-01): /readyz 是就绪探针 — 未就绪或永久降级一律 503;
+    /health 仍是 liveness (恒 200), 两者语义不得混用。"""
+    from adr.models import gsv_engine
+
+    monkeypatch.setattr(gsv_engine, "is_ready", lambda: True)
+    monkeypatch.setattr(gsv_engine, "is_stalled", lambda: False)
+    r = client.get("/api/adr/v1/readyz")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["engine_ready"] is True
+    assert body["engine_stalled"] is False
+
+    # 卡死降级 → 503 (编排层据此重启/摘流量)
+    monkeypatch.setattr(gsv_engine, "is_stalled", lambda: True)
+    r = client.get("/api/adr/v1/readyz")
+    assert r.status_code == 503
+    assert r.json()["status"] == "unavailable"
+
+    # 预热中未就绪 → 同样 503; liveness 不受影响
+    monkeypatch.setattr(gsv_engine, "is_stalled", lambda: False)
+    monkeypatch.setattr(gsv_engine, "is_ready", lambda: False)
+    assert client.get("/api/adr/v1/readyz").status_code == 503
+    assert client.get("/api/adr/v1/health").status_code == 200
+
+
 def test_native_profiles(client, voice_dir):
     r = client.get("/api/adr/v1/profiles")
     assert r.status_code == 200
@@ -552,6 +579,26 @@ def test_theme_js_served_and_pages_reference_it(client):
         assert key in i18n, key
 
 
+def test_easy_console_voice_pack_wiring(client):
+    """批次91: 新手控制台音色包导入/导出入口存在且接线正确, i18n 键齐全。"""
+    from pathlib import Path
+
+    html = client.get("/easy").text
+    for el in ("vExportBtn", "vImportBtn", "vImportFile"):
+        assert el in html, el
+    assert "/export" in html and "/profiles/import" in html
+    root = Path(__file__).resolve().parents[1]
+    dict_js = (root / "adr/server/static/i18n-easy.js").read_text(encoding="utf-8")
+    for key in ("easy.pkg_export", "easy.pkg_import", "easy.pkg_hint",
+                "easy.pkg_pick_first", "easy.pkg_export_confirm",
+                "easy.pkg_exporting", "easy.pkg_export_done",
+                "easy.pkg_export_fail", "easy.pkg_importing",
+                "easy.pkg_import_ok", "easy.pkg_import_fail",
+                "easy.pkg_import_fail_msg", "easy.pkg_confirm_overwrite",
+                "easy.pkg_confirm_shared"):
+        assert f'"{key}"' in dict_js, key
+
+
 def test_auth_wrong_key_401(auth_client):
     r = auth_client.get("/api/v2/tts",
                         params={"text": "hi", "ref_audio_path": "a.wav"},
@@ -583,6 +630,15 @@ def test_auth_keys_exact_match(auth_client):
 def test_auth_health_exempt(auth_client):
     """监控探活免凭据。"""
     assert auth_client.get("/api/adr/v1/health").status_code == 200
+
+
+def test_auth_readyz_exempt(auth_client, monkeypatch):
+    """批次90: 容器 HEALTHCHECK 不带 key — /readyz 必须与 /health 同样豁免。"""
+    from adr.models import gsv_engine
+
+    monkeypatch.setattr(gsv_engine, "is_ready", lambda: True)
+    monkeypatch.setattr(gsv_engine, "is_stalled", lambda: False)
+    assert auth_client.get("/api/adr/v1/readyz").status_code == 200
 
 
 def test_auth_empty_value_means_off(engine, monkeypatch):

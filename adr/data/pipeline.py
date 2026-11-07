@@ -104,7 +104,8 @@ class TrainSample:
             waveform=self.waveform,
             sample_rate=self.sample_rate,
             # 批次87 (SEC-03): 文本/音素存为 numpy 字符串数组 (非 object),
-            # 让 load 能走 allow_pickle=False — 老文件仍可读, 见 load()
+            # 使 load 能在 allow_pickle=False 下读取
+            # (批次90: object 数组不再回落加载, 见 load())
             text=np.array([self.text]),
             phonemes=np.array([self.phonemes], dtype=str),
             f0=self.f0,
@@ -117,9 +118,10 @@ class TrainSample:
     def load(path: Union[str, Path]) -> "TrainSample":
         """从 npz 加载。
 
-        批次87 (SEC-03): 默认 allow_pickle=False (npz 里的 object 数组可用
-        pickle 执行任意代码); 只有历史文件 (文本/音素为 object dtype, 旧版本
-        写出) 才回落到 allow_pickle=True, 并打一次告警。
+        批次87/90 (SEC-03): 一律 allow_pickle=False — npz 里的 object 数组
+        可在加载时执行任意代码 (训练机上的 RCE)。历史文件 (文本/音素为 object
+        dtype) 不再自动回落, 而是报错并提示重跑预处理: 静默 pickle 反序列化
+        陌生 npz 的风险远大于重跑一次预处理的成本。
         """
         def _read(data) -> "TrainSample":
             # npz 是惰性读取: object 数组的 ValueError 在**取键**时才抛,
@@ -138,10 +140,11 @@ class TrainSample:
 
         try:
             return _read(np.load(path, allow_pickle=False))
-        except ValueError:
-            get_logger("adr.data.pipeline").warning(
-                "legacy npz with object arrays (allow_pickle fallback): %s", path)
-            return _read(np.load(path, allow_pickle=True))
+        except ValueError as e:
+            raise ValueError(
+                f"无法安全加载样本 {path}: npz 内含 object 数组或文件已损坏 "
+                f"(allow_pickle 已禁用, 不再回退)。请重跑数据预处理生成新样本。"
+            ) from e
 
 
 @dataclass

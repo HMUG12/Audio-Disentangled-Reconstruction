@@ -70,6 +70,8 @@ def doctor(fix: bool) -> None:
         click.echo(f"[{icon.get(c['status'], '?')}] {c['name']}")
         for line in c["detail"].split("; "):
             click.echo(f"      {line}")
+        if c.get("hint") and c["status"] in ("warn", "fail"):
+            click.echo(f"      → {c['hint']}")
     s = report["summary"]
     click.echo("=" * 64)
     click.echo(f"结果: {s.get('ok', 0)} 正常, {s.get('fixed', 0)} 已修复, "
@@ -560,6 +562,15 @@ def model_path(name: str) -> None:
 @click.option("--lora-alpha", default=16, help="LoRA alpha")
 @click.option("--qlora", is_flag=True,
               help="真 QLoRA: 4-bit 量化基座 + LoRA (显存再降 60%%, 需 CUDA + bitsandbytes)")
+@click.option("--eval-wav-quality", is_flag=True,
+              help="每 epoch 用 val 样本评估合成 wav 质量 (慢, 默认关闭)")
+@click.option("--eval-asr", is_flag=True,
+              help="每 epoch 用 ASR 评估可懂度 (CER/WER, 慢, 默认关闭)")
+@click.option("--eval-samples", default=5, type=int, show_default=True,
+              help="每个 epoch 的评估样本数 (--eval-* 生效)")
+@click.option("--warm-restart", is_flag=True,
+              help="质量指标平台期时热重启学习率 (默认关闭; 指标取 --eval-asr > "
+                   "--eval-wav-quality > val/loss)")
 def train(
     data: str,
     backbone: str,
@@ -575,6 +586,10 @@ def train(
     lora_rank: int,
     lora_alpha: int,
     qlora: bool,
+    eval_wav_quality: bool,
+    eval_asr: bool,
+    eval_samples: int,
+    warm_restart: bool,
 ) -> None:
     """训练模型 (M1 Day 8 实现)。
 
@@ -583,6 +598,7 @@ def train(
         adr train -d output/processed -b sovits -e 20 -o output/my_model
         adr train -d output/processed --lora              # LoRA 微调
         adr train -d output/processed --qlora             # 4-bit QLoRA (8GB 可训 0.3B)
+        adr train -d output/processed --eval-asr --warm-restart   # ASR 指标 + 热重启
     """
     from adr.core import get_logger
     from adr.core.registry import REGISTRY
@@ -651,7 +667,28 @@ def train(
         except Exception as e:
             log.warning(f"  Failed to load config: {e}")
 
-    # 4. 训练
+    # 4. 可选质量回调 (批次89: 默认全关, 不改变原有训练行为)
+    callbacks: list = []
+    if eval_wav_quality or eval_asr or warm_restart:
+        from adr.training.callbacks import (
+            ASRCallback,
+            WarmRestartCallback,
+            WavQualityCallback,
+        )
+        # 指标优先级: ASR(CER, 越小越好) > wav_quality(越大越好) > val/loss
+        metric_name, mode = "val/loss", "min"
+        if eval_wav_quality:
+            callbacks.append(WavQualityCallback(n_samples=eval_samples))
+            metric_name, mode = "wav_quality", "max"
+        if eval_asr:
+            callbacks.append(ASRCallback(n_samples=eval_samples))
+            metric_name, mode = "asr_cer", "min"
+        if warm_restart:
+            # 必须排在指标 callback 之后: 同 epoch 内先算出指标再决定是否重启
+            callbacks.append(WarmRestartCallback(metric_name=metric_name, mode=mode))
+        log.info(f"  Callbacks: {[c.__class__.__name__ for c in callbacks]}")
+
+    # 5. 训练
     log.info("=" * 60)
     log.info(f"Training: {backbone} on {data}")
     log.info(f"  Output: {output}")
@@ -661,7 +698,8 @@ def train(
     log.info("=" * 60)
 
     try:
-        trainer = Trainer(model=model, train_data=data, config=cfg)
+        trainer = Trainer(model=model, train_data=data, config=cfg,
+                          callbacks=callbacks)
         if resume:
             log.info(f"Resuming from: {resume}")
             trainer.load_checkpoint(resume)

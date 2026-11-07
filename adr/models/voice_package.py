@@ -31,8 +31,8 @@ import zipfile
 from pathlib import Path
 from typing import Callable, Optional
 
+from adr.core.naming import is_safe_name
 from adr.models import voice_library
-from adr.models.voice_library import is_safe_name
 
 REPO_ROOT = voice_library.REPO_ROOT
 GSV_DIR = REPO_ROOT / "third_party" / "gpt_sovits"

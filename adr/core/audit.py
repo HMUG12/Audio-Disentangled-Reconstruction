@@ -16,9 +16,24 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading
 from datetime import datetime
 
 _log = logging.getLogger("adr.audit")
+
+# OPS-01 (批次89): 进程内串行 + 按大小轮转, 避免并发写交错与日志无限增长。
+_lock = threading.Lock()
+MAX_BYTES = 5 * 1024 * 1024   # 单文件上限, 超过即轮转
+BACKUPS = 3                   # 保留 audit.log.1~.3
+
+
+def _rotate(log_path) -> None:
+    """audit.log → .1, 旧档依次后移, 超出 BACKUPS 的最旧档被覆盖。"""
+    for i in range(BACKUPS - 1, 0, -1):
+        src = log_path.with_name(f"{log_path.name}.{i}")
+        if src.exists():
+            src.replace(log_path.with_name(f"{log_path.name}.{i + 1}"))
+    log_path.replace(log_path.with_name(f"{log_path.name}.1"))
 
 
 def text_fp(text: str) -> str:
@@ -35,9 +50,17 @@ def log_event(event: str, **fields) -> None:
         from adr.core.config import adr_data_dir
         log_dir = adr_data_dir() / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "audit.log"
         rec = {"ts": datetime.now().astimezone().isoformat(timespec="seconds"),
                "event": event, **fields}
-        with open(log_dir / "audit.log", "a", encoding="utf-8") as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        line = json.dumps(rec, ensure_ascii=False) + "\n"
+        with _lock:
+            try:
+                if log_path.stat().st_size >= MAX_BYTES:
+                    _rotate(log_path)
+            except OSError:
+                pass  # 首次写入 / 文件被占用时跳过轮转, 继续追加
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(line)
     except Exception:
         _log.warning("audit 写入失败 (已降级跳过)")

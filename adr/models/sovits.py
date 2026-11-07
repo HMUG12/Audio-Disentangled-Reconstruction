@@ -66,17 +66,6 @@ SOVITS_PRESETS: dict[str, tuple[int, int, int, int, int]] = {
 }
 
 
-def build_sovits_preset(preset: str, vocab_size: int = 607) -> "SoVITS":
-    """按预设名构建 SoVITS (preset ∈ small/medium/x0p3b)。"""
-    hd, nl, nh, cd, td = SOVITS_PRESETS[preset]
-    cfg = SoVITSConfig(
-        hidden_dim=hd, n_layers=nl, n_heads=nh, ffn_dim=hd * 4,
-        vocab_size=vocab_size, content_dim=cd, timbre_dim=td,
-        n_mels=80, sample_rate=22050, hop_length=256,
-    )
-    return SoVITS(cfg)
-
-
 class DurationPredictor(nn.Module):
     """时长预测器 (简化版)。"""
 

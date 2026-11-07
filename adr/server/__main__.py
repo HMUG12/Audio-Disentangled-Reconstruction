@@ -174,6 +174,16 @@ def main():
     _enforce_terms(args)
     _warn_unauthenticated_listen(args.addr, from_shell=args.from_shell)
     _print_banner(args.addr, args.port)
+    # 批次90 (R3-CON-01 / CON-01): 进程级 watchdog。
+    # 卡死的 worker 线程可能同时持有引擎锁与 _CHDIR_LOCK, 进程内任何"自愈"
+    # 都拿不到锁 → 永久 503 直到重启。/readyz 只负责把这种状态暴露给编排层,
+    # 真恢复必须靠进程重启: 这里在降级持续超过阈值时记审计后 os._exit(75),
+    # 由 Docker restart policy / 桌面壳 supervise 拉起新进程。
+    # 仅在真实服务入口启动 (不在模块 import / 引擎构造 / 测试中), 阈值可用
+    # ADR_ENGINE_WATCHDOG_SEC 调整, 设 0 关闭。
+    from adr.models import gsv_engine
+    from adr.server import console
+    gsv_engine.start_watchdog(on_exit=console.stop_background_procs)
     uvicorn.run(create_app(), host=args.addr, port=args.port)
 
 

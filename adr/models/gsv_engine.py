@@ -25,6 +25,7 @@ import time
 import traceback
 import zipfile
 from collections import OrderedDict
+from concurrent.futures import TimeoutError as FuturesTimeout
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -68,6 +69,23 @@ _LOCK_WAIT_SEC = 55.0
 # 批次86 (CON-01): 流式消费端静默上限 — 上游 run() 这么久没有产出即判定卡死,
 # 主动取消 + 降级, 让 finally 里的 _mark_stalled 能真正执行到。
 _STREAM_IDLE_SEC = 120.0
+
+# 批次90 (R3-CON-01): 合批 future 等待上限。合批 worker 卡在上游 run() 时
+# future 永不完成, 旧实现 ``.result()`` 无超时 → 请求线程与准入槽永久挂起
+# (anyio 线程池被逐个耗尽)。这里兜"future 永不完成"这一半; 单纯慢请求不会
+# 走到 — 整轮拿不到 _engine_lock 时 55s 内已经 503。
+_COALESCE_WAIT_SEC = 600.0
+
+# 批次90 (R3-OBS-01 / CON-01): 进程级看门狗。卡死 worker 同时持有 _lock 与
+# _CHDIR_LOCK, Python 线程无法安全强杀 → 进程内重建永远拿不到锁, 全站永久
+# 503。唯一可靠收口是交给外部守护重启 (Docker restart policy / 桌面壳
+# supervise 检测到退出后自动拉起)。ADR_ENGINE_WATCHDOG_SEC 为降级容忍秒数,
+# 0 = 关闭; 看门狗只由服务入口启动, 库/测试调用不启用。
+_WATCHDOG_POLL_SEC = 15.0
+_WATCHDOG_DEFAULT_SEC = 300.0
+_WATCHDOG_EXIT_CODE = 75          # EX_TEMPFAIL: 与崩溃退出码区分, 便于排障
+_WATCHDOG_LOCK = threading.Lock()
+_WATCHDOG_STARTED = False
 
 # 批次87 (SEC-02): 权重安全校验结果缓存。旧实现每个带 t2s_weights/vits_weights
 # 的请求都在线程池里整文件 torch.load + 慢路径 f.read() (峰值 2× 文件体积),
@@ -232,6 +250,8 @@ def validate_weights_file(weights_path: str) -> None:
     批次86 (SEC-01): 进入反序列化前先过 _precheck_weights_path —
     UNC/设备路径拒绝、非普通文件拒绝、超过 ADR_TTS_WEIGHTS_MAX_MB 拒绝。
     批次87 (SEC-02): 同一指纹 (路径+mtime_ns+size) 只校验一次, 结果缓存。
+    批次90 (SEC-01 残留): 快路径加 ``mmap=True`` — 仅校验时不把张量整体读进
+    RAM (此前快路径本身就是一次整文件加载)。
     """
     weights_path = _precheck_weights_path(weights_path)
     stamp = weights_stamp(weights_path)
@@ -239,7 +259,11 @@ def validate_weights_file(weights_path: str) -> None:
         return
     import torch
     try:
-        obj = torch.load(weights_path, map_location="cpu", weights_only=True)
+        try:
+            obj = torch.load(weights_path, map_location="cpu",
+                             weights_only=True, mmap=True)
+        except TypeError:  # 老版本 torch 无 mmap= 参数
+            obj = torch.load(weights_path, map_location="cpu", weights_only=True)
     except Exception:
         try:
             _restricted_weights_scan(weights_path)
@@ -347,23 +371,57 @@ class _WeightsScanUnpickler(pickle.Unpickler):
         return _WeightsScanStub()
 
 
+# 批次90 (R3 SEC-01 残留): 慢路径不再整文件读入。data.pkl 是唯一进内存的成员,
+# 给它设解压后大小上限 — 压缩炸弹可以把 zf.read() 撑爆。
+_WEIGHTS_PKL_MAX = 256 * 1024 * 1024
+# 截头 zip 自愈必须整读文件补 "PK", 只对足够小的文件启用: 真实权重 GB 级,
+# 大文件还缺 zip 头只能是损坏或构造的攻击样本。
+_WEIGHTS_PATCH_MAX = 64 * 1024 * 1024
+
+
+@contextlib.contextmanager
+def _open_weights_zip(weights_path: str):
+    """打开 torch zip 权重; 截头文件仅在足够小时自愈 (批次90)。"""
+    with open(weights_path, "rb") as f:
+        head = f.read(2)
+    if head == b"PK":
+        zf = zipfile.ZipFile(weights_path)
+    else:
+        # GSV 生态常见的截头 zip 自愈 (与 third_party process_ckpt.load_sovits_new
+        # 同款补头); 真 legacy 非 zip 格式会在 BadZipFile 处被拒绝。
+        size = os.path.getsize(weights_path)
+        if size > _WEIGHTS_PATCH_MAX:
+            raise pickle.UnpicklingError(
+                "weights file is not a zip archive (header missing, "
+                f"{size} bytes too large to patch)")
+        with open(weights_path, "rb") as f:
+            zf = zipfile.ZipFile(io.BytesIO(b"PK" + f.read()))
+    try:
+        yield zf
+    finally:
+        zf.close()
+
+
 def _restricted_weights_scan(weights_path: str,
                              allow_globals: tuple[tuple[str, str], ...] = ()) -> None:
-    """慢路径: 受限 Unpickler 扫描 torch zip 权重的 data.pkl (不加载张量)。"""
-    with open(weights_path, "rb") as f:
-        raw = f.read()
-    if raw[:2] != b"PK":
-        # GSV 生态常见的截头 zip 自愈 (与 third_party process_ckpt.load_sovits_new
-        # 同款补头); 真 legacy 非 zip 格式会在下方 BadZipFile 拒绝 — 该格式
-        # 仅存于 torch 1.x 古董文件, 官方/ADR 产物均为 zip 格式。
-        raw = b"PK" + raw
+    """慢路径: 受限 Unpickler 扫描 torch zip 权重的 data.pkl (不加载张量)。
+
+    批次90 (SEC-01 残留): 旧实现 ``f.read()`` 整文件 + BytesIO → 单请求峰值约
+    2× 文件体积 (默认上限 2GB → 4GB+)。现在 zip 走磁盘流式中央目录, 只有
+    data.pkl 一个成员进内存, 且解压后大小有硬上限。
+    """
     try:
-        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        with _open_weights_zip(weights_path) as zf:
             pkl_names = [n for n in zf.namelist() if n.endswith("data.pkl")]
             if len(pkl_names) != 1:
                 raise pickle.UnpicklingError(
                     f"expected exactly one data.pkl in weights zip, got {len(pkl_names)}")
-            data = zf.read(pkl_names[0])
+            info = zf.getinfo(pkl_names[0])
+            if info.file_size > _WEIGHTS_PKL_MAX:
+                raise pickle.UnpicklingError(
+                    f"data.pkl too large: {info.file_size} bytes "
+                    f"(limit {_WEIGHTS_PKL_MAX})")
+            data = zf.read(info)
     except zipfile.BadZipFile as e:
         raise pickle.UnpicklingError(
             "not a torch zip weights file (legacy non-zip format not accepted)") from e
@@ -571,6 +629,10 @@ class GSVEngine:
         self._loaded = {"t2s": None, "vits": None}   # 值 = weights_stamp 指纹 (批次9幂等跳过)
         # 批次82 (#1): 流式 worker 超时未退出 → 置位, 下次 _lazy_init 重建模型
         self._stalled = False
+        # 批次90 (R3-OBS-01): 降级起点 (monotonic)。只有模型真正重建成功才清零 —
+        # 卡死 worker 持锁时 _stalled 会先被 _drop_stalled_model 清掉, 但重建会
+        # 卡在 _lock/_CHDIR_LOCK 上, 单看 _stalled 会漏判"永久不可用"。
+        self._degraded_since: Optional[float] = None
         # 批次63 第三子批 (m10 ④): N=1 硬预算调度 — 排队/预算/调度报告收口到
         # SynthesisScheduler; _lock 仍是引擎态硬闸 (旁路调度者也被串行化)。
         # 批次64 第一子批: N=2 固定份额调度层, 放宽准入到 2 槽; _lock 仍串行化,
@@ -674,17 +736,24 @@ class GSVEngine:
         finally:
             self._lock.release()
 
-    def _mark_stalled(self, worker: threading.Thread) -> None:
+    def _mark_stalled(self, worker: Optional[threading.Thread]) -> None:
         """批次82 (#1): 流式 worker 超时未退出 — 标记引擎不可复用。
 
         这里不抢 ``_lock`` (卡死的 worker 可能正持着它), 只置降级标记;
         下一次 ``_lazy_init()`` 在持有 ``_lock`` 后丢弃模型并重建。
+
+        批次90: 同时记录降级起点, 供进程级看门狗判定"永久不可恢复" —
+        ``_drop_stalled_model`` 会提前清掉 ``_stalled``, 但重建会卡在
+        ``_lock`` / ``_CHDIR_LOCK`` 上, 计时必须保留到 TTS 真正重建成功。
         """
+        name = worker.name if worker is not None else "?"
         self._stalled = True
+        if self._degraded_since is None:
+            self._degraded_since = time.monotonic()
         logging.getLogger("adr").error(
             "[gsv] 流式合成 worker %s 超时未退出, 引擎降级: 下次请求重建模型",
-            worker.name)
-        log_event("stream_stall", worker=worker.name)
+            name)
+        log_event("stream_stall", worker=name)
 
     def _drop_stalled_model(self) -> bool:
         """批次82 (#1): 上次流式卡死 → 丢弃模型与权重指纹, 本次强制重建。
@@ -813,6 +882,8 @@ class GSVEngine:
             cfg.is_half = self.config.half and device == "cuda"
             cfg.version = self.config.version
             self._tts = TTS(cfg)
+            # 批次90: 模型重建成功 = 降级结束 (看门狗计时清零)
+            self._degraded_since = None
             # 热换权重触发的 save_configs 写到私有文件, 不再污染共享配置
             _scratch = self.config.gsv_dir / "TEMP" / "tts_infer_adr_scratch.yaml"
             _scratch.parent.mkdir(exist_ok=True)
@@ -1237,7 +1308,17 @@ class GSVEngine:
                 bs = settings.tts_batch_size()
                 if bs > 1:
                     inputs["batch_size"] = bs
-                sr, audio = self._coalescer.submit(inputs).result()
+                # 批次90 (R3-CON-01): 有界等待 — 合批 worker 卡在上游时 future
+                # 永不完成, 旧实现无超时 → 请求线程 + 准入槽永久挂起。
+                fut = self._coalescer.submit(inputs)
+                try:
+                    sr, audio = fut.result(timeout=_COALESCE_WAIT_SEC)
+                except FuturesTimeout as e:
+                    log_event("coalesce_wait_timeout",
+                              wait_s=_COALESCE_WAIT_SEC)
+                    raise EngineStalledError(
+                        f"合批合成等待超时 ({_COALESCE_WAIT_SEC:.0f}s), "
+                        f"引擎可能卡住, 请稍后重试") from e
             else:
                 with self._engine_lock():
                     self._lazy_init()
@@ -1286,6 +1367,82 @@ def is_ready() -> bool:
     """
     return (_ENGINE is not None and _ENGINE._tts is not None
             and not _ENGINE._stalled)
+
+
+def is_stalled() -> bool:
+    """引擎是否处于卡死降级态 (批次90, 供 /readyz 与看门狗; 不触发加载)。"""
+    return _ENGINE is not None and bool(_ENGINE._stalled)
+
+
+def degraded_seconds() -> float:
+    """引擎连续降级时长 (秒), 0 = 未降级 (批次90, 供 /readyz 与看门狗)。
+
+    只认 ``_degraded_since``: 卡死 worker 持锁时 ``_stalled`` 会被
+    ``_drop_stalled_model`` 提前清掉, 但重建会卡在 ``_lock`` / ``_CHDIR_LOCK``
+    上, 引擎实际仍不可用 — 计时起点必须保留到 TTS 真正重建成功。
+    """
+    eng = _ENGINE
+    if eng is None or eng._degraded_since is None:
+        return 0.0
+    return max(0.0, time.monotonic() - eng._degraded_since)
+
+
+def watchdog_grace_sec() -> float:
+    """看门狗降级容忍秒数 (ADR_ENGINE_WATCHDOG_SEC, 默认 300; 0 = 关闭)。"""
+    raw = os.environ.get("ADR_ENGINE_WATCHDOG_SEC", "")
+    try:
+        return max(0.0, float(raw) if raw.strip() else _WATCHDOG_DEFAULT_SEC)
+    except ValueError:
+        return _WATCHDOG_DEFAULT_SEC
+
+
+def start_watchdog(on_exit=None) -> bool:
+    """启动进程级看门狗 (批次90, 幂等; 已在跑返回 False)。
+
+    只应由服务入口 (``python -m adr.server``) 调用 — 库/测试不启动, 避免测试
+    进程被误杀。``on_exit`` 是退出前清理回调 (回收训练/门禁/下载子进程)。
+    """
+    global _WATCHDOG_STARTED
+    grace = watchdog_grace_sec()
+    if grace <= 0:
+        logging.getLogger("adr").info(
+            "[watchdog] 已关闭 (ADR_ENGINE_WATCHDOG_SEC=0)")
+        return False
+    with _WATCHDOG_LOCK:
+        if _WATCHDOG_STARTED:
+            return False
+        _WATCHDOG_STARTED = True
+    threading.Thread(target=_watchdog_loop, args=(grace, on_exit),
+                     name="adr-engine-watchdog", daemon=True).start()
+    logging.getLogger("adr").info(
+        "[watchdog] 已启动: 引擎降级超过 %.0fs 未恢复即退出进程 (exit %d, "
+        "交由 Docker restart policy / 桌面壳 supervise 重启)",
+        grace, _WATCHDOG_EXIT_CODE)
+    return True
+
+
+def _watchdog_loop(grace: float, on_exit) -> None:
+    while True:
+        time.sleep(_WATCHDOG_POLL_SEC)
+        waited = degraded_seconds()
+        if waited < grace:
+            continue
+        logging.getLogger("adr").critical(
+            "[watchdog] 引擎已降级 %.0fs (阈值 %.0fs): 卡死 worker 无法在进程内"
+            "回收, 退出进程交由外部守护重启", waited, grace)
+        log_event("engine_watchdog", degraded_s=round(waited, 1),
+                  threshold_s=grace, action="exit")
+        if on_exit is not None:
+            try:
+                on_exit()
+            except Exception:
+                logging.getLogger("adr").warning(
+                    "[watchdog] 退出前清理子进程失败", exc_info=True)
+        try:
+            logging.shutdown()
+        except Exception:
+            pass
+        os._exit(_WATCHDOG_EXIT_CODE)
 
 
 def stage() -> str:

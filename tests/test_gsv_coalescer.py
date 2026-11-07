@@ -238,6 +238,16 @@ class FakeEngine:
         pass
 
     @contextlib.contextmanager
+    def _engine_lock(self):
+        # 批次90 (R3-CON-01): 合批轮改走带超时的引擎锁, fake 需提供同名入口
+        if not self._lock.acquire(timeout=5):
+            raise RuntimeError("fake engine lock timeout")
+        try:
+            yield
+        finally:
+            self._lock.release()
+
+    @contextlib.contextmanager
     def _gsv_context(self):
         yield
 

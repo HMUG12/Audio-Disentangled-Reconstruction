@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import math
+import os
 import random
 import time
 from dataclasses import dataclass, field
@@ -509,7 +510,38 @@ class Trainer:
         # AMP GradScaler 状态 (scale/增长追踪器), 保证 resume 后梯度缩放稳定
         if self.scaler is not None:
             ckpt["scaler"] = self.scaler.state_dict()
-        torch.save(ckpt, path)
+        # 批次90 (R3-DATA-01): 原子落盘。
+        # 直写目标文件时, 训练机掉电 / 进程被杀 / 磁盘写满都会留下半截 zip,
+        # 下次 torch.load 直接抛错, 整个实验不可恢复; callbacks 每 epoch 覆盖
+        # best.pt 更会把上一份好文件一起毁掉。改为同目录写 .tmp → 旧文件转 .bak
+        # (best-effort) → os.replace 原子换名。os.replace 在同卷上是原子的:
+        # 要么看到完整新文件, 要么仍是完整的旧文件。
+        tmp = path.with_name(path.name + ".tmp")
+        bak = path.with_name(path.name + ".bak")
+        try:
+            torch.save(ckpt, tmp)
+            if path.exists():
+                try:
+                    os.replace(path, bak)
+                except OSError:
+                    # 备份失败不阻断保存: 换名失败时旧文件还在, 仍是完整的
+                    self.log.warning(f"  checkpoint: 覆盖前备份失败 ({bak.name})")
+            os.replace(tmp, path)
+        except BaseException:
+            # 换名失败且旧文件已被挪走 → 立刻还原, 保证异常后仍有一份可加载的
+            if not path.exists() and bak.exists():
+                try:
+                    os.replace(bak, path)
+                except OSError:
+                    pass
+            raise
+        finally:
+            # 失败留下的半截 .tmp 必须清掉, 否则会被误当 checkpoint 加载
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except OSError:
+                pass
 
     def load_checkpoint(self, path: Union[str, Path]) -> None:
         """加载 checkpoint。

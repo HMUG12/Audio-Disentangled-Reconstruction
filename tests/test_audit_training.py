@@ -136,6 +136,66 @@ def test_save_checkpoint_4bit_does_not_mutate_training_model():
         assert all(v.dtype != torch.uint8 for v in ckpt["model_state"].values()), "ckpt 应为反量化权重"
 
 
+# ========== 批次90 (R3-DATA-01): checkpoint 原子写 ==========
+def _tiny_trainer(tmp_path):
+    from adr.models.sovits import SoVITS, SoVITSConfig
+    from adr.training import Trainer, TrainerConfig
+    from adr.training.dataset import VoiceCloneDataset
+
+    model = SoVITS(SoVITSConfig(
+        hidden_dim=16, n_layers=1, n_heads=2, ffn_dim=32,
+        vocab_size=607, content_dim=8, timbre_dim=8,
+    ))
+    ds = VoiceCloneDataset(samples=[_make_dummy_sample(i) for i in range(2)])
+    config = TrainerConfig(
+        epochs=1, batch_size=2, use_amp=False, use_gradient_checkpointing=False,
+        use_lora=False, output_dir=str(tmp_path), val_ratio=0.0,
+    )
+    return Trainer(model=model, train_data=ds, config=config)
+
+
+def test_save_checkpoint_atomic_keeps_backup(tmp_path):
+    """覆盖写不得留半截: 无 .tmp 残留, 上一版完整落到 .bak 且仍可加载。"""
+    trainer = _tiny_trainer(tmp_path)
+    ckpt = tmp_path / "best.pt"
+
+    trainer.save_checkpoint(ckpt)
+    first = ckpt.read_bytes()
+    assert not (tmp_path / "best.pt.tmp").exists()
+    assert not (tmp_path / "best.pt.bak").exists()   # 首次保存没有旧文件
+
+    trainer.current_epoch = 1
+    trainer.save_checkpoint(ckpt)
+    assert not (tmp_path / "best.pt.tmp").exists()
+    bak = tmp_path / "best.pt.bak"
+    assert bak.exists() and bak.read_bytes() == first
+    ckpt_obj = torch.load(ckpt, map_location="cpu", weights_only=False)
+    assert ckpt_obj["epoch"] == 1
+
+
+def test_save_checkpoint_failure_keeps_previous_file(tmp_path, monkeypatch):
+    """写失败 (磁盘满/中断) 时旧 checkpoint 字节不变, 半截 .tmp 被清掉 —
+    callbacks 每 epoch 覆盖 best.pt, 旧实现失败即把唯一好文件一起毁掉。"""
+    import adr.training.trainer as trainer_mod
+
+    trainer = _tiny_trainer(tmp_path)
+    target = tmp_path / "epoch_0001.pt"
+    target.write_bytes(b"previous-good")
+
+    class _BrokenTorch:
+        @staticmethod
+        def save(obj, f, *a, **kw):
+            Path(f).write_bytes(b"partial")   # 模拟写到一半
+            raise RuntimeError("disk full")
+
+    monkeypatch.setattr(trainer_mod, "torch", _BrokenTorch)
+    with pytest.raises(RuntimeError, match="disk full"):
+        trainer.save_checkpoint(target)
+
+    assert target.read_bytes() == b"previous-good"
+    assert not (tmp_path / "epoch_0001.pt.tmp").exists()
+
+
 # ========== 批次87 (BUG-01): 训练集不足一个 batch 必须提前失败 ==========
 def test_trainer_rejects_zero_step_loader():
     """drop_last=True + samples < batch_size → 旧实现静默 0 步, 现应报错。"""
