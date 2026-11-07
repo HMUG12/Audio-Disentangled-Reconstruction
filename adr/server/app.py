@@ -140,6 +140,39 @@ class BodySizeLimitMiddleware:
         await resp({"type": "http"}, None, send)
 
 
+class JSONCharsetMiddleware:
+    """JSON 响应统一声明 ``charset=utf-8`` (批次96)。
+
+    FastAPI 默认的 ``application/json`` 不带 charset; Windows PowerShell 5.1
+    的 ``Invoke-RestMethod`` 在缺 charset 时按 ISO-8859-1 解码, 中文直接乱码
+    (实测 ``/system/stats`` 的 sched.runtime reason)。这里只改响应头、不动
+    body: 非 JSON (音频 / HTML / 纯文本) 与已声明 charset 的响应零影响。
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+
+        async def _send(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers") or [])
+                for i, (k, v) in enumerate(headers):
+                    if k.lower() != b"content-type":
+                        continue
+                    ctype = v.decode("latin-1")
+                    base = ctype.split(";", 1)[0].strip().lower()
+                    if base == "application/json" and "charset=" not in ctype.lower():
+                        headers[i] = (k, f"{ctype}; charset=utf-8".encode("latin-1"))
+                    break
+                message["headers"] = headers
+            await send(message)
+
+        await self.app(scope, receive, _send)
+
+
 def create_app(engine=None) -> FastAPI:
     default_profile = settings.default_profile()
 
@@ -208,6 +241,9 @@ def create_app(engine=None) -> FastAPI:
         allow_headers=["*"],
         **cors_kwargs,
     )
+    # 批次96: JSON 响应补 charset=utf-8 — 放最外层, 鉴权/守卫/413 等
+    # 中间件直接产出的 JSON 也一并覆盖 (它们本就带 charset, 命中即跳过)。
+    app.add_middleware(JSONCharsetMiddleware)
     # 批次41a: HTTPException 响应增量补结构化 code — 既有 detail 字段与
     # 文本逐字保留 (wire 兼容)。
     # 批次84 (#13): 再增量补 ``message``, 与 v2/v3 的 {"message","code"} 契约对齐;

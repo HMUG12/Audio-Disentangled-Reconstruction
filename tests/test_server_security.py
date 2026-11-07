@@ -406,8 +406,6 @@ def test_validate_weights_reject_non_dict_top(tmp_path):
     import pickle
     import zipfile
 
-    import torch
-
     from adr.models.gsv_engine import validate_weights_file
 
     buf = io.BytesIO()
@@ -642,3 +640,36 @@ def test_validate_weights_rejects_missing_file(tmp_path):
 
     with pytest.raises(ValueError, match="not found"):
         validate_weights_file(str(tmp_path / "nope.pth"))
+
+
+# ─── 批次96: JSON 响应统一 charset=utf-8 (PowerShell 5.1 中文乱码) ───
+
+
+def test_json_response_declares_utf8_charset(open_client):
+    """普通 JSON 响应补 charset — PS 5.1 缺省按 ISO-8859-1 解码。"""
+    r = open_client.get("/api/adr/v1/health")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/json; charset=utf-8"
+
+
+def test_json_error_response_declares_utf8_charset(open_client):
+    """异常处理器产出的 JSON (404) 同样带 charset。"""
+    r = open_client.get("/api/adr/v1/no-such-endpoint")
+    assert r.status_code == 404
+    assert r.headers["content-type"] == "application/json; charset=utf-8"
+
+
+def test_existing_charset_not_duplicated(auth_client):
+    """鉴权中间件自带的 charset 不重复追加。"""
+    r = auth_client.get(PROFILES)
+    assert r.status_code == 401
+    assert r.headers["content-type"].lower().count("charset") == 1
+    assert r.headers["content-type"] == "application/json; charset=utf-8"
+
+
+def test_non_json_response_content_type_untouched(open_client):
+    """HTML 页面 / 音频等其他类型不受影响。"""
+    r = open_client.get("/")
+    assert r.status_code == 200
+    assert r.headers["content-type"].lower().startswith("text/html")
+    assert r.headers["content-type"].lower().count("charset") == 1
