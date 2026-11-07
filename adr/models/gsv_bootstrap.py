@@ -153,13 +153,17 @@ def _clear_legacy_parts(entry: dict) -> None:
 
 
 def _rate_limit_mbps() -> float:
-    """批次95: ADR_DOWNLOAD_RATE_MBPS — 下载限速 (MB/s); 0/非法 = 不限速。"""
+    """批次95: ADR_DOWNLOAD_RATE_MBPS — 下载限速 (MB/s); 0/非法 = 不限速。
+
+    有效区间 0.1~1024, 与设置中心 / Rust 注入面一致 (低于 0.1 视为未配置,
+    否则 1.4GB 权重会下到天荒地老)。
+    """
     raw = os.environ.get("ADR_DOWNLOAD_RATE_MBPS", "").strip()
     try:
         v = float(raw)
     except ValueError:
         return 0.0
-    return v if 0 < v <= 1024 else 0.0
+    return v if 0.1 <= v <= 1024 else 0.0
 
 
 def _throttle_delay(done: int, elapsed: float, mbps: float) -> float:

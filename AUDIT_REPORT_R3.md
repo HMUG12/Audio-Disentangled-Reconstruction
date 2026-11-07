@@ -353,7 +353,7 @@ while True:
 | 1 | 看门狗默认 300s + `os._exit(75)`，依赖外部拉起（Docker restart / 桌面壳 supervise）；裸跑开发环境不自动重启，可用 `ADR_ENGINE_WATCHDOG_SEC=0` 关闭 | `gsv_engine.py:82-88`、`:1390-1445`；`__main__.py:177-186`；`docker-compose.yml:33`；`lib.rs:1345-1405` | **修改 CON-01**：从"永久 503、无法自恢复"降级为"裸跑不可恢复，容器/桌面依赖外部 supervise"；并新增前提 R3-CON-02 |
 | 2 | `/readyz` 首启预热期返回 503；Docker 已给 `start-period=600s`；其它编排器需同步放宽宽限期 | `native.py:67-92`；`Dockerfile:117-123` | **修改/降级 OBS-01**：原"健康检查不反映永久降级"已修复；转为部署注意事项，不再作为缺陷 |
 | 3 | 容器默认无 key 拒绝启动是有意的破坏性变更，`docker run -p 9881:9881` 升级后会直接失败 | `Dockerfile:129-133`；`docker-compose.yml:49`；`__main__.py:85-110` | **修改 SEC-04**：状态改为已修，不再报缺陷；仅需发布说明提示这一破坏性变更 |
-| 4 | legacy npz 必须迁移，外部旧数据集需跑 `python scripts/migrate_npz_pickle.py <目录>` | `data/pipeline.py:121-146`；`dataset.py:261-267`；`scripts/migrate_npz_pickle.py` | **修改 SEC-03**：状态改为已修，不再报缺陷；运行期报错已带迁移命令，README/REPRODUCE 未提示 → 仅 P3 文档建议 |
+| 4 | legacy npz 必须迁移，外部旧数据集需跑 `python scripts/migrate_npz_pickle.py <目录>` | `data/pipeline.py:121-146`；`dataset.py:261-267`；`scripts/migrate_npz_pickle.py` | **修改 SEC-03**：状态改为已修，不再报缺陷；运行期报错已带迁移命令，REPRODUCE 第 4 节已补迁移命令（批次 97） |
 | 5 | `data.pkl` 256MB / 截头 64MB 是硬上限，正常权重远小于此，遇超大权重再评估 | `gsv_engine.py:376-379`、`:405-423` | **修改 SEC-01**：限值属有意设计，不再作为缺陷；只保留"上限是输入约束"的记录 |
 
 逐条核对结果：

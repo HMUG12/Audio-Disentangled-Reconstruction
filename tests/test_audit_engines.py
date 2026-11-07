@@ -288,7 +288,7 @@ def test_download_rate_limit_env_and_throttle(monkeypatch):
     assert gsv_bootstrap._rate_limit_mbps() == 0
     monkeypatch.setenv("ADR_DOWNLOAD_RATE_MBPS", " 2.5 ")
     assert gsv_bootstrap._rate_limit_mbps() == 2.5
-    for bad in ("abc", "-1", "0", "99999"):
+    for bad in ("abc", "-1", "0", "0.05", "99999"):
         monkeypatch.setenv("ADR_DOWNLOAD_RATE_MBPS", bad)
         assert gsv_bootstrap._rate_limit_mbps() == 0
 

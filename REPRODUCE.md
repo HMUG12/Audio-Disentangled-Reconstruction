@@ -85,6 +85,7 @@ python scripts/train_gate.py --exp my_voice --once
 - 探测句集 5 句收敛在 [adr/eval/probes.py](adr/eval/probes.py)（长/中/短/混合/叙事），训练门禁 / held-out 评估 / 档案评估三处同源；`--texts` 可换自定义句集（基线自动同句集）。
 - 参考音频超 10s 自动裁剪（去静音取前 8s，GSV 合成硬限制 3~10s）。
 - 权重版本化：控制台档案选择器可见 vN/相似度/⚠退化标注；`GET /profiles/<name>/history`、`POST /profiles/<name>/rollback` 逐版回退。
+- **外部旧数据集需先迁移**（legacy npz 带 `allow_pickle`）：`python scripts/migrate_npz_pickle.py <目录>`（先加 `--dry-run` 看清单；逐文件原子替换，可重复执行）。未迁移样本加载时直接报错并提示该命令，不会静默跳过。
 
 ## 5. 评估三件套（SECS / MOS / CER）
 
