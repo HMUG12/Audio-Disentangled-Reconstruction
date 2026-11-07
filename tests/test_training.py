@@ -352,6 +352,23 @@ def test_trainer_collate_fn_picklable():
         assert val_fn([trainer.val_data[0]]).target_mel.shape[0] == 1
 
 
+def test_trainer_config_num_workers_env(monkeypatch):
+    """批次93: 设置中心注入 ADR_S2_NUM_WORKERS —— 未显式传参时生效。"""
+    from adr.training import TrainerConfig
+
+    monkeypatch.setenv("ADR_S2_NUM_WORKERS", "4")
+    assert TrainerConfig().num_workers == 4
+    # 显式传参优先
+    assert TrainerConfig(num_workers=2).num_workers == 2
+    # 非法/越界值忽略, 保持默认
+    monkeypatch.setenv("ADR_S2_NUM_WORKERS", "abc")
+    assert TrainerConfig().num_workers == 0
+    monkeypatch.setenv("ADR_S2_NUM_WORKERS", "99")
+    assert TrainerConfig().num_workers == 0
+    monkeypatch.delenv("ADR_S2_NUM_WORKERS")
+    assert TrainerConfig().num_workers == 0
+
+
 def test_trainer_grad_accum_flush_at_epoch_end():
     """批次81 (#7): epoch 末尾不足一组的余数梯度补一次更新, 不再被丢弃。"""
     from adr.models.sovits import SoVITS, SoVITSConfig

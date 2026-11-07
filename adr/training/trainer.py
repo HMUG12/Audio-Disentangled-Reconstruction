@@ -81,6 +81,19 @@ class TrainerConfig:
     seed: int = 42
     deterministic: bool = False     # cudnn 确定性模式 (牺牲速度换可复现)
 
+    def __post_init__(self) -> None:
+        # 批次93: 设置中心「训练数据加载进程数」注入面 (ADR_S2_NUM_WORKERS)。
+        # 显式传参优先; 未传时由环境变量覆盖默认 0 (主进程加载, Windows 最稳)。
+        raw = os.environ.get("ADR_S2_NUM_WORKERS", "").strip()
+        if not raw or self.num_workers != 0:
+            return
+        try:
+            n = int(raw)
+        except ValueError:
+            return
+        if 0 <= n <= 32:
+            self.num_workers = n
+
 
 class Trainer:
     """主训练器。

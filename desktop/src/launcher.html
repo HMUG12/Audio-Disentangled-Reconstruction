@@ -460,6 +460,22 @@
           <input type="number" id="st-threads" min="0" max="128" placeholder="0">
         </div>
         <div class="st-row">
+          <span>日志级别 (排障时调 DEBUG，日志量会明显变大)</span>
+          <span class="st-inline">
+            <select id="st-loglevel">
+              <option value="">默认 (INFO)</option>
+              <option value="DEBUG">DEBUG</option>
+              <option value="INFO">INFO</option>
+              <option value="WARNING">WARNING</option>
+              <option value="ERROR">ERROR</option>
+            </select>
+          </span>
+        </div>
+        <div class="st-row st-input-row">
+          <span>训练数据加载进程数 (0 = 主进程加载，Windows 建议 0-2)</span>
+          <input type="number" id="st-workers" min="0" max="8" placeholder="0">
+        </div>
+        <div class="st-row">
           <span>t2s CUDA Graph 加速 (3.77x 但音质有损，默认关)</span>
           <input type="checkbox" id="st-cuda">
         </div>
@@ -612,6 +628,8 @@ async function openSettings() {
     $st("st-wavmeta").checked = cfg.wav_metadata !== false;
     $st("st-device").value = (cfg.device === "cuda" || cfg.device === "cpu") ? cfg.device : "auto";
     $st("st-threads").value = cfg.torch_threads || "";
+    $st("st-loglevel").value = cfg.log_level || "";
+    $st("st-workers").value = cfg.s2_num_workers || "";
     _compatTouched = false;   // 每次打开面板重置触碰标记
     stCompatLoaded = cfg.compat_cpu;  // 记住加载真值 (saveSettings 需判断"此前是否显式")
     $st("st-compat").checked = !!cfg.compat_cpu;
@@ -660,6 +678,8 @@ async function saveSettings() {
       wav_metadata: $st("st-wavmeta").checked,
       device: $st("st-device").value,
       torch_threads: Math.min(Math.max(parseInt($st("st-threads").value, 10) || 0, 0), 128),
+      log_level: $st("st-loglevel").value,
+      s2_num_workers: Math.min(Math.max(parseInt($st("st-workers").value, 10) || 0, 0), 8),
       // 批次57 review: 仅用户主动设置过 (或此前就是显式值) 才发 true/false —
       // 未触碰保持 null 自动语义, 避免"只改 API key 保存一次"就把 13 代
       // 自动兼容固化成 Some(false) 而静默失效

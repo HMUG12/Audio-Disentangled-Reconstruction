@@ -148,6 +148,12 @@ struct ShellSettings {
     /// ADR_TORCH_THREADS — torch CPU 线程上限 (批次49 低配预设);
     /// 0/None = 不注入 (PyTorch 自按物理核)
     torch_threads: Option<u16>,
+    /// ADR_LOG_LEVEL — 服务/训练日志级别 (批次93): DEBUG/INFO/WARNING/ERROR;
+    /// 空/None = 不注入 (后端默认 INFO)
+    log_level: Option<String>,
+    /// ADR_S2_NUM_WORKERS — 训练 DataLoader 进程数 (批次93);
+    /// 0/None = 不注入 (主进程加载, Windows 最稳)
+    s2_num_workers: Option<u16>,
     /// 兼容模式 (批次57): 13/14 代 Intel (Raptor Lake) 计算密集段闪退缓解 —
     /// 全链指令集限到 AVX2 (oneDNN/MKL/numba), 绕开 AVX-512 电压缺陷路径。
     /// None = 壳自动检测 (Raptor Lake 自动开); Some = 用户手动覆盖
@@ -223,6 +229,17 @@ fn env_overrides(c: &ShellSettings, auto_compat: bool) -> Vec<(String, String)> 
     }
     if let Some(n) = c.torch_threads.filter(|n| *n > 0) {
         v.push(("ADR_TORCH_THREADS".into(), n.to_string()));
+    }
+    // 批次93: 日志级别 (白名单, 防止任意值进 logging.setLevel 静默回落);
+    // 训练 DataLoader 进程数 (>0 才注入)
+    if let Some(l) = c.log_level.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        let up = l.to_ascii_uppercase();
+        if matches!(up.as_str(), "DEBUG" | "INFO" | "WARNING" | "ERROR") {
+            v.push(("ADR_LOG_LEVEL".into(), up));
+        }
+    }
+    if let Some(n) = c.s2_num_workers.filter(|n| *n > 0) {
+        v.push(("ADR_S2_NUM_WORKERS".into(), n.to_string()));
     }
     // 批次57 兼容模式: Intel 13/14 代 (Raptor Lake) AVX-512 高电压硬件缺陷可致
     // 计算密集段 native 崩溃 (0xC0000005, 闪退无 Python 栈)。全链指令集限到 AVX2
@@ -1796,6 +1813,8 @@ mod tests {
             cudagraph: Some(true),
             device: Some(" cpu ".into()),    // 批次49 低配预设
             torch_threads: Some(4),
+            log_level: Some(" debug ".into()),   // 批次93 日志级别 (白名单归一)
+            s2_num_workers: Some(2),           // 批次93 训练 DataLoader 进程数
             compat_cpu: Some(true),          // 批次57 13/14 代兼容模式
             // 批次62 声音安全字段 (默认开 = 不注入, 本用例不断言)
             ..Default::default()
@@ -1809,11 +1828,13 @@ mod tests {
         assert_eq!(m.get("ADR_T2S_CUDAGRAPH").unwrap(), "1");
         assert_eq!(m.get("ADR_TTS_DEVICE").unwrap(), "cpu");
         assert_eq!(m.get("ADR_TORCH_THREADS").unwrap(), "4");
+        assert_eq!(m.get("ADR_LOG_LEVEL").unwrap(), "DEBUG");
+        assert_eq!(m.get("ADR_S2_NUM_WORKERS").unwrap(), "2");
         // 兼容模式: 全链限 ISA 到 AVX2 (oneDNN/MKL/numba)
         assert_eq!(m.get("ONEDNN_MAX_CPU_ISA").unwrap(), "AVX2");
         assert_eq!(m.get("MKL_ENABLE_INSTRUCTIONS").unwrap(), "AVX2");
         assert_eq!(m.get("NUMBA_CPU_NAME").unwrap(), "generic");
-        assert_eq!(m.len(), 11);
+        assert_eq!(m.len(), 13);
     }
 
     #[test]
@@ -1826,8 +1847,12 @@ mod tests {
             data_dir: Some("".into()),
             default_profile: Some("".into()),
             numba_cache_dir: Some("".into()),
+            log_level: Some("   ".into()),
             ..Default::default()
         };
+        assert!(env_overrides(&c, false).is_empty());
+        // 非法日志级别 → 白名单丢弃
+        let c = ShellSettings { log_level: Some("VERBOSE".into()), ..Default::default() };
         assert!(env_overrides(&c, false).is_empty());
         // hf_mirror=false / cudagraph=false → 不注入
         let c = ShellSettings { hf_mirror: Some(false), cudagraph: Some(false), ..Default::default() };
