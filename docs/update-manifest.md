@@ -66,6 +66,26 @@ https://adr-studio.pages.dev/update.json
 - 允许 302/307（HF 会跳转，客户端自动跟随）
 - 123 云盘解析直链若有有效期 / 防盗链，发版当天须用无 Referer 的 curl 实测
 
+### 3.1 HF 托管：模型仓库 vs 存储桶（路径不同）
+
+```text
+# 模型/数据集仓库（带 /resolve/main/）
+https://huggingface.co/<owner>/<repo>/resolve/main/<file>
+
+# Storage Bucket（无 /main，多了 buckets 段）
+https://huggingface.co/buckets/<owner>/<bucket>/resolve/<file>
+```
+
+存储桶这条 2026-11-07 实测（`CIRcu/ADR-SERVER`，476.9MB CPU 包）：
+
+- 匿名 `-r 0-0` → `302` 到 `us.aws.cdn.hf.co/xet-bridge-us/...`，跟随后 `206`
+  `content-range: bytes 0-0/476872639`、`accept-ranges: bytes`、
+  `content-type: application/x-msdos-program`，无需 token；
+- 写成 `/resolve/main/<file>` 或带 `?download=true` → **404**（HTML 错误页）；
+- `https://s3.hf.co/<owner>/<bucket>/<file>` → `403`（S3 端点要签名，别用它做下载连）。
+
+客户端用 `ureq`（默认跟随 5 次跳转），302 → CDN 的链路可直接用。
+
 ## 4. 发版顺序（不可颠倒）
 
 1. 上传安装包到 HF 与 123 云盘，确认两条链接都能完整下载
