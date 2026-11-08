@@ -51,6 +51,9 @@ use std::os::windows::process::CommandExt;
 /// 批次73: 客户端更新链 (清单检查 / 下载校验 / 静默安装) + 包型互提示
 mod update;
 
+/// 批次101: 本地账号 (仅本机登录用; 口令 PBKDF2 派生后落盘, 明文不落盘)
+mod account;
+
 /// 服务 (重) 启动失败上限
 const MAX_FAILURES: u32 = 4;
 /// 单次启动健康探活超时 (首次导入 torch/CUDA 较慢)
@@ -499,6 +502,12 @@ pub fn run() {
             terms_agreed,
             agree_terms,
             reject_terms,
+            setup_done,
+            complete_setup,
+            account::account_info,
+            account::account_set,
+            account::account_login,
+            account::account_logout,
             skip_prewarm,
             retry_prewarm,
             back_to_launcher,
@@ -548,6 +557,10 @@ async fn launch_console(app: AppHandle, mode: String, expose: Option<bool>) -> R
     if !matches!(mode.as_str(), "legacy" | "pro" | "easy" | "call") {
         return Err(format!("未知控制台模式: {mode}"));
     }
+    // 批次101: 本地账号门禁 — 未登录不进控制台 (纯前端遮罩可被绕过, 壳侧兜一道)
+    if !account::logged_in() {
+        return Err("请先在启动器登录本地账号".into());
+    }
     if LAUNCH_IN_PROGRESS
         .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
         .is_err()
@@ -569,6 +582,10 @@ async fn launch_console(app: AppHandle, mode: String, expose: Option<bool>) -> R
 #[tauri::command]
 async fn enter_console(app: AppHandle, mode: String, expose: Option<bool>) -> Result<String, String> {
     let expose = expose.unwrap_or(false);
+    // 批次101: 本地账号门禁 (热通道同样拦)
+    if !account::logged_in() {
+        return Err("请先在启动器登录本地账号".into());
+    }
     if mode == "legacy" {
         return launch_console(app, mode, Some(expose)).await;
     }
@@ -582,10 +599,11 @@ async fn enter_console(app: AppHandle, mode: String, expose: Option<bool>) -> Re
             .map(|r| r.status() == 200)
             .unwrap_or(false);
         if alive && state.expose.load(Ordering::Relaxed) == expose {
+            let sop = shell_origin_param(&app.get_webview_window("main"));
             let target = match mode.as_str() {
-                "pro" => format!("{base}/pro?desktop=1"),
-                "easy" => format!("{base}/easy?desktop=1"),
-                _ => format!("{base}/call?desktop=1"),
+                "pro" => format!("{base}/pro?desktop=1{sop}"),
+                "easy" => format!("{base}/easy?desktop=1{sop}"),
+                _ => format!("{base}/call?desktop=1{sop}"),
             };
             let window = app.get_webview_window("main");
             // 批次66: 导航带 api_key (返回值/托盘提示仍用不含 key 的 target)
@@ -632,6 +650,11 @@ fn skip_prewarm(app: AppHandle) {
     // 批次61: 条款门禁 — 未同意首启条款时「仍要进入」不放行 (条款视图下该按钮
     // 本就不可达, 此处为纯防御兜底, 防止未来 UI 变动绕过条款流)。
     if !terms_agreed_flag() {
+        return;
+    }
+    // 批次101: 首启配置门禁 — 未完成首启配置时同样不放行 (配置项需在引擎
+    // 启动前落定: 设备走向 / 线程上限 / 数据目录都是 sidecar 启动时的环境注入)。
+    if !setup_done_flag() {
         return;
     }
     let state: State<ServerState> = app.state();
@@ -810,7 +833,7 @@ fn cpu_compat_auto() -> bool {
 /// F:/ADR_data (legacy, 存在即沿用) > %LOCALAPPDATA%\ADR\data。
 /// 返回 None 表示交由 Python 侧默认 (~/.adr/data), 不注入子进程。
 /// 空串环境变量视为未设置 (批次27 复审 ISSUE-4: PathBuf("") 会落到进程 CWD)。
-fn adr_data_dir() -> Option<PathBuf> {
+pub(crate) fn adr_data_dir() -> Option<PathBuf> {
     // 批次48: 设置中心显式指定的档案目录最高优先 (读进程内缓存, 不碰盘)
     if let Some(v) = shell_config().data_dir {
         if !v.trim().is_empty() {
@@ -874,6 +897,50 @@ fn agree_terms() -> Result<(), String> {
 fn reject_terms(app: AppHandle) {
     proc_log("terms", "用户拒绝使用条款, 应用退出");
     app.exit(0);
+}
+
+// ---------------------------------------------------------------------------
+// 首启配置向导 (批次101): 预热前的一次性配置
+//
+// 会议纪要 L163「设计增加项: 首次启动配置」①-⑯ 共 16 项, 实际落地取可支撑
+// 子集 (纪要未逐项排期, 本批按 "先能跑起来" 原则收窄):
+//   本向导: ①数据目录 ⑧开机自启 ③推理设备 ④CPU 线程上限 ⑫协议(条款页)
+//             + 本地账号 (批次101 新增)
+//   设置中心: ⑩定向路径 / ②权重导入 / ⑤⑥显存内存上限 / ⑰强度 / ⑯Autopilot
+//             覆盖策略等, 仍在进入壳后的设置中心与后台 Autopilot 自动标定。
+// 完成标记: <数据目录>\.setup_done_v1 (覆盖安装保留数据目录 → 不重复弹)。
+// ---------------------------------------------------------------------------
+
+/// 首启配置完成标记路径。
+fn setup_flag_path() -> Option<PathBuf> {
+    adr_data_dir().map(|d| d.join(".setup_done_v1"))
+}
+
+/// 内部查询: 标记存在 = 已完成首启配置。
+fn setup_done_flag() -> bool {
+    setup_flag_path().map(|p| p.exists()).unwrap_or(false)
+}
+
+/// 前端查询: 首启配置是否已完成 (prewarm.html 据此决定展示向导还是步骤流)。
+#[tauri::command]
+fn setup_done() -> bool {
+    setup_done_flag()
+}
+
+/// 前端「保存并继续」/「跳过使用默认」: 写完成标记 (内容含毫秒时间戳)。
+#[tauri::command]
+fn complete_setup() -> Result<(), String> {
+    let p = setup_flag_path()
+        .ok_or_else(|| "数据目录不可用, 无法记录首启配置状态".to_string())?;
+    if let Some(parent) = p.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    std::fs::write(&p, format!("done_at={ts}\n"))
+        .map_err(|e| format!("写入首启配置标记失败: {e}"))
 }
 
 /// 服务日志目录 (批次26, 批次27 重构): ADR_LOG_DIR > <数据目录>\logs
@@ -989,11 +1056,15 @@ fn start_and_wait(
     state.set_phase(Phase::Prewarming);
     let base = state.base_url.lock().unwrap().clone().unwrap_or_default();
     // ?desktop=1: 控制台页据此显示"返回启动器" (壳内标记; 浏览器直开不带)
+    // shell_origin: 把壳地址回传给控制台页 — 控制台页是远程 origin, 拿不到壳的
+    // IPC, 硬编码 tauri.localhost 在 dev 下命中空资源表 ("asset not found:
+    // launcher.html"), 批次101 起由壳显式告知。
+    let sop = shell_origin_param(window);
     let target = match mode {
         "legacy" => format!("{base}/"),
-        "pro" => format!("{base}/pro?desktop=1"),
-        "easy" => format!("{base}/easy?desktop=1"),
-        _ => format!("{base}/call?desktop=1"),
+        "pro" => format!("{base}/pro?desktop=1{sop}"),
+        "easy" => format!("{base}/easy?desktop=1{sop}"),
+        _ => format!("{base}/call?desktop=1{sop}"),
     };
     let expose_tip = if state.expose.load(Ordering::Relaxed) { " (对外服务)" } else { "" };
     if let Some(t) = app.tray_by_id("adr-tray") {
@@ -1278,6 +1349,22 @@ fn error_headline(error: &str) -> String {
 fn prewarm_flow(app: AppHandle) {
     let window = app.get_webview_window("main");
     let state: State<ServerState> = app.state();
+
+    // 批次101: 首启配置向导前置 — 未完成配置前不启动引擎。配置项 (数据目录 /
+    // 推理设备 / CPU 线程上限 / 开机自启) 都是在 sidecar 启动那一刻以环境变量
+    // 注入的, 引擎起来之后再让用户选 = 选了不生效, 必须挡在引擎启动之前。
+    if !setup_done_flag() {
+        eval_prewarm(&window, "queued", "等待完成首次启动配置…");
+        loop {
+            if SHUTTING_DOWN.load(Ordering::Relaxed) {
+                return;
+            }
+            if setup_done_flag() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(300));
+        }
+    }
 
     eval_prewarm(&window, "starting", "正在检查遗留服务进程…");
     // 孤儿收编 (批次37): 壳上次异常退出 (崩溃/强杀/断电) 会遗留 python 服务孤儿,
@@ -1582,7 +1669,7 @@ fn reap_log(msg: &str) {
 }
 
 /// 通用进程操作日志 (批次40): 按标签追加到服务日志, 供 kill/收编等留痕。
-fn proc_log(tag: &str, msg: &str) {
+pub(crate) fn proc_log(tag: &str, msg: &str) {
     use std::io::Write;
     let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
@@ -1812,6 +1899,29 @@ fn app_origin(window: &Option<WebviewWindow>) -> String {
 /// 应用页面 (prewarm/loading/launcher) 的绝对地址, 见 [`app_origin`]。
 fn app_page(window: &Option<WebviewWindow>, page: &str) -> String {
     format!("{}/{}", app_origin(window), page.trim_start_matches('/'))
+}
+
+/// 控制台页「返回启动器」用的壳 origin 查询串 (批次101)。
+/// 控制台页是远程 origin (127.0.0.1:P), 拿不到壳的 IPC, 只能靠查询参数回传
+/// 壳地址: dev 下壳在内置 dev server (http://127.0.0.1:1645), 打包态在
+/// tauri protocol origin。控制台页硬编码 tauri.localhost 在 dev 下会命中空
+/// 资源表 → "asset not found: launcher.html"。
+/// 非 http(s) 形态 (macOS/Linux 的 tauri://) 返回空串 → 控制台页回落到原逻辑。
+fn shell_origin_param(window: &Option<WebviewWindow>) -> String {
+    let origin = app_origin(window);
+    if !(origin.starts_with("http://") || origin.starts_with("https://")) {
+        return String::new();
+    }
+    let enc: String = origin
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b':' | b'/' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{:02X}", b),
+        })
+        .collect();
+    format!("&shell_origin={enc}")
 }
 
 /// 把窗口导航到目标页 (必须是绝对 URL, 见 TAURI_ORIGIN 注释)。

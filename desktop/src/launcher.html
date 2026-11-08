@@ -226,11 +226,11 @@
     accent-color: var(--brand); width: 16px; height: 16px; cursor: pointer; margin: 0; }
   .st-input-row { display: block; }
   .st-input-row > span { display: block; margin-bottom: 6px; }
-  #set input[type=text], #set input[type=number], #set select {
+  #set input[type=text], #set input[type=number], #set input[type=password], #set select {
     width: 100%; background: var(--field); border: 1px solid var(--tag-line); border-radius: 8px;
     color: var(--txt); font-size: 12.5px; padding: 8px 11px; outline: none;
     font-family: inherit; }
-  #set input[type=text]:focus, #set input[type=number]:focus, #set select:focus {
+  #set input[type=text]:focus, #set input[type=number]:focus, #set input[type=password]:focus, #set select:focus {
     border-color: var(--focus); }
   #set select { width: auto; min-width: 150px; cursor: pointer; }
   #set input::placeholder { color: var(--faint); }
@@ -254,6 +254,29 @@
   #st-save:hover { background: var(--save-hover); }
   #st-save.busy { opacity: .6; pointer-events: none; }
   .st-links { font-size: 12.5px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
+
+  /* 批次101: 本地账号登录 (仅本机, 不联网) */
+  #login-ov { position: fixed; inset: 0; z-index: 60; display: none;
+    place-items: center; background: var(--overlay); }
+  #login-ov.on { display: grid; }
+  #login { width: min(380px, 88vw); background: var(--modal-grad);
+    border: 1px solid var(--modal-line); border-radius: 18px; padding: 28px 28px 22px;
+    box-shadow: var(--modal-shadow); }
+  #login .lg-title { font-size: 19px; font-weight: 700; margin-bottom: 3px; }
+  #login .lg-sub { font-size: 11.5px; color: var(--dim); margin-bottom: 6px; }
+  #login label { display: block; font-size: 12px; color: var(--strong); margin: 12px 0 5px; }
+  #login input { width: 100%; background: var(--field); border: 1px solid var(--tag-line);
+    border-radius: 8px; color: var(--txt); font-size: 13px; padding: 9px 11px;
+    outline: none; font-family: inherit; }
+  #login input:focus { border-color: var(--focus); }
+  #login .lg-msg { font-size: 12px; color: var(--err); margin-top: 10px; min-height: 16px; }
+  #login-btn { width: 100%; margin-top: 14px; background: var(--save-bg);
+    border: 1px solid var(--save-line); color: var(--save-txt); font-size: 13px;
+    font-weight: 600; border-radius: 10px; padding: 10px; cursor: pointer;
+    font-family: inherit; box-shadow: var(--save-shadow); }
+  #login-btn:hover { background: var(--save-hover); }
+  #login-btn:disabled { opacity: .6; cursor: default; }
+  #login .lg-hint { font-size: 11px; color: var(--faint); margin-top: 12px; line-height: 1.6; }
 </style>
 </head>
 <body>
@@ -342,7 +365,7 @@
     </div>
   </div>
 
-  <div class="foot">经典控制台按需启动；专业 / 新手复用常驻引擎（启动时已预热），进出秒级切换 · <a id="set-link">设置</a> · <a id="about-link">关于 ADR Studio</a></div>
+  <div class="foot">经典控制台按需启动；专业 / 新手复用常驻引擎（启动时已预热），进出秒级切换 · <a id="set-link">设置</a> · <a id="about-link">关于 ADR Studio</a> · <span id="acct-who"></span><a id="acct-out" style="display:none">退出登录</a></div>
   <div id="toast"></div>
 
   <div id="upd-ov">
@@ -434,6 +457,21 @@
         <span>设备标识: ADR 不采集设备指纹、不上报遥测，无任何外发设备标识。</span>
       </div>
 
+      <div class="st-sec">本地账号</div>
+      <div class="st-row">
+        <span>当前账号（仅本机登录用）</span>
+        <span class="st-inline"><code id="st-acct">…</code></span>
+      </div>
+      <div class="st-input-row">
+        <span>修改账号 / 密码（密码留空 = 不修改）</span>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+          <input type="text" id="st-acct-user" placeholder="用户名" spellcheck="false" style="flex:1">
+          <input type="password" id="st-acct-pass" placeholder="新密码（至少 6 位）" autocomplete="new-password" style="flex:1">
+          <button id="st-acct-save" style="background:var(--save-bg);border:1px solid var(--save-line);color:var(--save-txt);font-size:12.5px;font-weight:600;border-radius:9px;padding:8px 14px;cursor:pointer;font-family:inherit;white-space:nowrap">保存账号</button>
+        </div>
+        <div class="st-hint">口令只在本机以 PBKDF2 派生后保存（数据目录 .local_account），明文不落盘、不外发；账号仅用于解锁本机控制台，不涉及任何服务器。</div>
+      </div>
+
       <div class="st-sec">维护</div>
       <div class="st-row st-links">
         <a id="st-open-log">打开日志目录</a> · <a id="st-update">检查更新</a> · <span id="st-ver"></span>
@@ -493,6 +531,21 @@
         <span class="st-eff">环境变量类改动下次启动引擎生效</span>
         <button id="st-save">保存</button>
       </div>
+    </div>
+  </div>
+
+  <!-- 批次101: 本地账号登录 (仅本机; 未登录不进控制台, 壳侧命令同样校验) -->
+  <div id="login-ov">
+    <div id="login">
+      <div class="lg-title">登录 <em style="font-style:normal;color:var(--brand)">ADR Studio</em></div>
+      <div class="lg-sub">本机账号，仅用于解锁本地控制台，不联网、不上传。</div>
+      <label>用户名</label>
+      <input type="text" id="lg-user" autocomplete="username" spellcheck="false">
+      <label>密码</label>
+      <input type="password" id="lg-pass" autocomplete="current-password">
+      <div class="lg-msg" id="lg-msg"></div>
+      <button id="login-btn">登录</button>
+      <div class="lg-hint" id="lg-hint">首次使用默认账号 ADR / Adr12345@，可在「设置」中修改。</div>
     </div>
   </div>
 
@@ -655,6 +708,12 @@ async function openSettings() {
     }
     stAutostart = await inv("autostart_get");
     $st("st-autostart").checked = stAutostart;
+    // 批次101: 本地账号 (当前账号名 + 修改框预填)
+    const acc = await refreshAccount();
+    if (acc) {
+      $st("st-acct").textContent = acc.username || "—";
+      $st("st-acct-user").value = acc.username || "";
+    }
     $st("st-lan-ip").textContent = lan?.ip || "未获取到 (离线?)";
     $st("st-lan-url").textContent = lan?.url || "引擎未运行";
     $st("st-copy-url").style.display = lan?.url ? "" : "none";
@@ -743,6 +802,77 @@ window.__TAURI__ && window.__TAURI__.core.invoke("load_shell_settings")
   .then(cfg => document.querySelectorAll(".exp input")
     .forEach(b => { if (b) b.checked = !!cfg.lan_expose; }))
   .catch(() => {});
+
+// ===== 批次101: 本地账号 (登录门禁 + 设置里改账号) =====
+// 壳侧 enter_console / launch_console 同样校验登录态, 前端遮罩只是体验层。
+const loginOv = document.getElementById("login-ov");
+async function refreshAccount() {
+  const inv = window.__TAURI__?.core.invoke;
+  if (!inv) return null;
+  try { return await inv("account_info"); } catch (_) { return null; }
+}
+function paintAccount(info) {
+  const who = document.getElementById("acct-who");
+  const out = document.getElementById("acct-out");
+  if (!info) return;
+  if (who) who.textContent = info.username ? "账号: " + info.username : "";
+  if (out) out.style.display = info.logged_in ? "" : "none";
+}
+async function initLogin() {
+  const inv = window.__TAURI__?.core.invoke;
+  if (!inv) return;
+  const info = await refreshAccount();
+  paintAccount(info);
+  if (!info || info.logged_in) { loginOv.classList.remove("on"); return; }
+  document.getElementById("lg-user").value = info.username || "ADR";
+  loginOv.classList.add("on");
+}
+document.getElementById("login-btn").addEventListener("click", async () => {
+  const inv = window.__TAURI__?.core.invoke;
+  const btn = document.getElementById("login-btn");
+  const msg = document.getElementById("lg-msg");
+  msg.textContent = "";
+  btn.disabled = true; btn.textContent = "登录中…";
+  try {
+    await inv("account_login", {
+      username: document.getElementById("lg-user").value.trim(),
+      password: document.getElementById("lg-pass").value,
+    });
+    loginOv.classList.remove("on");
+    paintAccount(await refreshAccount());
+    showToast("已登录", true);
+  } catch (e) {
+    msg.textContent = String(e);
+  }
+  btn.disabled = false; btn.textContent = "登录";
+});
+document.getElementById("lg-pass").addEventListener("keydown", e => {
+  if (e.key === "Enter") document.getElementById("login-btn").click();
+});
+document.getElementById("acct-out").addEventListener("click", async () => {
+  const inv = window.__TAURI__?.core.invoke;
+  if (!inv) return;
+  await inv("account_logout");
+  paintAccount(await refreshAccount());
+  document.getElementById("lg-pass").value = "";
+  loginOv.classList.add("on");
+});
+document.getElementById("st-acct-save").addEventListener("click", async () => {
+  const inv = window.__TAURI__?.core.invoke;
+  const user = document.getElementById("st-acct-user").value.trim();
+  const pass = document.getElementById("st-acct-pass").value;
+  if (!user) { showToast("用户名不能为空"); return; }
+  if (!pass) { showToast("请填写新密码（留空 = 不修改）"); return; }
+  try {
+    await inv("account_set", { username: user, password: pass });
+    document.getElementById("st-acct-pass").value = "";
+    const info = await refreshAccount();
+    paintAccount(info);
+    document.getElementById("st-acct").textContent = info?.username || user;
+    showToast("本地账号已更新", true);
+  } catch (e) { showToast(String(e)); }
+});
+initLogin();
 
 // ===== 批次73: 更新链 (检查清单 → 下载校验 → 立即安装) + 包型互提示 =====
 const $upd = id => document.getElementById(id);
