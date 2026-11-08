@@ -399,7 +399,7 @@ back.onclick = () => {
   if (!isDesktop) return;
   // 批次101: 壳地址由壳通过查询参数回传 (dev 下壳在内置 dev server,
   // 硬编码 tauri.localhost 会命中空资源表 → "asset not found: launcher.html")
-  const shellOrigin = new URLSearchParams(location.search).get("shell_origin");
+  const shellOrigin = adrSafeShellOrigin(new URLSearchParams(location.search).get("shell_origin"));
   if (shellOrigin) {
     location.href = shellOrigin.replace(/\/+$/, "") + "/launcher.html";
     return;

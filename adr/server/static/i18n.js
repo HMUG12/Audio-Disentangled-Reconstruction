@@ -107,3 +107,18 @@ const I = (() => {
   }
   return { init, t, apply, setLang, get lang() { return lang; } };
 })();
+
+/* 批次106 (审计 R5-FE-01): shell_origin 查询参数归一 — 只放行 tauri 壳地址与
+ * 本机回环地址 (dev 壳走 http://127.0.0.1:<devport>), 其余 (javascript:/data:/
+ * 外部站点/畸形串) 一律返回 "", 由调用方回落默认分支, 杜绝脚本执行与开放重定向。 */
+function adrSafeShellOrigin(raw) {
+  if (!raw) return "";
+  let u;
+  try { u = new URL(String(raw)); } catch (_) { return ""; }
+  const proto = u.protocol, host = (u.hostname || "").toLowerCase();
+  if (proto === "tauri:") return host === "localhost" ? "tauri://localhost" : "";
+  if (proto !== "http:" && proto !== "https:") return "";
+  if (host === "tauri.localhost") return u.origin;
+  if (host === "localhost" || host === "127.0.0.1" || host === "[::1]") return u.origin;
+  return u.origin === location.origin ? u.origin : "";
+}

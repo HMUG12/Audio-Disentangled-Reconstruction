@@ -175,3 +175,21 @@ def test_signer_payload_matches_rust_format():
     src = UPDATE_RS.read_text(encoding="utf-8")
     pk = re.search(r'UPDATE_PUBKEY_HEX:\s*&str\s*=\s*"([0-9a-f]{64})"', src).group(1)
     assert mod.embedded_pubkey() == pk
+
+
+# ===== 批次106 (审计 R5-FE-01): shell_origin 必须经白名单归一 =====
+def test_console_pages_sanitize_shell_origin():
+    """查询串里的 shell_origin 是外部可控输入: 未经白名单直接进 href 时,
+    `?shell_origin=javascript:...` 会变成同源脚本执行点, 外部站点则是开放重定向。"""
+    static = REPO / "adr" / "server" / "static"
+    i18n = (static / "i18n.js").read_text(encoding="utf-8")
+    assert "function adrSafeShellOrigin" in i18n
+    # 只放行 tauri 壳与回环地址, 其余协议/主机一律拒绝
+    assert 'proto === "tauri:"' in i18n
+    assert 'host === "tauri.localhost"' in i18n
+    assert 'host === "127.0.0.1"' in i18n
+
+    for page in ("pro.html", "easy.html", "call.html"):
+        src = (static / page).read_text(encoding="utf-8")
+        assert 'adrSafeShellOrigin(new URLSearchParams(location.search).get("shell_origin"))' in src, page
+        assert '= new URLSearchParams(location.search).get("shell_origin")' not in src, page

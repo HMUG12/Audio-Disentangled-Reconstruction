@@ -293,7 +293,7 @@ function applyBackLink() {
     back.textContent = I.t("call.back_launcher");
     // 批次101: 壳地址由壳通过查询参数回传 (dev 下壳在内置 dev server,
     // 硬编码 tauri.localhost 会命中空资源表 → "asset not found: launcher.html")
-    const shellOrigin = new URLSearchParams(location.search).get("shell_origin");
+    const shellOrigin = adrSafeShellOrigin(new URLSearchParams(location.search).get("shell_origin"));
     back.href = shellOrigin
       ? shellOrigin.replace(/\/+$/, "") + "/launcher.html"
       : (window.__TAURI__
