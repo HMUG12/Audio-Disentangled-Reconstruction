@@ -400,13 +400,14 @@ pub fn run() {
             // 主窗口: 代码创建 (替代 tauri.conf.json windows), 以便挂 on_download —
             // WebView2 对网页 a[download] 默认静默取消下载 (控制台"下载音频"失败根因),
             // 必须显式注册下载事件并把产物落盘到系统下载目录。
-            let initial: tauri::Url = format!("{TAURI_ORIGIN}/prewarm.html")
-                .parse()
-                .expect("初始 URL 非法");
+            // 批次100: 用 App 相对路径而不是硬编码 origin — dev 下 tauri dev 会把
+            // frontendDist 挂到内置 dev server 并注入 build.devUrl (此时嵌入资源表
+            // 为空, 访问 tauri protocol 会 "asset not found: prewarm.html"),
+            // WebviewUrl::App 由 tauri 按 devUrl/tauri protocol 自动解析。
             tauri::webview::WebviewWindowBuilder::new(
                 app,
                 "main",
-                tauri::WebviewUrl::External(initial),
+                tauri::WebviewUrl::App("prewarm.html".into()),
             )
             .title("ADR Studio")
             .inner_size(1280.0, 820.0)
@@ -463,7 +464,7 @@ pub fn run() {
                             let _ = t.set_tooltip(Some("ADR Studio — 引擎已停止"));
                         }
                         let window = app.get_webview_window("main");
-                        navigate(&window, &format!("{TAURI_ORIGIN}/launcher.html"));
+                        navigate(&window, &app_page(&window, "launcher.html"));
                     }
                     "web" => {
                         let state: State<ServerState> = app.state();
@@ -641,7 +642,7 @@ fn skip_prewarm(app: AppHandle) {
         state.set_phase(Phase::Ready);
     }
     let window = app.get_webview_window("main");
-    navigate(&window, &format!("{TAURI_ORIGIN}/launcher.html"));
+    navigate(&window, &app_page(&window, "launcher.html"));
 }
 
 /// 预热页「重试」: 杀现服务重新走完整预热流程。
@@ -651,7 +652,7 @@ async fn retry_prewarm(app: AppHandle) -> Result<(), String> {
         let state: State<ServerState> = app.state();
         kill_current(&state); // 置 Stopped (批次37 状态机), 预热流程内再转 Starting
         let window = app.get_webview_window("main");
-        navigate(&window, &format!("{TAURI_ORIGIN}/prewarm.html"));
+        navigate(&window, &app_page(&window, "prewarm.html"));
         std::thread::sleep(Duration::from_millis(600));
         prewarm_flow(app);
     })
@@ -669,7 +670,7 @@ fn back_to_launcher(app: AppHandle) {
         let _ = t.set_tooltip(Some("ADR Studio — 引擎已停止"));
     }
     let window = app.get_webview_window("main");
-    navigate(&window, &format!("{TAURI_ORIGIN}/launcher.html"));
+    navigate(&window, &app_page(&window, "launcher.html"));
 }
 
 // ---------------------------------------------------------------------------
@@ -954,7 +955,7 @@ fn launch_blocking(app: AppHandle, mode: String, expose: bool) -> Result<String,
     state.expose.store(expose, Ordering::Relaxed);
     std::thread::sleep(Duration::from_millis(600));
 
-    navigate(&window, &format!("{TAURI_ORIGIN}/loading.html"));
+    navigate(&window, &app_page(&window, "loading.html"));
     update_status(&window, "正在启动本地引擎…");
     if let Some(t) = app.tray_by_id("adr-tray") {
         let _ = t.set_tooltip(Some("ADR Studio 启动中…"));
@@ -1366,7 +1367,7 @@ fn prewarm_flow(app: AppHandle) {
             std::thread::sleep(Duration::from_millis(500));
         }
     }
-    navigate(&window, &format!("{TAURI_ORIGIN}/launcher.html"));
+    navigate(&window, &app_page(&window, "launcher.html"));
 }
 
 /// 守护线程: 监控 child, 意外退出按同 mode 自动重启。
@@ -1429,7 +1430,7 @@ fn supervise(app: AppHandle, mode: String, mut child: Child, mut started: Instan
         }
 
         update_status(&window, "服务断开, 正在自动重启…");
-        navigate(&window, &format!("{TAURI_ORIGIN}/loading.html"));
+        navigate(&window, &app_page(&window, "loading.html"));
         if let Some(t) = app.tray_by_id("adr-tray") {
             let _ = t.set_tooltip(Some("ADR Studio 引擎重启中…"));
         }
@@ -1790,6 +1791,27 @@ fn update_status(window: &Option<WebviewWindow>, text: &str) {
             js_quote(text)
         ));
     }
+}
+
+/// 应用前端页面的 origin (批次100)。
+///
+/// `tauri dev` 在 frontendDist 为目录时会把它挂到内置 dev server 上, 并把
+/// ``build.devUrl`` 注入编译期配置 (TAURI_CONFIG) — 这种情况下嵌入资源表为空,
+/// 硬编码 tauri protocol origin 会 "asset not found"。运行时以配置里的 devUrl
+/// 为准, 没有 devUrl (打包 / 无 dev server) 时回退 tauri protocol origin。
+fn app_origin(window: &Option<WebviewWindow>) -> String {
+    let dev_url = window
+        .as_ref()
+        .and_then(|w| w.config().build.dev_url.clone());
+    match dev_url {
+        Some(u) => u.as_str().trim_end_matches('/').to_string(),
+        None => TAURI_ORIGIN.to_string(),
+    }
+}
+
+/// 应用页面 (prewarm/loading/launcher) 的绝对地址, 见 [`app_origin`]。
+fn app_page(window: &Option<WebviewWindow>, page: &str) -> String {
+    format!("{}/{}", app_origin(window), page.trim_start_matches('/'))
 }
 
 /// 把窗口导航到目标页 (必须是绝对 URL, 见 TAURI_ORIGIN 注释)。
