@@ -190,6 +190,52 @@
   .sacts button:disabled { opacity: .55; cursor: default; transform: none; }
   #suSave { background: var(--agree-bg); color: var(--agree-txt); border: 1px solid var(--agree-line); box-shadow: var(--agree-shadow); }
   #suSkip { background: transparent; color: var(--dot-txt); border: 1px solid var(--dot-line); }
+  /* 批次102: 向导分组标题 / 说明行 / 次要按钮 */
+  .sgrp { font-size: 13.5px; font-weight: 700; color: var(--strong); }
+  .sstatic { font-size: 12px; color: var(--tbody); line-height: 1.75; }
+  .sstatic code {
+    font-family: Consolas, monospace; font-size: 11px; color: var(--txt);
+    background: var(--dot-bg); border: 1px solid var(--dot-line);
+    border-radius: 6px; padding: 1px 6px; word-break: break-all;
+  }
+  .sacts.left { justify-content: flex-start; }
+  .sacts.minor button {
+    font-size: 12px; font-weight: 500; padding: 6px 14px;
+    background: transparent; color: var(--dot-txt); border: 1px solid var(--dot-line);
+  }
+  /* 批次102: 本机账号登录视图 (壳启动即弹, 登录前不放行进入启动器) */
+  body.login-mode { overflow-y: auto; justify-content: flex-start; padding: 28px 0; }
+  body.login-mode .sub, body.login-mode .panel,
+  body.login-mode #tip, body.login-mode #acts,
+  body.login-mode .foot, body.login-mode #terms,
+  body.login-mode #setup { display: none; }
+  #login { display: none; }
+  body.login-mode #login { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .lcard {
+    width: min(420px, 92vw); border-radius: 13px; padding: 20px 24px;
+    background: var(--card-grad); border: 1px solid var(--card-line);
+    box-shadow: var(--card-shadow);
+    display: flex; flex-direction: column; gap: 11px;
+  }
+  .lcard h2 { font-size: 16.5px; font-weight: 700; }
+  .lcard h2 em { font-style: normal; color: var(--brand); }
+  .lgrid { display: flex; flex-direction: column; gap: 9px; }
+  .lfld { display: flex; flex-direction: column; gap: 5px; }
+  .lfld label { font-size: 12px; color: var(--muted); }
+  .lfld input {
+    font: inherit; font-size: 13px; color: var(--txt);
+    background: var(--dot-bg); border: 1px solid var(--dot-line);
+    border-radius: 9px; padding: 8px 10px; outline: none; width: 100%;
+  }
+  .lfld input:focus { border-color: var(--brand); }
+  .lacts { display: flex; gap: 12px; justify-content: center; }
+  .lacts button {
+    font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+    border-radius: 10px; padding: 9px 24px; transition: transform .15s, opacity .15s;
+  }
+  .lacts button:hover { transform: translateY(-2px); }
+  .lacts button:disabled { opacity: .55; cursor: default; transform: none; }
+  #pwLogin { background: var(--agree-bg); color: var(--agree-txt); border: 1px solid var(--agree-line); box-shadow: var(--agree-shadow); }
 </style>
 </head>
 <body>
@@ -248,11 +294,11 @@
     <div class="tfoot">拒绝将退出应用；同意状态仅保存在本机数据目录（.terms_agreed_v1）</div>
   </div>
 
-  <!-- 批次101: 首启配置向导 (条款同意后、引擎启动前) -->
+  <!-- 批次101/102: 首启配置向导 (条款同意后、引擎启动前) -->
   <div id="setup">
     <div class="scard">
       <h2>首次启动<em>配置向导</em></h2>
-      <div class="shint">以下设置决定本地引擎的启动方式（数据目录 / 推理设备 / 线程上限在引擎启动那一刻生效），随时可在「启动器 → 设置」里修改。全部只保存在本机，不外发。</div>
+      <div class="shint">以下设置决定本地引擎的启动方式（数据目录 / 推理设备 / 线程上限 / 资源上限在引擎启动那一刻生效），随时可在「启动器 → 设置」里修改。全部只保存在本机，不外发。</div>
       <div class="sgrid">
         <div class="sfld">
           <label>本地账号（仅本机登录用）</label>
@@ -262,12 +308,27 @@
           <label>登录密码（至少 6 位）</label>
           <input type="password" id="su-pass" placeholder="默认 Adr12345@" autocomplete="new-password">
         </div>
-        <div class="sfld wide">
-          <label>声音档案存放目录（留空 = 默认位置）</label>
-          <input type="text" id="su-datadir" placeholder="%LOCALAPPDATA%\ADR\data" spellcheck="false">
-        </div>
+      </div>
+      <div class="shint">保存即完成本机账号设置，随后壳会要求登录一次（账号仅存本机，口令只以 PBKDF2 派生值落盘）。</div>
+    </div>
+
+    <div class="scard">
+      <h3 class="sgrp">① 版本与模型存放位置</h3>
+      <div class="sstatic">当前安装包：<b>通用包</b>（运行时自动识别 NVIDIA / Intel 显卡并选择 CUDA 或 CPU）。按显卡型号单独裁剪的专用优化包（N 卡 / I 卡）本版本未单独发布，安装时无需选择。</div>
+      <div class="sstatic">模型与权重存放位置：<code id="su-models">检测中…</code></div>
+      <div class="sacts left minor">
+        <button id="su-checkmodels">检查模型</button>
+        <button id="su-openmodels">打开模型目录</button>
+      </div>
+      <div class="shint" id="su-models-msg">⑨ 检查模型：只核对本机文件是否齐全，不联网、不下载。缺失项会列出文件名，可手动补齐后再次检查。</div>
+      <div class="shint">② 自定义导入权重：本向导不提供文件选择框（权重按 GPT-SoVITS 目录结构存放）；把 <code>.ckpt</code> / <code>.pth</code> 放进上面对应目录后，在「启动器 → 模型」里切换生效。</div>
+    </div>
+
+    <div class="scard">
+      <h3 class="sgrp">③ 推理设备 · ④ CPU 资源 · ⑤⑥ 显存与内存上限 · ⑦ 强度</h3>
+      <div class="sgrid">
         <div class="sfld">
-          <label>推理设备</label>
+          <label>推理设备（③ 推理 / 训练同设备）</label>
           <select id="su-device">
             <option value="auto">自动（按可用性）</option>
             <option value="cuda">GPU（CUDA）</option>
@@ -275,20 +336,91 @@
           </select>
         </div>
         <div class="sfld">
-          <label>CPU 线程上限（0 = 按物理核）</label>
+          <label>CPU 线程上限（④ 0 = 按物理核）</label>
           <input type="number" id="su-threads" min="0" max="128" placeholder="0">
         </div>
+        <div class="sfld">
+          <label>GPU 显存上限（⑤⑥ 百分比，0 = 不限制）</label>
+          <input type="number" id="su-gpumem" min="0" max="100" step="5" placeholder="0">
+        </div>
+        <div class="sfld">
+          <label>强度档位（⑦ 并发 / 合批力度）</label>
+          <select id="su-strength">
+            <option value="auto">自动（引擎自行标定）</option>
+            <option value="low">低（串行，不合批，最省资源）</option>
+            <option value="mid">中（并发 2）</option>
+            <option value="balanced">均衡（并发 3）</option>
+            <option value="strong">高（并发 4）</option>
+            <option value="max">最高（并发 6）</option>
+          </select>
+        </div>
       </div>
-      <div class="srow"><input type="checkbox" id="su-mirror"> 模型下载走 hf-mirror 国内镜像（更快）</div>
+      <div class="shint">⑤ 线程协同与 GPU 占用：显存上限按总显存比例限制本进程占用，达到上限即报显存不足（不会把整机拖进交换）；显卡占用率百分比上限由系统任务管理器控制，本版本不代管。</div>
+      <div class="shint">⑥ 内存（RAM）硬上限本版本未提供（由操作系统统一管理），后续版本补齐。</div>
+      <div class="shint">⑦ 强度档位会同时调整调度并发上限与跨请求合批开关，不是装饰性选项；训练与推理共用同一设备，不提供单独的「训练模式」开关。</div>
+    </div>
+
+    <div class="scard">
+      <h3 class="sgrp">⑧ 开机自启 · ⑩ 路径连接 · ⑪ 默认与流式配置</h3>
       <div class="srow"><input type="checkbox" id="su-autostart"> 开机自动启动 ADR Studio</div>
-      <div class="srow"><input type="checkbox" id="su-audit" checked> 记录声音安全审计日志（上传 / 建档 / 合成事件，不含文本与声纹明文）</div>
-      <div class="srow"><input type="checkbox" id="su-wavmeta" checked> 导出音频标注 AI 生成（WAV 元数据）</div>
-      <div class="shint">权重导入与存放位置、显存/内存上限、强度档位、Autopilot 画像与调度报告不在本向导逐项设置：前两项走模型管理器，资源与强度由引擎自动标定（Autopilot）决定，也可在启动器设置中心手动覆盖。</div>
+      <div class="sgrid">
+        <div class="sfld wide">
+          <label>声音档案存放目录（⑩ 留空 = 默认位置）</label>
+          <input type="text" id="su-datadir" placeholder="%LOCALAPPDATA%\ADR\data" spellcheck="false">
+        </div>
+        <div class="sfld">
+          <label>默认声音档案（⑪ 留空 = 后端缺省）</label>
+          <input type="text" id="su-profile" placeholder="如 my_voice" spellcheck="false">
+        </div>
+        <div class="sfld">
+          <label>流式首段最大字数（⑪ 默认 14）</label>
+          <input type="number" id="su-streamhead" min="1" max="200" placeholder="14">
+        </div>
+        <div class="sfld">
+          <label>长句细分上限（⑪ 默认 40）</label>
+          <input type="number" id="su-splitmax" min="1" max="400" placeholder="40">
+        </div>
+      </div>
+      <div class="shint">⑩ 定向路径连接：模型目录由安装位置固定（上文已列出），声音档案目录可自定义；两者都只在本机使用，不上传云端。</div>
+    </div>
+
+    <div class="scard">
+      <h3 class="sgrp">⑫ 协议 · ⑬ 声音安全 · ⑭ 设备标识 · ⑮⑯ 默认模式与 Autopilot</h3>
+      <div class="sstatic">⑫ 服务协议 / 隐私政策 / 开源许可：已在上一步的「使用条款与声音安全告知」中阅读并同意（AGPL-3.0-only，本地使用免费）。</div>
+      <div class="srow"><input type="checkbox" id="su-audit" checked> ⑬ 记录声音安全审计日志（上传 / 建档 / 合成事件，不含文本与声纹明文）</div>
+      <div class="srow"><input type="checkbox" id="su-wavmeta" checked> ⑬ 导出音频标注 AI 生成（WAV 元数据）</div>
+      <div class="srow"><input type="checkbox" id="su-deviceid" disabled> ⑭ 采集设备唯一标识（主板信息）—— <b>本版本不采集</b>，仅列出以便知情，不可开启</div>
+      <div class="srow"><input type="checkbox" id="su-autotune" checked> ⑯ Autopilot 自动标定（启动后自动测量设备并按画像调整流式节奏）</div>
+      <div class="shint">⑮ 默认模式（关闭 / 开启）：本版本启动后固定进入启动器，不自动打开控制台，该开关留待后续版本。</div>
+      <div class="shint">⑯ Autopilot 预算设置与调度报告：本版本提供自动标定开关，设备画像报告与调度报告在后续版本提供。</div>
+      <div class="srow"><input type="checkbox" id="su-mirror"> 模型下载走 hf-mirror 国内镜像（更快）</div>
       <div class="smsg" id="su-msg"></div>
       <div class="sacts">
         <button id="suSave">保存并继续</button>
         <button id="suSkip">跳过，使用默认配置</button>
       </div>
+    </div>
+  </div>
+
+  <!-- 批次102: 本机账号登录 (壳启动即弹; 登录前不放行进入启动器) -->
+  <div id="login">
+    <div class="lcard">
+      <h2>登录<em>本机账号</em></h2>
+      <div class="lgrid">
+        <div class="lfld">
+          <label>账号</label>
+          <input type="text" id="pw-user" placeholder="ADR" autocomplete="username" spellcheck="false">
+        </div>
+        <div class="lfld">
+          <label>密码</label>
+          <input type="password" id="pw-pass" placeholder="请输入密码" autocomplete="current-password">
+        </div>
+      </div>
+      <div class="smsg" id="pw-msg"></div>
+      <div class="lacts">
+        <button id="pwLogin">登录</button>
+      </div>
+      <div class="tfoot">账号与口令只保存在本机（口令仅以 PBKDF2 派生值落盘）；登录只解锁本机界面，不涉及云端账号。</div>
     </div>
   </div>
 
@@ -393,7 +525,7 @@ function setTermsMode(on) {
   await maybeShowSetup();
 })();
 
-// ===== 批次101: 首启配置向导 (条款同意后、引擎启动前) =====
+// ===== 批次101/102: 首启配置向导 (条款同意后、引擎启动前) =====
 // 纪要 L163「设计增加项: 首次启动配置」的可落地子集在此一次性收口;
 // 引擎在 Rust 侧等 complete_setup 标记出现后才启动, 保证配置项在
 // sidecar 环境注入那一刻就生效 (设备走向 / 线程上限 / 数据目录)。
@@ -401,6 +533,7 @@ const setupEl = document.getElementById("setup");
 const $su = id => document.getElementById(id);
 let suBase = null;              // 现有 shell.json 配置 (保存时在其基础上改, 不丢其他字段)
 let suAuto = false;             // 注册表当前自启真值 (避免无谓写注册表)
+const STRENGTHS = ["auto", "low", "mid", "balanced", "strong", "max"];
 function setSetupMode(on) {
   document.body.classList.toggle("setup-mode", on);
   if (on) setupEl.scrollIntoView({ block: "start" });
@@ -408,14 +541,38 @@ function setSetupMode(on) {
 function suMsg(text) {
   $su("su-msg").textContent = text || "";
 }
+// 批次102 ⑨ 检查模型: 只核对本机文件, 不联网不下载。
+async function refreshModels() {
+  const inv = window.__TAURI__?.core.invoke;
+  if (!inv) return;
+  try {
+    const r = await inv("check_models");
+    $su("su-models").textContent = r?.dir || "(未定位到运行时目录)";
+    const miss = r?.missing || [];
+    $su("su-models-msg").textContent = miss.length
+      ? `⑨ 检查模型：已找到 ${r.found}/${r.total} 项，缺失 ${miss.join("、")}。缺失不影响本次设置，引擎预热时会自动补齐。`
+      : `⑨ 检查模型：${r.found}/${r.total} 项齐全（仅核对本机文件，不联网、不下载）。`;
+  } catch (e) {
+    $su("su-models").textContent = "检测失败";
+    $su("su-models-msg").textContent = "⑨ 检查模型失败: " + e;
+  }
+}
 async function initSetup() {
   const inv = window.__TAURI__?.core.invoke;
   if (!inv) return;
   try { suBase = await inv("load_shell_settings") || {}; } catch (_) { suBase = {}; }
   const cfg = suBase;
   $su("su-datadir").value = cfg.data_dir || "";
+  $su("su-profile").value = cfg.default_profile || "";
   $su("su-device").value = (cfg.device === "cuda" || cfg.device === "cpu") ? cfg.device : "auto";
   $su("su-threads").value = cfg.torch_threads || "";
+  // 显存上限: 0.1~1.0 存比例, 界面用百分比; 未设置/越界 = 不限制
+  const frac = typeof cfg.gpu_mem_fraction === "number" ? cfg.gpu_mem_fraction : 0;
+  $su("su-gpumem").value = frac > 0 ? Math.round(frac * 100) : "";
+  $su("su-strength").value = STRENGTHS.includes(cfg.strength) ? cfg.strength : "auto";
+  $su("su-streamhead").value = cfg.stream_head || "";
+  $su("su-splitmax").value = cfg.split_max || "";
+  $su("su-autotune").checked = cfg.autotune !== false;
   $su("su-mirror").checked = !!cfg.hf_mirror;
   $su("su-audit").checked = cfg.safety_audit !== false;
   $su("su-wavmeta").checked = cfg.wav_metadata !== false;
@@ -430,6 +587,7 @@ async function initSetup() {
   }
   try { suAuto = !!(await inv("autostart_get")); } catch (_) { suAuto = false; }
   $su("su-autostart").checked = suAuto;
+  await refreshModels();
 }
 async function saveSetup() {
   const inv = window.__TAURI__?.core.invoke;
@@ -440,8 +598,16 @@ async function saveSetup() {
   try {
     const cfg = Object.assign({}, suBase || {});
     cfg.data_dir = $su("su-datadir").value.trim();
+    cfg.default_profile = $su("su-profile").value.trim();
     cfg.device = $su("su-device").value;
     cfg.torch_threads = Math.min(Math.max(parseInt($su("su-threads").value, 10) || 0, 0), 128);
+    // 显存上限: 百分比 → 比例; 0/空/越界 = 不限制 (null → 不注入)
+    const pct = parseFloat($su("su-gpumem").value);
+    cfg.gpu_mem_fraction = (isFinite(pct) && pct >= 10 && pct <= 100) ? Math.round(pct) / 100 : null;
+    cfg.strength = $su("su-strength").value;
+    cfg.stream_head = Math.min(Math.max(parseInt($su("su-streamhead").value, 10) || 0, 0), 200);
+    cfg.split_max = Math.min(Math.max(parseInt($su("su-splitmax").value, 10) || 0, 0), 400);
+    cfg.autotune = $su("su-autotune").checked;
     cfg.hf_mirror = $su("su-mirror").checked;
     cfg.safety_audit = $su("su-audit").checked;
     cfg.wav_metadata = $su("su-wavmeta").checked;
@@ -459,6 +625,7 @@ async function saveSetup() {
     await inv("complete_setup");
     setSetupMode(false);
     setTip("配置已保存, 正在启动本地引擎…");
+    await initLogin();
   } catch (e) {
     suMsg(String(e));
     btn.disabled = false; btn.textContent = "保存并继续";
@@ -471,19 +638,98 @@ $su("suSkip").addEventListener("click", async () => {
     await inv("complete_setup");
     setSetupMode(false);
     setTip("已跳过首启配置, 使用默认设置启动引擎…");
+    await initLogin();
   } catch (e) {
     suMsg(String(e));
   }
 });
-// 条款同意后 → 若首启配置未做, 接续显示向导 (否则直接进步骤流)
+$su("su-checkmodels").addEventListener("click", refreshModels);
+$su("su-openmodels").addEventListener("click", async () => {
+  const inv = window.__TAURI__?.core.invoke;
+  try {
+    const r = await inv("check_models");
+    if (!r?.dir) { suMsg("未定位到模型目录"); return; }
+    await inv("open_path", { path: r.dir });
+  } catch (e) {
+    suMsg("打开模型目录失败: " + e);
+  }
+});
+
+// ===== 批次102: 本机账号登录 (壳启动即弹, 登录前不放行进入启动器) =====
+// 登录从 launcher 前移到预热页首屏: 引擎预热与登录并行, 但导航必须等登录完成。
+const $pw = id => document.getElementById(id);
+function setLoginMode(on) {
+  document.body.classList.toggle("login-mode", on);
+}
+function pwMsg(text) {
+  $pw("pw-msg").textContent = text || "";
+}
+// 返回 true = 需要用户登录 (已显示登录视图); false = 已登录或命令不可用
+async function initLogin() {
+  const inv = window.__TAURI__?.core.invoke;
+  if (!inv) return false;
+  try {
+    const acc = await inv("account_info");
+    if (acc?.logged_in) return false;
+    $pw("pw-user").value = acc?.username || "ADR";
+    $pw("pw-pass").value = "";
+    $pw("pw-pass").placeholder = acc?.customized ? "请输入密码" : "默认 Adr12345@";
+    pwMsg("");
+    setLoginMode(true);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+async function afterLogin() {
+  const inv = window.__TAURI__?.core.invoke;
+  if (!inv) return;
+  try {
+    const st = await inv("engine_status");
+    if (st && st.phase === "ready") {
+      // 预热流程仍在跑时 enter_launcher 不导航 (由 prewarm_flow 统一跳, 避免重载)
+      await inv("enter_launcher");
+      return;
+    }
+  } catch (_) { /* 引擎未就绪 → 等 prewarm_flow 就绪后放行 */ }
+  setTip("登录成功, 正在等待引擎就绪…", "ok");
+}
+async function doLogin() {
+  const inv = window.__TAURI__?.core.invoke;
+  const btn = $pw("pwLogin");
+  if (!inv) { pwMsg("请在 ADR Studio 桌面应用内使用"); return; }
+  btn.disabled = true; btn.textContent = "登录中…";
+  pwMsg("");
+  try {
+    await inv("account_login", { username: $pw("pw-user").value.trim(), password: $pw("pw-pass").value });
+    setLoginMode(false);
+    setTip("登录成功, 引擎就绪后自动进入启动器", "ok");
+    await afterLogin();
+  } catch (e) {
+    pwMsg(String(e));
+  }
+  btn.disabled = false; btn.textContent = "登录";
+}
+$pw("pwLogin").addEventListener("click", doLogin);
+$pw("pw-pass").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") doLogin();
+});
+$pw("pw-user").addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter") $pw("pw-pass").focus();
+});
+
+// 条款同意后 → 若首启配置未做, 接续显示向导; 已做过 → 直接进登录
 async function maybeShowSetup() {
   const inv = window.__TAURI__?.core.invoke;
   if (!inv) return;
   try {
-    if (await inv("setup_done")) return;
+    if (!(await inv("setup_done"))) {
+      setSetupMode(true);
+      await initSetup();
+      return;
+    }
   } catch (_) { return; }
-  setSetupMode(true);
-  await initSetup();
+  await initLogin();
 }
 document.getElementById("btnAgree").addEventListener("click", async () => {
   const b = document.getElementById("btnAgree");

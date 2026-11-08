@@ -253,6 +253,25 @@ def runtime_autotune() -> bool:
         "0", "false", "no", "off")
 
 
+def gpu_mem_fraction() -> float | None:
+    """ADR_GPU_MEM_FRACTION — 单进程显存上限占比 (批次102 首启向导 ⑤⑥)。
+
+    取值 0.1~1.0 (占总显存比例)。未设置 / 非法 / 越界一律 None = 不限制。
+    仅在 CUDA 设备下生效, 由 gsv_engine 在 torch.cuda 初始化后应用
+    (torch.cuda.set_per_process_memory_fraction) —— 达到上限即抛 OOM, 而不是
+    把整机拖进交换/显存挤爆。与系统级显卡占用率上限 (Windows 任务管理器) 不是
+    同一件事, 这里只约束本进程。
+    """
+    raw = (os.environ.get("ADR_GPU_MEM_FRACTION") or "").strip()
+    if not raw:
+        return None
+    try:
+        v = float(raw)
+    except ValueError:
+        return None
+    return v if 0.1 <= v <= 1.0 else None
+
+
 def torch_threads() -> int:
     """ADR_TORCH_THREADS — torch.set_num_threads 线程数; 0/未设置/非法 = 默认
     (PyTorch 自按物理核)。低配核少机器 (如 4 核) 跑满会抢系统资源, 手动

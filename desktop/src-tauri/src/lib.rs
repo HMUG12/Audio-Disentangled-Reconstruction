@@ -115,6 +115,12 @@ impl ServerState {
 /// 重启场景 (launch_console 切换模式) 只杀 sidecar, 不动该标记。
 static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 
+/// 批次102: 预热流程是否仍在运行 (含"等登录"门禁等待期)。
+/// 登录前移后出现两个导航来源: prewarm_flow (引擎就绪 + 已登录 → 跳启动器)
+/// 与前端 enter_launcher (登出后重新登录 → 主动跳启动器)。用本标志让两者互斥,
+/// 避免同一页面被连续导航两次 (启动器白闪一次重载)。
+static PREWARM_ACTIVE: AtomicBool = AtomicBool::new(false);
+
 // ---------------------------------------------------------------------------
 // 设置中心 (批次48): shell.json 配置 + sidecar 环境变量注入
 // ---------------------------------------------------------------------------
@@ -169,6 +175,18 @@ struct ShellSettings {
     safety_audit: Option<bool>,
     /// ADR_WAV_METADATA — 分发 WAV 尾部 LIST/INFO 标注 AI 生成; 默认开
     wav_metadata: Option<bool>,
+    // --- 首启向导补全 (批次102, 会议纪要 ①-⑯ 可落地子集) ---
+    /// ADR_GPU_MEM_FRACTION — 单进程显存上限占比 (0.1~1.0); None = 不限制
+    gpu_mem_fraction: Option<f32>,
+    /// 强度档位: auto/low/mid/balanced/strong/max — 映射调度并发上限
+    /// (ADR_SCHED_MAX_CONCURRENCY) 与跨请求合批 (ADR_T2S_COALESCE), 不单独落环境变量
+    strength: Option<String>,
+    /// ADR_TTS_STREAM_HEAD — 流式首段最大字数; 0/None = 后端默认 (14)
+    stream_head: Option<u16>,
+    /// ADR_TTS_SPLIT_MAX — 无句读长段细分字数; 0/None = 后端默认 (40)
+    split_max: Option<u16>,
+    /// ADR_RUNTIME_AUTOTUNE=false — 关闭 Autopilot 自动微调; None/true = 默认开
+    autotune: Option<bool>,
 }
 
 static SHELL_CFG: std::sync::OnceLock<Mutex<ShellSettings>> = std::sync::OnceLock::new();
@@ -266,6 +284,37 @@ fn env_overrides(c: &ShellSettings, auto_compat: bool) -> Vec<(String, String)> 
     }
     if !c.wav_metadata.unwrap_or(true) {
         v.push(("ADR_WAV_METADATA".into(), "0".into()));
+    }
+    // 批次102 首启向导补全 (会议纪要 L163-180 ①-⑯ 中可落地的部分):
+    // 资源上限 / 流式参数 / Autopilot 开关 / 强度档位。
+    // 显存上限 (⑤⑥): 0.1~1.0 之外视为未配置 (后端不设上限)。
+    if let Some(f) = c.gpu_mem_fraction.filter(|f| *f >= 0.1 && *f <= 1.0) {
+        v.push(("ADR_GPU_MEM_FRACTION".into(), format!("{f}")));
+    }
+    // 流式首段字数 (⑪) / 长句细分上限 (⑪): 0 = 后端默认, 不注入。
+    if let Some(n) = c.stream_head.filter(|n| *n > 0) {
+        v.push(("ADR_TTS_STREAM_HEAD".into(), n.to_string()));
+    }
+    if let Some(n) = c.split_max.filter(|n| *n > 0) {
+        v.push(("ADR_TTS_SPLIT_MAX".into(), n.to_string()));
+    }
+    // Autopilot 自动标定 (⑯): 默认开, 仅显式关闭时注入 =0。
+    if c.autotune == Some(false) {
+        v.push(("ADR_RUNTIME_AUTOTUNE".into(), "0".into()));
+    }
+    // 强度档位 (⑦): 映射调度并发上限 + 跨请求合批开关, 不是伪开关。
+    // low = 串行且不合批 (最省资源); mid/balanced/strong/max = 逐级放宽并发,
+    // 合批沿用后端默认 (开)。auto/未知 = 零注入 (后端默认 N=1 + 合批开)。
+    match c.strength.as_deref().map(str::trim).unwrap_or("") {
+        "low" => {
+            v.push(("ADR_SCHED_MAX_CONCURRENCY".into(), "1".into()));
+            v.push(("ADR_T2S_COALESCE".into(), "0".into()));
+        }
+        "mid" => v.push(("ADR_SCHED_MAX_CONCURRENCY".into(), "2".into())),
+        "balanced" => v.push(("ADR_SCHED_MAX_CONCURRENCY".into(), "3".into())),
+        "strong" => v.push(("ADR_SCHED_MAX_CONCURRENCY".into(), "4".into())),
+        "max" => v.push(("ADR_SCHED_MAX_CONCURRENCY".into(), "6".into())),
+        _ => {}
     }
     v
 }
@@ -508,6 +557,8 @@ pub fn run() {
             account::account_set,
             account::account_login,
             account::account_logout,
+            enter_launcher,
+            check_models,
             skip_prewarm,
             retry_prewarm,
             back_to_launcher,
@@ -657,6 +708,11 @@ fn skip_prewarm(app: AppHandle) {
     if !setup_done_flag() {
         return;
     }
+    // 批次102: 本机账号登录门禁 — 未登录不放行 (登录已前移到预热页首屏,
+    // 「仍要进入」是引擎失败时的兜底, 同样不能绕过登录)。
+    if !account::logged_in() {
+        return;
+    }
     let state: State<ServerState> = app.state();
     // 服务确实在跑 (pid != 0) 才标 Ready (批次40): 服务已被杀/从未启动时
     // 标 Ready 会谎报就绪 (launcher 顶栏/托盘显示失真); 导航保留 —
@@ -694,6 +750,80 @@ fn back_to_launcher(app: AppHandle) {
     }
     let window = app.get_webview_window("main");
     navigate(&window, &app_page(&window, "launcher.html"));
+}
+
+/// 批次102: 登录成功后进启动器。
+/// 用途: 登录已前移到预热页首屏 (壳启动即弹), 但预热流程 (prewarm_flow)
+/// 只在"本次启动里"守登录门禁 — 登出后从预热页重新登录时, 该流程早已结束,
+/// 需要本命令在登录成功后主动导航到启动器。三道门禁 (条款 / 首启配置 / 登录)
+/// 与 prewarm_flow 保持同口径。
+#[tauri::command]
+fn enter_launcher(app: AppHandle) -> Result<(), String> {
+    if !terms_agreed_flag() {
+        return Err("请先同意使用条款".into());
+    }
+    if !setup_done_flag() {
+        return Err("请先完成首次启动配置".into());
+    }
+    if !account::logged_in() {
+        return Err("请先登录本机账号".into());
+    }
+    // 预热流程仍在跑 (引擎就绪后守登录门禁) → 由它统一导航, 这里不再跳一次。
+    if PREWARM_ACTIVE.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+    let window = app.get_webview_window("main");
+    navigate(&window, &app_page(&window, "launcher.html"));
+    Ok(())
+}
+
+/// GSV 必需权重 (与 adr/core/doctor.py _GSV_REQUIRED 同口径)。
+const GSV_REQUIRED: [&str; 6] = [
+    "gsv-v2final-pretrained/s1bert25hz-5kh-longer-epoch=12-step=369668.ckpt",
+    "gsv-v2final-pretrained/s2G2333k.pth",
+    "chinese-hubert-base/pytorch_model.bin",
+    "chinese-roberta-wwm-ext-large/pytorch_model.bin",
+    "chinese-roberta-wwm-ext-large/tokenizer.json",
+    "sv/pretrained_eres2netv2w24s4ep4.ckpt",
+];
+
+/// 权重根目录: 便携态 = <exe旁>/runtime, 开发态 = 仓库根 (adr/cli.py 标记)。
+fn models_root() -> Option<PathBuf> {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(base) = exe.parent() {
+            let rt = base.join("runtime");
+            if rt.join("third_party").is_dir() {
+                return Some(rt);
+            }
+        }
+    }
+    find_repo_root()
+}
+
+/// 批次102: 首启向导 ⑨ 检查模型 — 只查本地文件是否存在, 不联网不下载。
+#[tauri::command]
+fn check_models() -> serde_json::Value {
+    let dir = models_root().map(|b| {
+        b.join("third_party")
+            .join("gpt_sovits")
+            .join("GPT_SoVITS")
+            .join("pretrained_models")
+    });
+    let missing: Vec<String> = match dir.as_ref() {
+        Some(d) => GSV_REQUIRED
+            .iter()
+            .filter(|f| !d.join(f).is_file())
+            .map(|f| f.to_string())
+            .collect(),
+        None => GSV_REQUIRED.iter().map(|f| f.to_string()).collect(),
+    };
+    serde_json::json!({
+        "dir": dir.as_ref().map(|d| d.display().to_string()).unwrap_or_default(),
+        "found": GSV_REQUIRED.len() - missing.len(),
+        "total": GSV_REQUIRED.len(),
+        "missing": missing,
+        "ready": missing.is_empty(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1347,6 +1477,13 @@ fn error_headline(error: &str) -> String {
 /// 失败停在预热页 (「重试/仍要进入」按钮)。无总超时: v1.0.1 拍板取消超时
 /// 自动放行 — 首启要下载 ~2GB 底模, 超时放行会让用户进面板才发现引擎没好。
 fn prewarm_flow(app: AppHandle) {
+    // 批次102: 标记预热流程在跑 (登录前移后与 enter_launcher 互斥导航)。
+    PREWARM_ACTIVE.store(true, Ordering::Relaxed);
+    prewarm_flow_inner(app);
+    PREWARM_ACTIVE.store(false, Ordering::Relaxed);
+}
+
+fn prewarm_flow_inner(app: AppHandle) {
     let window = app.get_webview_window("main");
     let state: State<ServerState> = app.state();
 
@@ -1449,6 +1586,23 @@ fn prewarm_flow(app: AppHandle) {
                 return;
             }
             if terms_agreed_flag() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    }
+    // 批次102: 本机账号登录门禁 — 登录前移到预热页首屏 (壳一启动就弹),
+    // 登录成功前不放行导航; 引擎已在后台预热, 登录期间不浪费时间。
+    if !account::logged_in() {
+        eval_prewarm(&window, "kernel", "引擎已就绪, 请登录本机账号后进入启动器");
+        loop {
+            if SHUTTING_DOWN.load(Ordering::Relaxed) {
+                return;
+            }
+            if state.base_url.lock().unwrap().as_deref() != Some(base.as_str()) {
+                return;
+            }
+            if account::logged_in() {
                 break;
             }
             std::thread::sleep(Duration::from_millis(500));
@@ -1962,6 +2116,11 @@ mod tests {
             s2_num_workers: Some(2),           // 批次93 训练 DataLoader 进程数
             compat_cpu: Some(true),          // 批次57 13/14 代兼容模式
             // 批次62 声音安全字段 (默认开 = 不注入, 本用例不断言)
+            gpu_mem_fraction: Some(0.75),    // 批次102 显存上限 75%
+            strength: Some("strong".into()), // 批次102 强度档位 → 并发上限 4
+            stream_head: Some(18),           // 批次102 流式首段字数
+            split_max: Some(60),             // 批次102 长句细分上限
+            autotune: Some(false),           // 批次102 关闭 Autopilot
             ..Default::default()
         };
         let m: std::collections::HashMap<String, String> = env_overrides(&c, false).into_iter().collect();
@@ -1980,7 +2139,46 @@ mod tests {
         assert_eq!(m.get("ONEDNN_MAX_CPU_ISA").unwrap(), "AVX2");
         assert_eq!(m.get("MKL_ENABLE_INSTRUCTIONS").unwrap(), "AVX2");
         assert_eq!(m.get("NUMBA_CPU_NAME").unwrap(), "generic");
-        assert_eq!(m.len(), 14);
+        // 批次102: 首启向导补全项
+        assert_eq!(m.get("ADR_GPU_MEM_FRACTION").unwrap(), "0.75");
+        assert_eq!(m.get("ADR_TTS_STREAM_HEAD").unwrap(), "18");
+        assert_eq!(m.get("ADR_TTS_SPLIT_MAX").unwrap(), "60");
+        assert_eq!(m.get("ADR_RUNTIME_AUTOTUNE").unwrap(), "0");
+        assert_eq!(m.get("ADR_SCHED_MAX_CONCURRENCY").unwrap(), "4");
+        assert_eq!(m.len(), 19);
+    }
+
+    #[test]
+    fn env_overrides_batch102_strength_and_limits() {
+        // 强度档位 low = 串行 + 关合批 (最省资源); strong = 并发 4 (合批走默认开)
+        let m: std::collections::HashMap<String, String> =
+            env_overrides(&ShellSettings { strength: Some("low".into()), ..Default::default() }, false)
+                .into_iter()
+                .collect();
+        assert_eq!(m.get("ADR_SCHED_MAX_CONCURRENCY").unwrap(), "1");
+        assert_eq!(m.get("ADR_T2S_COALESCE").unwrap(), "0");
+        let m: std::collections::HashMap<String, String> =
+            env_overrides(&ShellSettings { strength: Some("strong".into()), ..Default::default() }, false)
+                .into_iter()
+                .collect();
+        assert_eq!(m.get("ADR_SCHED_MAX_CONCURRENCY").unwrap(), "4");
+        assert!(m.get("ADR_T2S_COALESCE").is_none());
+        // auto / 空 / 未知档位 = 后端默认, 零注入
+        for s in ["auto", "", "bogus"] {
+            let c = ShellSettings { strength: Some(s.into()), ..Default::default() };
+            assert!(env_overrides(&c, false).is_empty());
+        }
+        // 显存上限越界 / 流式参数为 0 → 不注入 (后端默认)
+        let c = ShellSettings {
+            gpu_mem_fraction: Some(0.05),
+            stream_head: Some(0),
+            split_max: Some(0),
+            ..Default::default()
+        };
+        assert!(env_overrides(&c, false).is_empty());
+        // Autopilot 显式开 = 不注入 (后端默认开)
+        let c = ShellSettings { autotune: Some(true), ..Default::default() };
+        assert!(env_overrides(&c, false).is_empty());
     }
 
     #[test]

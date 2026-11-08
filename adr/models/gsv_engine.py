@@ -855,6 +855,18 @@ class GSVEngine:
                     device = "cuda" if torch.cuda.is_available() else "cpu"
             # 批次57: GPU 档案落日志 (排障关键: N 卡型号/算力/显存/驱动代际一目了然)
             if device == "cuda":
+                # 批次102 首启向导 ⑤⑥: 单进程显存上限 (占总显存比例)。
+                # 超限时 torch 直接抛 OOM (走既有 cuda_oom 善后), 而不是把
+                # 整机拖进交换。未设置 = 不限制。
+                _frac = settings.gpu_mem_fraction()
+                if _frac is not None:
+                    try:
+                        torch.cuda.set_per_process_memory_fraction(_frac, 0)
+                        logging.getLogger("adr").info(
+                            "[gpu] 显存上限 %.0f%% (ADR_GPU_MEM_FRACTION)", _frac * 100)
+                    except Exception:
+                        logging.getLogger("adr").warning(
+                            "[gpu] 显存上限设置失败 (ADR_GPU_MEM_FRACTION)", exc_info=True)
                 try:
                     _cap = torch.cuda.get_device_capability(0)
                     _props = torch.cuda.get_device_properties(0)

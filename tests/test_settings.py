@@ -169,3 +169,20 @@ def test_torch_threads(monkeypatch):
     assert settings.torch_threads() == 0
     monkeypatch.setenv("ADR_TORCH_THREADS", "abc")  # 非法回退 0
     assert settings.torch_threads() == 0
+
+
+# ===== 批次102: 显存上限 (首启向导 ⑤⑥) =====
+def test_gpu_mem_fraction(monkeypatch):
+    monkeypatch.delenv("ADR_GPU_MEM_FRACTION", raising=False)
+    assert settings.gpu_mem_fraction() is None      # 未设置 = 不限制
+    monkeypatch.setenv("ADR_GPU_MEM_FRACTION", "0.75")
+    assert settings.gpu_mem_fraction() == 0.75
+    monkeypatch.setenv("ADR_GPU_MEM_FRACTION", " 1 ")  # 空白容错
+    assert settings.gpu_mem_fraction() == 1.0
+    monkeypatch.setenv("ADR_GPU_MEM_FRACTION", "")     # 空串 = 未设置
+    assert settings.gpu_mem_fraction() is None
+    monkeypatch.setenv("ADR_GPU_MEM_FRACTION", "abc")  # 非法 → 不限制
+    assert settings.gpu_mem_fraction() is None
+    for bad in ("0.05", "1.5", "-1"):                # 越界 → 不限制
+        monkeypatch.setenv("ADR_GPU_MEM_FRACTION", bad)
+        assert settings.gpu_mem_fraction() is None

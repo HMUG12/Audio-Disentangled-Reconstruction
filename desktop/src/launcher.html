@@ -254,29 +254,6 @@
   #st-save:hover { background: var(--save-hover); }
   #st-save.busy { opacity: .6; pointer-events: none; }
   .st-links { font-size: 12.5px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
-
-  /* 批次101: 本地账号登录 (仅本机, 不联网) */
-  #login-ov { position: fixed; inset: 0; z-index: 60; display: none;
-    place-items: center; background: var(--overlay); }
-  #login-ov.on { display: grid; }
-  #login { width: min(380px, 88vw); background: var(--modal-grad);
-    border: 1px solid var(--modal-line); border-radius: 18px; padding: 28px 28px 22px;
-    box-shadow: var(--modal-shadow); }
-  #login .lg-title { font-size: 19px; font-weight: 700; margin-bottom: 3px; }
-  #login .lg-sub { font-size: 11.5px; color: var(--dim); margin-bottom: 6px; }
-  #login label { display: block; font-size: 12px; color: var(--strong); margin: 12px 0 5px; }
-  #login input { width: 100%; background: var(--field); border: 1px solid var(--tag-line);
-    border-radius: 8px; color: var(--txt); font-size: 13px; padding: 9px 11px;
-    outline: none; font-family: inherit; }
-  #login input:focus { border-color: var(--focus); }
-  #login .lg-msg { font-size: 12px; color: var(--err); margin-top: 10px; min-height: 16px; }
-  #login-btn { width: 100%; margin-top: 14px; background: var(--save-bg);
-    border: 1px solid var(--save-line); color: var(--save-txt); font-size: 13px;
-    font-weight: 600; border-radius: 10px; padding: 10px; cursor: pointer;
-    font-family: inherit; box-shadow: var(--save-shadow); }
-  #login-btn:hover { background: var(--save-hover); }
-  #login-btn:disabled { opacity: .6; cursor: default; }
-  #login .lg-hint { font-size: 11px; color: var(--faint); margin-top: 12px; line-height: 1.6; }
 </style>
 </head>
 <body>
@@ -534,20 +511,7 @@
     </div>
   </div>
 
-  <!-- 批次101: 本地账号登录 (仅本机; 未登录不进控制台, 壳侧命令同样校验) -->
-  <div id="login-ov">
-    <div id="login">
-      <div class="lg-title">登录 <em style="font-style:normal;color:var(--brand)">ADR Studio</em></div>
-      <div class="lg-sub">本机账号，仅用于解锁本地控制台，不联网、不上传。</div>
-      <label>用户名</label>
-      <input type="text" id="lg-user" autocomplete="username" spellcheck="false">
-      <label>密码</label>
-      <input type="password" id="lg-pass" autocomplete="current-password">
-      <div class="lg-msg" id="lg-msg"></div>
-      <button id="login-btn">登录</button>
-      <div class="lg-hint" id="lg-hint">首次使用默认账号 ADR / Adr12345@，可在「设置」中修改。</div>
-    </div>
-  </div>
+  <!-- 批次102: 登录已前移到预热页首屏 (壳启动即弹), 启动器不再有登录遮罩 -->
 
 <script>
 const cards = document.querySelectorAll(".card");
@@ -803,9 +767,8 @@ window.__TAURI__ && window.__TAURI__.core.invoke("load_shell_settings")
     .forEach(b => { if (b) b.checked = !!cfg.lan_expose; }))
   .catch(() => {});
 
-// ===== 批次101: 本地账号 (登录门禁 + 设置里改账号) =====
-// 壳侧 enter_console / launch_console 同样校验登录态, 前端遮罩只是体验层。
-const loginOv = document.getElementById("login-ov");
+// ===== 批次101/102: 本机账号 (登录在预热页首屏完成; 启动器只展示与改账号) =====
+// 壳侧 enter_console / launch_console 同样校验登录态; 登录态在进入启动器前已就绪。
 async function refreshAccount() {
   const inv = window.__TAURI__?.core.invoke;
   if (!inv) return null;
@@ -818,44 +781,12 @@ function paintAccount(info) {
   if (who) who.textContent = info.username ? "账号: " + info.username : "";
   if (out) out.style.display = info.logged_in ? "" : "none";
 }
-async function initLogin() {
-  const inv = window.__TAURI__?.core.invoke;
-  if (!inv) return;
-  const info = await refreshAccount();
-  paintAccount(info);
-  if (!info || info.logged_in) { loginOv.classList.remove("on"); return; }
-  document.getElementById("lg-user").value = info.username || "ADR";
-  loginOv.classList.add("on");
-}
-document.getElementById("login-btn").addEventListener("click", async () => {
-  const inv = window.__TAURI__?.core.invoke;
-  const btn = document.getElementById("login-btn");
-  const msg = document.getElementById("lg-msg");
-  msg.textContent = "";
-  btn.disabled = true; btn.textContent = "登录中…";
-  try {
-    await inv("account_login", {
-      username: document.getElementById("lg-user").value.trim(),
-      password: document.getElementById("lg-pass").value,
-    });
-    loginOv.classList.remove("on");
-    paintAccount(await refreshAccount());
-    showToast("已登录", true);
-  } catch (e) {
-    msg.textContent = String(e);
-  }
-  btn.disabled = false; btn.textContent = "登录";
-});
-document.getElementById("lg-pass").addEventListener("keydown", e => {
-  if (e.key === "Enter") document.getElementById("login-btn").click();
-});
 document.getElementById("acct-out").addEventListener("click", async () => {
   const inv = window.__TAURI__?.core.invoke;
   if (!inv) return;
   await inv("account_logout");
-  paintAccount(await refreshAccount());
-  document.getElementById("lg-pass").value = "";
-  loginOv.classList.add("on");
+  // 批次102: 退出登录回到预热页登录视图 (登录已前移, 这里不再弹遮罩)
+  location.href = "prewarm.html";
 });
 document.getElementById("st-acct-save").addEventListener("click", async () => {
   const inv = window.__TAURI__?.core.invoke;
@@ -872,7 +803,7 @@ document.getElementById("st-acct-save").addEventListener("click", async () => {
     showToast("本地账号已更新", true);
   } catch (e) { showToast(String(e)); }
 });
-initLogin();
+refreshAccount().then(paintAccount);
 
 // ===== 批次73: 更新链 (检查清单 → 下载校验 → 立即安装) + 包型互提示 =====
 const $upd = id => document.getElementById(id);
