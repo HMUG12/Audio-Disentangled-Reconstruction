@@ -37,6 +37,7 @@ from adr.models.gsv_engine import (
     handle_cuda_oom,
     is_cuda_oom,
     is_nltk_missing,
+    resolve_weights_path,
 )
 from adr.server import tts_cache
 from adr.server.audio_codec import pack_audio, to_int16
@@ -271,6 +272,9 @@ async def tts_handle(req: dict, request: Request) -> Response:
                     status_code=400,
                     content={"message": f"invalid {_wk}: {e}",
                              "code": "invalid_params"})
+            # 批次99 (R4-API-01): 回填解析后的绝对路径 — 引擎侧热换/合成复用
+            # 同一基准 (GSV_DIR), 否则相对写法在预检通过后加载失败。
+            req[_wk] = resolve_weights_path(_wp)
     msg = await asyncio.to_thread(_check_ref_audio, req["ref_audio_path"])
     if msg:
         return JSONResponse(status_code=400,
@@ -455,6 +459,8 @@ async def _switch_weights(request: Request, weights_path: str | None,
     try:
         # Track B: 安全预检, 恶意 pickle 在进入引擎加载前即被拒 (400)
         await asyncio.to_thread(_validate_weights_file, weights_path)
+        # 批次99 (R4-API-01): 换权也用同一基准解析后的绝对路径
+        weights_path = resolve_weights_path(weights_path)
         loading = True
         engine = _get_engine(request)
         if kind == "gpt":

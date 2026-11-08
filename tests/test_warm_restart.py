@@ -7,10 +7,12 @@
 4. min_lr 下限保护
 5. val/loss 指标也可用
 """
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
-REPO = Path(r"E:\新创意构思\新建文件夹\ADR")
+REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
 import numpy as np
@@ -73,21 +75,33 @@ class ImprovingMetricCallback(Callback):
         metrics[self.name] = self.value
 
 
+_TMP_DIRS: dict[str, Path] = {}
+
+
+def _dir(tmp: str) -> Path:
+    """每次运行独立临时目录 (批次99 / P3: 固定 tests/_tmp_* 并行会互相踩)。"""
+    d = _TMP_DIRS.get(tmp)
+    if d is None:
+        d = Path(tempfile.mkdtemp(prefix=f"adr_{tmp}_"))
+        _TMP_DIRS[tmp] = d
+    return d
+
+
 def make_trainer(callbacks, epochs=6, lr=2e-4, tmp="wr"):
     ds = make_dataset(20)
     model = make_small_model()
     config = TrainerConfig(
         epochs=epochs, batch_size=2, val_ratio=0.3,
         lr=lr, warmup_steps=2,
-        output_dir=str(REPO / "tests" / f"_tmp_{tmp}"),
+        output_dir=str(_dir(tmp)),
         log_every_n_steps=100, save_every_n_epochs=100,
     )
     return Trainer(model=model, train_data=ds, config=config, callbacks=callbacks)
 
 
 def cleanup(tmp="wr"):
-    import shutil
-    shutil.rmtree(REPO / "tests" / f"_tmp_{tmp}", ignore_errors=True)
+    shutil.rmtree(_dir(tmp), ignore_errors=True)
+    _TMP_DIRS.pop(tmp, None)
 
 
 class TestWarmRestartTriggers:
@@ -232,7 +246,7 @@ class TestWarmRestartGradAccum:
             # 关闭 AMP: CUDA 上 GradScaler 初期梯度溢出会跳过 optimizer.step,
             # 导致 scheduler 不步进、lr 停在 warmup 起点 0, 触发 min_lr 保护跳过重启
             use_amp=False,
-            output_dir=str(REPO / "tests" / "_tmp_wr_accum"),
+            output_dir=str(_dir("wr_accum")),
             log_every_n_steps=100, save_every_n_epochs=100,
         )
         trainer = Trainer(model=model, train_data=ds, config=config,

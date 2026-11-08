@@ -10,7 +10,7 @@
 import sys
 from pathlib import Path
 
-REPO = Path(r"E:\新创意构思\新建文件夹\ADR")
+REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
 import numpy as np

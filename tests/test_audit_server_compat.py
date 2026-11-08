@@ -134,6 +134,38 @@ def test_set_weights_oom_503(client, engine, tmp_path, ep, monkeypatch):
     assert r.status_code == 503 and r.json()["code"] == "cuda_oom"
 
 
+# ─── 批次99 (R4-API-01): 相对权重路径统一按 GSV_DIR 解析 ───
+
+def test_relative_weights_resolved_against_gsv_dir(client, engine, monkeypatch, tmp_path):
+    """文档化写法 GPT_weights_v2/xxx.ckpt 不再依赖进程 cwd。
+
+    预检与加载此前基准不同: 预检按 GSV_DIR 找到文件放行, 引擎按 cwd 解析
+    → not found。这里断言 v2 层回填的是 GSV_DIR 下的绝对路径。
+    """
+    from adr.models import gsv_engine
+    from adr.server import v2_compat
+
+    gsv = tmp_path / "gsv"
+    wdir = gsv / "GPT_weights_v2"
+    wdir.mkdir(parents=True)
+    (wdir / "demo.ckpt").write_bytes(b"x")
+    monkeypatch.setattr(gsv_engine, "GSV_DIR", gsv)
+    # 真校验会 torch.load 这个 1 字节假权重, 这里只测路径解析链路
+    monkeypatch.setattr(v2_compat, "_validate_weights_file", lambda p: None)
+
+    seen = {}
+
+    def _synth(text, ref_audio, **kw):
+        seen.update(kw)
+        return np.full(160, 0.1, np.float32), 32000
+
+    monkeypatch.setattr(engine, "synthesize", _synth)
+    r = client.post("/api/v2/tts",
+                    json=dict(BODY, t2s_weights="GPT_weights_v2/demo.ckpt"))
+    assert r.status_code == 200
+    assert seen["t2s_weights"] == str((wdir / "demo.ckpt").resolve())
+
+
 # ─── #40 文本长度 / 数值边界 ───
 
 def test_text_too_long_413(client, engine, monkeypatch):

@@ -185,6 +185,19 @@ def _weights_max_bytes() -> int:
     return (mb if mb > 0 else 2048) * 1024 * 1024
 
 
+def resolve_weights_path(weights_path: str) -> str:
+    """权重路径 → 绝对路径 (批次99 / R4-API-01)。
+
+    相对路径统一按 GSV_DIR 解析。此前预检按 GSV_DIR、实际加载按进程 cwd
+    解析, 服务进程 cwd ≠ GSV 目录时 ``GPT_weights_v2/xxx.ckpt`` 这类文档化
+    写法会"预检通过、加载 not found"。预检、换权、合成入口必须共用本函数。
+    """
+    path = Path(str(weights_path))
+    if not path.is_absolute():
+        path = GSV_DIR / path
+    return str(path.resolve())
+
+
 def _precheck_weights_path(weights_path: str) -> str:
     """整文件读入前的本地路径预检, 返回解析后的绝对路径 (批次86 / SEC-01)。
 
@@ -193,19 +206,15 @@ def _precheck_weights_path(weights_path: str) -> str:
     服务主动发起 SMB 连接。这里先拒绝 UNC/设备路径 + stat 校验 (存在、普通
     文件、大小上限), 通过后才进入 pickle 预检。
 
-    相对路径按 GSV 目录解析 — 与 _ensure_weights 在 _gsv_context() (chdir)
-    下 ``Path(p).resolve()`` 的语义一致, 不影响 GPT_weights_v2/xxx.ckpt 这类
-    文档化写法。
+    相对路径解析统一走 resolve_weights_path (按 GSV 目录), 与 _ensure_weights
+    实际加载时同一基准。
     """
     p = str(weights_path or "")
     if not p or "\x00" in p:
         raise ValueError("weights path is empty or invalid")
     if p.startswith(("\\\\", "//", "\\\\?\\", "\\\\.\\")):
         raise ValueError("UNC/device weights path is not allowed")
-    path = Path(p)
-    if not path.is_absolute():
-        path = GSV_DIR / path
-    path = path.resolve()
+    path = Path(resolve_weights_path(p))
     if not path.is_file():
         raise ValueError(f"weights file not found or not a regular file: {path}")
     size = path.stat().st_size
@@ -963,8 +972,9 @@ class GSVEngine:
         """
         if not (vits_weights or t2s_weights):
             return
-        vw = str(Path(vits_weights).resolve()) if vits_weights else None
-        tw = str(Path(t2s_weights).resolve()) if t2s_weights else None
+        # 批次99 (R4-API-01): 与预检同一基准 (GSV_DIR), 不再按进程 cwd 解析
+        vw = resolve_weights_path(vits_weights) if vits_weights else None
+        tw = resolve_weights_path(t2s_weights) if t2s_weights else None
         changed = False
         with self._gsv_context():
             if vw:
@@ -1081,8 +1091,9 @@ class GSVEngine:
 
         text = self._sanitize_text(text)
         ref_audio = str(Path(ref_audio).resolve())
-        t2s_weights = str(Path(t2s_weights).resolve()) if t2s_weights else None
-        vits_weights = str(Path(vits_weights).resolve()) if vits_weights else None
+        # 批次99 (R4-API-01): 权重按 GSV_DIR 解析, 与 _ensure_weights 指纹一致
+        t2s_weights = resolve_weights_path(t2s_weights) if t2s_weights else None
+        vits_weights = resolve_weights_path(vits_weights) if vits_weights else None
         head, rest = self._stream_head_split(text, settings.stream_head_chars())
         segments = ([head, *self._split_long(rest, settings.split_max_chars())]
                     if rest else [text])
@@ -1313,8 +1324,9 @@ class GSVEngine:
         text = self._sanitize_text(text)
         # 绝对路径: _gsv_context 会 chdir, 相对路径会丢
         ref_audio = str(Path(ref_audio).resolve())
-        t2s_weights = str(Path(t2s_weights).resolve()) if t2s_weights else None
-        vits_weights = str(Path(vits_weights).resolve()) if vits_weights else None
+        # 批次99 (R4-API-01): 权重按 GSV_DIR 解析, 与 _ensure_weights 指纹一致
+        t2s_weights = resolve_weights_path(t2s_weights) if t2s_weights else None
+        vits_weights = resolve_weights_path(vits_weights) if vits_weights else None
         # 批次63 第三子批: 调度准入 (N=1 硬预算), 计数/报告由调度器持有
         # 批次 67: 跨请求合批门控 — 总开关 (默认开) × 行种子桥 (行隔离
         # 内核, 默认关) × 调度并发 >=2 (单并发合批无意义) — 默认配置走 solo
