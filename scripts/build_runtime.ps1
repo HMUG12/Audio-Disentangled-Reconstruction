@@ -217,8 +217,18 @@ if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
 #     nltk.data.path 默认含 sys.prefix/nltk_data, 运行时零代码命中。
 #     新旧标注器名都下 (nltk>=3.9 用 _eng, 旧版用原名), 体积合计 ~3MB。
 $nltkDir = Join-Path $OutDir "python\nltk_data"
-& $py -m nltk.downloader -d $nltkDir cmudict averaged_perceptron_tagger_eng averaged_perceptron_tagger
-if ($LASTEXITCODE -ne 0) { throw "nltk data download failed" }
+# nltk>=3.10 的 pathsec 默认拒绝"经代理"的 urlopen (CWE-918 SSRF 防护), 构建机经
+# 代理出网时连 index.xml 都拉不到 (报 Security Violation)。这里只在构建进程内
+# 放行, 运行时 (用户机) 不涉及, 不影响客户端防护。
+$env:NLTK_ALLOW_PROXIED_URLOPEN = "1"
+# 逐包下载, 且喂空 stdin: downloader 遇到哈希/尺寸不符会交互式问 "Retry? [n/y/e]",
+# 无人应答时 input() 抛 EOFError 直接整条构建失败。这里只认必装包 (cmudict +
+# _eng, 由下方 Test-Path 硬校验), 旧版兼容包 averaged_perceptron_tagger 失败只告警
+# (镜像曾给出尺寸不符的包 — 2026-11-08 实测)。
+foreach ($pkg in @("cmudict", "averaged_perceptron_tagger_eng", "averaged_perceptron_tagger")) {
+    "" | & $py -m nltk.downloader -d $nltkDir $pkg
+    if ($LASTEXITCODE -ne 0) { Log ("WARN nltk package skipped: {0}" -f $pkg) }
+}
 foreach ($res in @("corpora\cmudict", "taggers\averaged_perceptron_tagger_eng")) {
     if (-not (Test-Path (Join-Path $nltkDir $res))) { throw "nltk data missing: $res" }
 }
