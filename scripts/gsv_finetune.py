@@ -89,6 +89,10 @@ def main():
     args = ap.parse_args()
 
     exp = args.exp
+    # 批次99 (P3-08): exp 会拼进 shell=True 命令串 — 入口统一清洗, 去 shell
+    # 元字符/路径成分 (合法中文/下划线名不受影响)
+    from adr.core.naming import sanitize_exp_name
+    exp = sanitize_exp_name(exp, fallback="user_voice")
     if args.max_clip_sec:
         os.environ["ADR_MAX_CLIP_SEC"] = str(args.max_clip_sec)
 

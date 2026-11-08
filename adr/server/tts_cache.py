@@ -40,7 +40,7 @@ from adr.core import settings
 # 缓存格式版本 (批次69): 音频编码参数 (pack_audio 码率/重采样) 或 _KEY_FIELDS
 # 集合变化时递增 — make_key 参与哈希, 且磁盘文件名带 v<版本>- 前缀,
 # 启动扫描丢弃旧版本条目, 避免升级后仍命中旧格式音频。
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 _PREFIX = f"v{CACHE_VERSION}-"
 
 # 参与 key 的请求字段 (批次88: seed 入 key, 见模块 docstring)
@@ -77,9 +77,26 @@ def _max_bytes() -> int:
     return settings.tts_cache_max_bytes()
 
 
+def _file_stamp(path) -> list | None:
+    """权重文件指纹 [mtime_ns, size] (批次99 / P3-01)。
+
+    只把路径放进 key 时, 训练/音色包在同名路径上换了权重仍会命中旧音频。
+    """
+    if not path:
+        return None
+    try:
+        st = os.stat(str(path))
+    except OSError:
+        return None
+    return [st.st_mtime_ns, st.st_size]
+
+
 def make_key(req: dict) -> str:
     payload = {f: req.get(f) for f in _KEY_FIELDS}
     payload["_cache_version"] = CACHE_VERSION
+    # 批次99 (P3-01): 权重内容指纹入 key — 换权后不再命中旧结果
+    payload["_weights_stamp"] = [_file_stamp(req.get("t2s_weights")),
+                                 _file_stamp(req.get("vits_weights"))]
     blob = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()
 

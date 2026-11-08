@@ -259,8 +259,8 @@ def apply_lora(
             dropout=config.dropout,
             bias=linear.bias is not None,
         )
-        # 把 LoRA layer 移到正确 device (创建时是 CPU)
-        lora_layer = lora_layer.to(device=device)
+        # 批次99 (P3-05): 与基座同 dtype (fp16/bf16 下不再多占一份 float32 参数)
+        lora_layer = lora_layer.to(device=device, dtype=dtype)
         if auto_init:
             lora_layer.init_from_linear(linear)
 

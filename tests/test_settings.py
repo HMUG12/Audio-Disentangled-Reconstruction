@@ -59,11 +59,11 @@ def test_tts_cache_enabled(monkeypatch):
     assert settings.tts_cache_enabled() is True
 
 
-def test_tts_cache_dir(monkeypatch):
+def test_tts_cache_dir(monkeypatch, tmp_path):
     monkeypatch.delenv("ADR_TTS_CACHE_DIR", raising=False)
     assert settings.tts_cache_dir() == settings.REPO_ROOT / "data" / "tts_cache"
-    monkeypatch.setenv("ADR_TTS_CACHE_DIR", "E:/tmp/tc")
-    assert settings.tts_cache_dir() == Path("E:/tmp/tc")
+    monkeypatch.setenv("ADR_TTS_CACHE_DIR", str(tmp_path / "tc"))
+    assert settings.tts_cache_dir() == Path(str(tmp_path / "tc"))
 
 
 def test_tts_cache_max_entries(monkeypatch):
