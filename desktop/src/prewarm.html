@@ -319,9 +319,9 @@
   <div id="setup">
     <div class="owiz">
       <div class="ohead">
-        <div class="ostep" id="o-step">第 1 步，共 3 步</div>
-        <h2 id="o-title">设置你的本机账号</h2>
-        <p id="o-desc">这个账号只在这台电脑上使用，用来解锁 ADR Studio，不会上传到任何服务器。</p>
+        <div class="ostep" id="o-step">第 1 步，共 3 步喵</div>
+        <h2 id="o-title">先来认个脸喵～</h2>
+        <p id="o-desc">这是只属于这台电脑的小账号喵，用来解锁 ADR Studio，绝对不上传喵。</p>
       </div>
 
       <div class="obody">
@@ -329,16 +329,16 @@
         <section class="opage on" data-page="0">
           <div class="sgrid">
             <div class="sfld">
-              <label>账号</label>
+              <label>账号喵</label>
               <input type="text" id="su-user" placeholder="ADR" autocomplete="username" spellcheck="false">
             </div>
             <div class="sfld">
-              <label>密码（至少 6 位）</label>
+              <label>密码喵（至少 6 位）</label>
               <input type="password" id="su-pass" placeholder="默认 Adr12345@" autocomplete="new-password">
             </div>
           </div>
-          <div class="shint">不想改就保持默认：账号 <b>ADR</b>，密码 <b>Adr12345@</b>。以后可在「启动器 → 设置 → 账号」里修改。</div>
-          <div class="shint">口令只以 PBKDF2 派生值保存在本机，不存明文，也不联网校验。</div>
+          <div class="shint">懒得起名字的话，直接用默认就好喵：账号 <b>ADR</b>、密码 <b>Adr12345@</b>，以后在「启动器 → 设置 → 账号」随时能改喵。</div>
+          <div class="shint">口令只会把 PBKDF2 派生值留在本机喵，明文不存、也不联网校验喵～</div>
         </section>
 
         <!-- 第 2 页: 设备与性能 -->
@@ -346,92 +346,92 @@
           <div class="ogrp">
             <div class="sgrid">
               <div class="sfld">
-                <label>用哪种硬件合成声音</label>
+                <label>用哪块硬件干活喵</label>
                 <select id="su-device">
-                  <option value="auto">自动选择（推荐）</option>
-                  <option value="cuda">只用显卡（GPU）</option>
-                  <option value="cpu">只用处理器（CPU）</option>
+                  <option value="auto">自动选择（推荐喵）</option>
+                  <option value="cuda">只用显卡（GPU）喵</option>
+                  <option value="cpu">只用处理器（CPU）喵</option>
                 </select>
               </div>
               <div class="sfld">
-                <label>运行强度</label>
+                <label>跑多用力喵</label>
                 <select id="su-strength">
-                  <option value="auto">自动（推荐）</option>
-                  <option value="low">省资源（一次只做一件）</option>
-                  <option value="mid">低</option>
-                  <option value="balanced">均衡</option>
-                  <option value="strong">高</option>
-                  <option value="max">最高（需要较强显卡）</option>
+                  <option value="auto">自动（推荐喵）</option>
+                  <option value="low">省资源（一次只做一件喵）</option>
+                  <option value="mid">低喵</option>
+                  <option value="balanced">均衡喵</option>
+                  <option value="strong">高喵</option>
+                  <option value="max">最高（需要强一点的显卡喵）</option>
                 </select>
               </div>
             </div>
-            <div class="shint">不确定就都选「自动」：启动时会检测你的显卡和内存，自动挑一个稳妥的组合。训练与推理共用同一块设备。</div>
+            <div class="shint">不确定就都选「自动」喵：启动时我会摸摸你的显卡和内存，自己挑个稳妥的组合喵。训练和推理共用同一块设备哦喵～</div>
           </div>
           <details class="oadv">
-            <summary>高级（可选）：CPU 线程与显存上限</summary>
+            <summary>高级小抽屉（可选喵）：CPU 线程与显存上限</summary>
             <div class="sgrid">
               <div class="sfld">
-                <label>CPU 线程上限（0 = 按物理核自动）</label>
+                <label>CPU 线程上限喵（0 = 按物理核自动）</label>
                 <input type="number" id="su-threads" min="0" max="128" placeholder="0">
               </div>
               <div class="sfld">
-                <label>GPU 显存上限 %（0 = 不限制）</label>
+                <label>GPU 显存上限喵（0 = 不限制）</label>
                 <input type="number" id="su-gpumem" min="0" max="100" step="5" placeholder="0">
               </div>
             </div>
-            <div class="shint" style="margin-top:8px">显存上限按总显存比例限制本进程占用，达到上限会报显存不足，而不是把整机拖卡。内存（RAM）硬上限本版本未提供，交给系统管理。</div>
+            <div class="shint" style="margin-top:8px">显存上限会按比例管住我的爪子喵，到线就老实报「显存不足」，不会把整台电脑拖卡喵。内存（RAM）硬上限这版还没做喵，交给系统管啦喵～</div>
           </details>
         </section>
 
         <!-- 第 3 页: 存放位置与偏好 -->
         <section class="opage" data-page="2">
           <div class="ogrp">
-            <h3>模型文件</h3>
-            <div class="sstatic">位置：<code id="su-models">检测中…</code></div>
+            <h3>模型就住在这儿喵</h3>
+            <div class="sstatic">位置喵：<code id="su-models">正在找…喵</code></div>
             <div class="smini">
-              <button id="su-checkmodels">检查是否齐全</button>
-              <button id="su-openmodels">打开模型目录</button>
+              <button id="su-checkmodels">检查一下齐不齐喵</button>
+              <button id="su-openmodels">打开模型目录喵</button>
             </div>
-            <div class="shint" id="su-models-msg">只核对本机文件，不联网、不下载；缺失项在引擎预热时会自动补齐。自定义权重按 GPT-SoVITS 目录结构放进去即可，到「启动器 → 模型」切换生效。</div>
+            <div class="shint" id="su-models-msg">只看本机文件喵，不联网也不下载喵；缺的会在引擎预热时自己补上喵。自定义权重量按 GPT-SoVITS 的目录结构塞进去就好，再到「启动器 → 模型」切换喵～</div>
           </div>
 
           <div class="ogrp">
-            <h3>存放位置</h3>
+            <h3>档案放哪儿喵</h3>
             <div class="sfld">
-              <label>声音档案存放目录（留空 = 默认位置）</label>
+              <label>声音档案住哪个文件夹喵（留空 = 默认位置）</label>
               <input type="text" id="su-datadir" placeholder="%LOCALAPPDATA%\ADR\data" spellcheck="false">
             </div>
-            <div class="shint">档案目录可自定义，模型目录由安装位置固定；两者都只在本机使用，不上传云端。</div>
+            <div class="shint">档案目录可以自己挑喵，模型目录由安装位置定死喵；两边都只在本机待着，不上云喵～</div>
           </div>
 
           <div class="ogrp">
-            <h3>启动与隐私</h3>
-            <div class="srow"><input type="checkbox" id="su-autostart"> 开机自动启动 ADR Studio</div>
-            <div class="srow"><input type="checkbox" id="su-audit" checked> 记录声音安全审计日志（只记事件，不记文本与声纹）</div>
-            <div class="srow"><input type="checkbox" id="su-wavmeta" checked> 导出的音频标注「AI 生成」</div>
-            <div class="srow"><input type="checkbox" id="su-deviceid" disabled> 采集设备唯一标识 —— 本版本不采集，仅列出以便知情</div>
-            <div class="shint">服务协议 / 隐私政策 / 开源许可：已在上一步「使用条款」中阅读并同意（AGPL-3.0-only，本地免费）。</div>
+            <h3>启动与隐私喵</h3>
+            <div class="srow"><input type="checkbox" id="su-autostart"> 开机时自己醒过来喵（随系统启动）</div>
+            <div class="srow"><input type="checkbox" id="su-audit" checked> 记下声音安全审计日志喵（只记事件，不写文本和声纹喵）</div>
+            <div class="srow"><input type="checkbox" id="su-wavmeta" checked> 导出的音频标上「AI 生成」喵</div>
+            <div class="srow"><input type="checkbox" id="su-deviceid" disabled> 采集设备唯一标识 —— 这版不采集喵，只是摆出来让你知道喵</div>
+            <div class="shint">服务协议 / 隐私政策 / 开源许可：上一步的「使用条款」已经点头同意啦喵（AGPL-3.0-only，本地免费用喵）。</div>
           </div>
 
           <details class="oadv">
-            <summary>高级（可选）：默认档案、流式节奏与下载源</summary>
+            <summary>高级小抽屉（可选喵）：默认档案、流式节奏与下载源</summary>
             <div class="sgrid">
               <div class="sfld">
-                <label>默认声音档案（留空 = 不指定）</label>
+                <label>默认声音档案喵（留空 = 不指定）</label>
                 <input type="text" id="su-profile" placeholder="如 my_voice" spellcheck="false">
               </div>
               <div class="sfld">
-                <label>流式首段最大字数（默认 14）</label>
+                <label>流式首段最多几个字喵（默认 14）</label>
                 <input type="number" id="su-streamhead" min="1" max="200" placeholder="14">
               </div>
               <div class="sfld">
-                <label>长句细分上限（默认 40）</label>
+                <label>长句细分上限喵（默认 40）</label>
                 <input type="number" id="su-splitmax" min="1" max="400" placeholder="40">
               </div>
             </div>
-            <div class="srow" style="margin-top:10px"><input type="checkbox" id="su-autotune" checked> 启动后自动测量设备（Autopilot 自动标定）</div>
-            <div class="srow"><input type="checkbox" id="su-mirror"> 下载模型走 hf-mirror 国内镜像（更快）</div>
-            <div class="shint" style="margin-top:8px">启动后固定进入启动器，不会自动打开控制台；设备画像与调度报告后续版本提供。</div>
+            <div class="srow" style="margin-top:10px"><input type="checkbox" id="su-autotune" checked> 启动后自己测一测设备喵（Autopilot 自动标定）</div>
+            <div class="srow"><input type="checkbox" id="su-mirror"> 下载模型走 hf-mirror 国内镜像喵（会快一点哦）</div>
+            <div class="shint" style="margin-top:8px">启动后乖乖进启动器，不会自己打开控制台喵；设备画像和调度报告要等后面的版本喵～</div>
           </details>
         </section>
       </div>
@@ -440,9 +440,9 @@
         <div class="odots" id="o-dots"><i class="on"></i><i></i><i></i></div>
         <div class="smsg" id="su-msg"></div>
         <div class="obtns">
-          <button class="obtn ghost" id="suSkip">全部用默认</button>
-          <button class="obtn ghost" id="oBack" disabled>上一步</button>
-          <button class="obtn primary" id="oNext">下一步</button>
+          <button class="obtn ghost" id="suSkip">全部用默认喵</button>
+          <button class="obtn ghost" id="oBack" disabled>上一步喵</button>
+          <button class="obtn primary" id="oNext">下一步喵</button>
         </div>
       </div>
     </div>
@@ -451,22 +451,22 @@
   <!-- 批次102: 本机账号登录 (壳启动即弹; 登录前不放行进入启动器) -->
   <div id="login">
     <div class="lcard">
-      <h2>登录<em>本机账号</em></h2>
+      <h2>登录<em>本机账号</em>喵</h2>
       <div class="lgrid">
         <div class="lfld">
-          <label>账号</label>
+          <label>账号喵</label>
           <input type="text" id="pw-user" placeholder="ADR" autocomplete="username" spellcheck="false">
         </div>
         <div class="lfld">
-          <label>密码</label>
-          <input type="password" id="pw-pass" placeholder="请输入密码" autocomplete="current-password">
+          <label>密码喵</label>
+          <input type="password" id="pw-pass" placeholder="请输入密码喵" autocomplete="current-password">
         </div>
       </div>
       <div class="smsg" id="pw-msg"></div>
       <div class="lacts">
-        <button id="pwLogin">登录</button>
+        <button id="pwLogin">登录喵</button>
       </div>
-      <div class="tfoot">账号与口令只保存在本机（口令仅以 PBKDF2 派生值落盘）；登录只解锁本机界面，不涉及云端账号。</div>
+      <div class="tfoot">账号和口令只待在本机喵（口令只留 PBKDF2 派生值，明文不存喵）；登录只是解锁本机界面喵，跟云端账号没关系喵～</div>
     </div>
   </div>
 
@@ -582,9 +582,9 @@ let suAuto = false;             // 注册表当前自启真值 (避免无谓写�
 const STRENGTHS = ["auto", "low", "mid", "balanced", "strong", "max"];
 // 批次103: 3 页式向导 — 一页只做一件事 (账号 / 性能 / 存放·隐私)
 const O_PAGES = [
-  ["设置你的本机账号", "这个账号只在这台电脑上使用，用来解锁 ADR Studio，不会上传到任何服务器。"],
-  ["让引擎跑得合适", "只需选两项；不确定就保持「自动」，我们会按你的硬件挑一个稳妥的配置。"],
-  ["放在哪、注意什么", "模型位置已自动找好，下面只剩几个开关，拿不准的先按默认。"],
+  ["先来认个脸喵～", "这是只属于这台电脑的小账号喵，用来解锁 ADR Studio，绝对不上传喵。"],
+  ["让我跑得舒服一点喵", "只要挑两个选项喵；拿不准就选「自动」，我会偷偷按你的硬件挑个最稳的搭配喵。"],
+  ["东西放哪儿、注意点啥喵", "模型位置我已经帮你找好啦喵，剩下的开关拿不准就按默认喵～"],
 ];
 const oPages = Array.from(setupEl.querySelectorAll(".opage"));
 const oDots = Array.from(setupEl.querySelectorAll("#o-dots i"));
@@ -593,11 +593,11 @@ function showPage(i) {
   oIdx = Math.max(0, Math.min(i, oPages.length - 1));
   oPages.forEach((p, k) => p.classList.toggle("on", k === oIdx));
   oDots.forEach((d, k) => d.classList.toggle("on", k === oIdx));
-  $su("o-step").textContent = "第 " + (oIdx + 1) + " 步，共 " + oPages.length + " 步";
+  $su("o-step").textContent = "第 " + (oIdx + 1) + " 步，共 " + oPages.length + " 步喵";
   $su("o-title").textContent = O_PAGES[oIdx][0];
   $su("o-desc").textContent = O_PAGES[oIdx][1];
   $su("oBack").disabled = oIdx === 0;
-  $su("oNext").textContent = oIdx === oPages.length - 1 ? "完成并启动" : "下一步";
+  $su("oNext").textContent = oIdx === oPages.length - 1 ? "完成并启动喵" : "下一步喵";
   suMsg("");
   setupEl.querySelector(".obody").scrollTop = 0;
 }
@@ -614,14 +614,14 @@ async function refreshModels() {
   if (!inv) return;
   try {
     const r = await inv("check_models");
-    $su("su-models").textContent = r?.dir || "(未定位到运行时目录)";
+    $su("su-models").textContent = r?.dir || "(还没找到运行时目录喵)";
     const miss = r?.missing || [];
     $su("su-models-msg").textContent = miss.length
-      ? `⑨ 检查模型：已找到 ${r.found}/${r.total} 项，缺失 ${miss.join("、")}。缺失不影响本次设置，引擎预热时会自动补齐。`
-      : `⑨ 检查模型：${r.found}/${r.total} 项齐全（仅核对本机文件，不联网、不下载）。`;
+      ? `⑨ 检查模型喵：找到 ${r.found}/${r.total} 项，缺了 ${miss.join("、")}。缺了也不耽误这次设置喵，预热时我会自己补齐喵。`
+      : `⑨ 检查模型喵：${r.found}/${r.total} 项都齐了喵（只摸本机文件，不联网、不下载喵）。`;
   } catch (e) {
-    $su("su-models").textContent = "检测失败";
-    $su("su-models-msg").textContent = "⑨ 检查模型失败: " + e;
+    $su("su-models").textContent = "没检测成功喵";
+    $su("su-models-msg").textContent = "⑨ 检查模型失败了喵: " + e;
   }
 }
 async function initSetup() {
@@ -659,8 +659,8 @@ async function initSetup() {
 async function saveSetup() {
   const inv = window.__TAURI__?.core.invoke;
   const btn = $su("oNext");
-  if (!inv) { suMsg("请在 ADR Studio 桌面应用内使用"); return; }
-  btn.disabled = true; btn.textContent = "保存中…";
+  if (!inv) { suMsg("请在 ADR Studio 桌面应用里用喵"); return; }
+  btn.disabled = true; btn.textContent = "保存中喵…";
   suMsg("");
   try {
     const cfg = Object.assign({}, suBase || {});
@@ -691,11 +691,11 @@ async function saveSetup() {
     }
     await inv("complete_setup");
     setSetupMode(false);
-    setTip("配置已保存, 正在启动本地引擎…");
+    setTip("配置收好啦喵, 正在叫醒本地引擎…");
     await initLogin();
   } catch (e) {
     suMsg(String(e));
-    btn.disabled = false; btn.textContent = "完成并启动";
+    btn.disabled = false; btn.textContent = "完成并启动喵";
   }
 }
 // 批次103: 底部导航 — 前两页只翻页, 最后一页才落盘并启动引擎
@@ -704,8 +704,8 @@ $su("oNext").addEventListener("click", () => {
     // 第 1 页先本地校验口令长度, 免得走到最后一步才报错
     if (oIdx === 0) {
       const pass = $su("su-pass").value;
-      if (pass && pass.length < 6) { suMsg("密码至少 6 位（也可以直接留默认的 Adr12345@）"); return; }
-      if (!$su("su-user").value.trim()) { suMsg("请填写账号（默认 ADR 即可）"); return; }
+      if (pass && pass.length < 6) { suMsg("密码至少要 6 位哦喵（也可以直接留默认的 Adr12345@）"); return; }
+      if (!$su("su-user").value.trim()) { suMsg("账号还没写喵（默认 ADR 就行喵）"); return; }
     }
     showPage(oIdx + 1);
     return;
@@ -754,7 +754,7 @@ async function initLogin() {
     if (acc?.logged_in) return false;
     $pw("pw-user").value = acc?.username || "ADR";
     $pw("pw-pass").value = "";
-    $pw("pw-pass").placeholder = acc?.customized ? "请输入密码" : "默认 Adr12345@";
+    $pw("pw-pass").placeholder = acc?.customized ? "请输入密码喵" : "默认就是 Adr12345@ 喵";
     pwMsg("");
     setLoginMode(true);
     return true;
@@ -773,23 +773,23 @@ async function afterLogin() {
       return;
     }
   } catch (_) { /* 引擎未就绪 → 等 prewarm_flow 就绪后放行 */ }
-  setTip("登录成功, 正在等待引擎就绪…", "ok");
+  setTip("登录成功喵, 正在等引擎醒过来…", "ok");
 }
 async function doLogin() {
   const inv = window.__TAURI__?.core.invoke;
   const btn = $pw("pwLogin");
-  if (!inv) { pwMsg("请在 ADR Studio 桌面应用内使用"); return; }
-  btn.disabled = true; btn.textContent = "登录中…";
+  if (!inv) { pwMsg("请在 ADR Studio 桌面应用里用喵"); return; }
+  btn.disabled = true; btn.textContent = "登录中喵…";
   pwMsg("");
   try {
     await inv("account_login", { username: $pw("pw-user").value.trim(), password: $pw("pw-pass").value });
     setLoginMode(false);
-    setTip("登录成功, 引擎就绪后自动进入启动器", "ok");
+    setTip("登录成功喵, 引擎一醒就带你进启动器喵", "ok");
     await afterLogin();
   } catch (e) {
     pwMsg(String(e));
   }
-  btn.disabled = false; btn.textContent = "登录";
+  btn.disabled = false; btn.textContent = "登录喵";
 }
 $pw("pwLogin").addEventListener("click", doLogin);
 $pw("pw-pass").addEventListener("keydown", (ev) => {
