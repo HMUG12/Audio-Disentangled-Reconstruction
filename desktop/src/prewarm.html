@@ -261,28 +261,28 @@
 </head>
 <body>
   <div class="logo">ADR <em>Studio</em></div>
-  <div class="sub">正在预热本地引擎，就绪后自动进入启动器</div>
+  <div class="sub">正在热引擎喵，醒过来就自动带你进启动器喵</div>
 
   <div class="panel">
     <div class="step" id="st0">
       <div class="dot"><span>1</span></div>
-      <div class="tx"><h3>启动本地服务</h3><p>拉起 FastAPI 引擎进程并探活</p></div>
+      <div class="tx"><h3>叫醒本地服务喵</h3><p>把 FastAPI 引擎进程拉起来，再拍拍它看醒没醒喵</p></div>
     </div>
     <div class="step" id="st1">
       <div class="dot"><span>2</span></div>
-      <div class="tx"><h3>加载框架</h3><p>导入 torch / CUDA（首次启动较慢）</p></div>
+      <div class="tx"><h3>搬出工具箱喵</h3><p>导入 torch / CUDA 喵（第一次会慢一点喵）</p></div>
     </div>
     <div class="step" id="st2">
       <div class="dot"><span>3</span></div>
-      <div class="tx"><h3>加载模型权重</h3><p>载入 GPT-SoVITS 声音克隆模型</p></div>
+      <div class="tx"><h3>装上声音模型喵</h3><p>载入 GPT-SoVITS 声音克隆模型喵</p></div>
     </div>
     <div class="step" id="st3">
       <div class="dot"><span>4</span></div>
-      <div class="tx"><h3>预热推理内核</h3><p>跑通合成链路，进控制台后首句即快</p></div>
+      <div class="tx"><h3>先热身唱一句喵</h3><p>跑通合成链路，进控制台后第一句就不用等喵</p></div>
     </div>
   </div>
 
-  <div id="tip">准备中…</div>
+  <div id="tip">准备中喵…</div>
   <div id="errbox">
     <details>
       <summary>失败详情</summary>
@@ -294,7 +294,7 @@
     <button id="btnRetry">重试预热</button>
     <button id="btnSkip">仍要进入</button>
   </div>
-  <div class="foot">预热完成后引擎常驻后台，专业 / 新手控制台均可秒进</div>
+  <div class="foot">预热完成后引擎会一直待在后台喵，专业 / 新手控制台都能秒进喵</div>
 
   <div id="terms">
     <div class="tcard">
@@ -506,7 +506,7 @@ window.__adrPrewarmError = function (text) {
 window.__adrPrewarm = function (stage, text) {
   if (stage === "ready") {
     steps.forEach(s => (s.className = "step done"));
-    setTip(text || "预热完成, 正在进入启动器…", "ok");
+    setTip(text || "预热完成喵, 正在带你进启动器…", "ok");
     acts.style.display = "none";
     hideErr();
     return;
@@ -524,7 +524,7 @@ window.__adrPrewarm = function (stage, text) {
   lastErr = "";
   const idx = MAP[stage] ?? 0;
   setStep(idx, "active");
-  setTip(text || "预热中…");
+  setTip(text || "预热中喵…");
 };
 
 // start_server 失败时的状态文本也走这里
@@ -533,7 +533,7 @@ window.__adrStatus = function (text) {
 };
 
 document.getElementById("btnRetry").addEventListener("click", async () => {
-  setTip("正在重试…");
+  setTip("再试一次喵…");
   acts.style.display = "none";
   try { await window.__TAURI__.core.invoke("retry_prewarm"); }
   catch (e) { setTip(String(e), "warn"); acts.style.display = "flex"; }
@@ -620,8 +620,8 @@ async function refreshModels() {
       ? `⑨ 检查模型喵：找到 ${r.found}/${r.total} 项，缺了 ${miss.join("、")}。缺了也不耽误这次设置喵，预热时我会自己补齐喵。`
       : `⑨ 检查模型喵：${r.found}/${r.total} 项都齐了喵（只摸本机文件，不联网、不下载喵）。`;
   } catch (e) {
-    $su("su-models").textContent = "没检测成功喵";
-    $su("su-models-msg").textContent = "⑨ 检查模型失败了喵: " + e;
+    $su("su-models").textContent = "检测失败";
+    $su("su-models-msg").textContent = "⑨ 检查模型失败: " + e;
   }
 }
 async function initSetup() {
@@ -718,7 +718,7 @@ $su("suSkip").addEventListener("click", async () => {
   try {
     await inv("complete_setup");
     setSetupMode(false);
-    setTip("已跳过首启配置, 使用默认设置启动引擎…");
+    setTip("已跳过首启配置喵, 用默认设置启动引擎喵…");
     await initLogin();
   } catch (e) {
     suMsg(String(e));
