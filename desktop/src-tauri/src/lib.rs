@@ -1095,6 +1095,11 @@ fn start_server(
                 "-m", "adr.server",
                 "--addr", host,
                 "--port", &port.to_string(),
+                // 批次99 (首启实测): 全新安装时 .terms_agreed_v1 尚不存在, 而壳
+                // 在条款页之前就要起服务预热 — 不带此参数 server 会 exit 2,
+                // 预热直接卡死 "服务启动失败"。条款由壳层 prewarm 门禁担保
+                // (未同意不放行导航), server 侧不再重复拦截且不写标记。
+                "--from-shell",
             ]);
         }
     }
