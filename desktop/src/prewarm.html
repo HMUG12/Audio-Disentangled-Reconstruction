@@ -152,21 +152,48 @@
   #btnReject { background: transparent; color: var(--dot-txt); border: 1px solid var(--dot-line); }
   .tfoot { color: var(--foot); font-size: 11px; text-align: center; }
 
-  /* 批次101: 首启配置向导 (条款同意后、引擎启动前) */
-  body.setup-mode { overflow-y: auto; justify-content: flex-start; padding: 28px 0; }
-  body.setup-mode .sub, body.setup-mode .panel,
+  /* 批次103: 首启配置向导 → 3 页式 (参考 Win11 OOBE: 大标题 / 一页一件事 / 底部步骤点) */
+  body.setup-mode { overflow: hidden; justify-content: center; padding: 0; }
+  body.setup-mode .logo, body.setup-mode .sub, body.setup-mode .panel,
   body.setup-mode #tip, body.setup-mode #acts,
   body.setup-mode .foot, body.setup-mode #terms { display: none; }
   #setup { display: none; }
-  body.setup-mode #setup { display: flex; flex-direction: column; align-items: center; gap: 10px; }
-  .scard {
-    width: min(620px, 92vw); border-radius: 13px; padding: 18px 22px;
+  body.setup-mode #setup { display: block; }
+  .owiz {
+    width: min(780px, 94vw); height: min(600px, 90vh);
+    display: flex; flex-direction: column; overflow: hidden;
     background: var(--card-grad); border: 1px solid var(--card-line);
-    box-shadow: var(--card-shadow);
-    display: flex; flex-direction: column; gap: 11px;
+    border-radius: 16px; box-shadow: var(--card-shadow);
   }
-  .scard h2 { font-size: 16.5px; font-weight: 700; }
-  .scard h2 em { font-style: normal; color: var(--brand); }
+  .ohead { padding: 34px 40px 16px; }
+  .ohead .ostep { font-size: 12px; font-weight: 600; color: var(--brand); letter-spacing: .4px; }
+  .ohead h2 { font-size: 25px; font-weight: 650; margin-top: 8px; letter-spacing: .3px; }
+  .ohead p { font-size: 12.5px; color: var(--muted); line-height: 1.8; margin-top: 8px; }
+  .obody { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 40px 18px; }
+  .obody::-webkit-scrollbar { width: 8px; }
+  .obody::-webkit-scrollbar-thumb { background: var(--dot-line); border-radius: 8px; }
+  .opage { display: none; flex-direction: column; gap: 16px; }
+  .opage.on { display: flex; }
+  .ogrp { display: flex; flex-direction: column; gap: 9px; }
+  .ogrp > h3 { font-size: 13px; font-weight: 700; color: var(--strong); }
+  .ofoot {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 40px 18px; border-top: 1px solid var(--card-line);
+  }
+  .odots { display: flex; gap: 7px; align-items: center; flex: none; }
+  .odots i { width: 7px; height: 7px; border-radius: 50%; background: var(--dot-line); transition: all .2s; }
+  .odots i.on { width: 20px; border-radius: 4px; background: var(--brand); }
+  .ofoot .smsg { flex: 1; }
+  .obtns { display: flex; gap: 10px; margin-left: auto; flex: none; }
+  .obtn {
+    font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+    border-radius: 9px; padding: 9px 22px; transition: transform .15s, opacity .15s;
+  }
+  .obtn:hover { transform: translateY(-1px); }
+  .obtn:disabled { opacity: .4; cursor: default; transform: none; }
+  .obtn.primary { background: var(--agree-bg); color: var(--agree-txt); border: 1px solid var(--agree-line); box-shadow: var(--agree-shadow); }
+  .obtn.ghost { background: transparent; color: var(--dot-txt); border: 1px solid var(--dot-line); }
+  /* 向导内复用字段 / 勾选 / 说明样式 */
   .sgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px 14px; }
   .sfld { display: flex; flex-direction: column; gap: 5px; }
   .sfld.wide { grid-column: 1 / -1; }
@@ -177,32 +204,26 @@
     border-radius: 9px; padding: 8px 10px; outline: none; width: 100%;
   }
   .sfld input:focus, .sfld select:focus { border-color: var(--brand); }
-  .srow { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--tbody); }
-  .srow input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--brand); }
-  .shint { font-size: 11px; color: var(--foot); line-height: 1.65; }
-  .smsg { font-size: 12px; color: var(--err-soft); min-height: 16px; }
-  .sacts { display: flex; gap: 12px; justify-content: center; }
-  .sacts button {
-    font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
-    border-radius: 10px; padding: 9px 22px; transition: transform .15s, opacity .15s;
-  }
-  .sacts button:hover { transform: translateY(-2px); }
-  .sacts button:disabled { opacity: .55; cursor: default; transform: none; }
-  #suSave { background: var(--agree-bg); color: var(--agree-txt); border: 1px solid var(--agree-line); box-shadow: var(--agree-shadow); }
-  #suSkip { background: transparent; color: var(--dot-txt); border: 1px solid var(--dot-line); }
-  /* 批次102: 向导分组标题 / 说明行 / 次要按钮 */
-  .sgrp { font-size: 13.5px; font-weight: 700; color: var(--strong); }
+  .srow { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; color: var(--tbody); line-height: 1.6; }
+  .srow input[type="checkbox"] { width: 15px; height: 15px; margin-top: 1px; flex: none; accent-color: var(--brand); }
+  .shint { font-size: 11px; color: var(--foot); line-height: 1.7; }
   .sstatic { font-size: 12px; color: var(--tbody); line-height: 1.75; }
   .sstatic code {
     font-family: Consolas, monospace; font-size: 11px; color: var(--txt);
     background: var(--dot-bg); border: 1px solid var(--dot-line);
     border-radius: 6px; padding: 1px 6px; word-break: break-all;
   }
-  .sacts.left { justify-content: flex-start; }
-  .sacts.minor button {
-    font-size: 12px; font-weight: 500; padding: 6px 14px;
+  .smsg { font-size: 12px; color: var(--err-soft); min-height: 16px; }
+  details.oadv { border: 1px solid var(--card-line); border-radius: 10px; padding: 10px 14px; }
+  details.oadv > summary { font-size: 12.5px; color: var(--dot-txt); cursor: pointer; }
+  details.oadv[open] > summary { margin-bottom: 10px; color: var(--muted); }
+  .smini { display: flex; gap: 10px; flex-wrap: wrap; }
+  .smini button {
+    font: inherit; font-size: 12px; font-weight: 500; cursor: pointer;
+    padding: 6px 14px; border-radius: 8px;
     background: transparent; color: var(--dot-txt); border: 1px solid var(--dot-line);
   }
+  .smini button:hover { border-color: var(--brand); color: var(--brand); }
   /* 批次102: 本机账号登录视图 (壳启动即弹, 登录前不放行进入启动器) */
   body.login-mode { overflow-y: auto; justify-content: flex-start; padding: 28px 0; }
   body.login-mode .sub, body.login-mode .panel,
@@ -294,110 +315,135 @@
     <div class="tfoot">拒绝将退出应用；同意状态仅保存在本机数据目录（.terms_agreed_v1）</div>
   </div>
 
-  <!-- 批次101/102: 首启配置向导 (条款同意后、引擎启动前) -->
+  <!-- 批次101/102/103: 首启配置向导 — 3 页式 (Win11 OOBE 风格), 条款同意后、引擎启动前 -->
   <div id="setup">
-    <div class="scard">
-      <h2>首次启动<em>配置向导</em></h2>
-      <div class="shint">以下设置决定本地引擎的启动方式（数据目录 / 推理设备 / 线程上限 / 资源上限在引擎启动那一刻生效），随时可在「启动器 → 设置」里修改。全部只保存在本机，不外发。</div>
-      <div class="sgrid">
-        <div class="sfld">
-          <label>本地账号（仅本机登录用）</label>
-          <input type="text" id="su-user" placeholder="ADR" autocomplete="username" spellcheck="false">
-        </div>
-        <div class="sfld">
-          <label>登录密码（至少 6 位）</label>
-          <input type="password" id="su-pass" placeholder="默认 Adr12345@" autocomplete="new-password">
-        </div>
+    <div class="owiz">
+      <div class="ohead">
+        <div class="ostep" id="o-step">第 1 步，共 3 步</div>
+        <h2 id="o-title">设置你的本机账号</h2>
+        <p id="o-desc">这个账号只在这台电脑上使用，用来解锁 ADR Studio，不会上传到任何服务器。</p>
       </div>
-      <div class="shint">保存即完成本机账号设置，随后壳会要求登录一次（账号仅存本机，口令只以 PBKDF2 派生值落盘）。</div>
-    </div>
 
-    <div class="scard">
-      <h3 class="sgrp">① 版本与模型存放位置</h3>
-      <div class="sstatic">当前安装包：<b>通用包</b>（运行时自动识别 NVIDIA / Intel 显卡并选择 CUDA 或 CPU）。按显卡型号单独裁剪的专用优化包（N 卡 / I 卡）本版本未单独发布，安装时无需选择。</div>
-      <div class="sstatic">模型与权重存放位置：<code id="su-models">检测中…</code></div>
-      <div class="sacts left minor">
-        <button id="su-checkmodels">检查模型</button>
-        <button id="su-openmodels">打开模型目录</button>
+      <div class="obody">
+        <!-- 第 1 页: 账号 -->
+        <section class="opage on" data-page="0">
+          <div class="sgrid">
+            <div class="sfld">
+              <label>账号</label>
+              <input type="text" id="su-user" placeholder="ADR" autocomplete="username" spellcheck="false">
+            </div>
+            <div class="sfld">
+              <label>密码（至少 6 位）</label>
+              <input type="password" id="su-pass" placeholder="默认 Adr12345@" autocomplete="new-password">
+            </div>
+          </div>
+          <div class="shint">不想改就保持默认：账号 <b>ADR</b>，密码 <b>Adr12345@</b>。以后可在「启动器 → 设置 → 账号」里修改。</div>
+          <div class="shint">口令只以 PBKDF2 派生值保存在本机，不存明文，也不联网校验。</div>
+        </section>
+
+        <!-- 第 2 页: 设备与性能 -->
+        <section class="opage" data-page="1">
+          <div class="ogrp">
+            <div class="sgrid">
+              <div class="sfld">
+                <label>用哪种硬件合成声音</label>
+                <select id="su-device">
+                  <option value="auto">自动选择（推荐）</option>
+                  <option value="cuda">只用显卡（GPU）</option>
+                  <option value="cpu">只用处理器（CPU）</option>
+                </select>
+              </div>
+              <div class="sfld">
+                <label>运行强度</label>
+                <select id="su-strength">
+                  <option value="auto">自动（推荐）</option>
+                  <option value="low">省资源（一次只做一件）</option>
+                  <option value="mid">低</option>
+                  <option value="balanced">均衡</option>
+                  <option value="strong">高</option>
+                  <option value="max">最高（需要较强显卡）</option>
+                </select>
+              </div>
+            </div>
+            <div class="shint">不确定就都选「自动」：启动时会检测你的显卡和内存，自动挑一个稳妥的组合。训练与推理共用同一块设备。</div>
+          </div>
+          <details class="oadv">
+            <summary>高级（可选）：CPU 线程与显存上限</summary>
+            <div class="sgrid">
+              <div class="sfld">
+                <label>CPU 线程上限（0 = 按物理核自动）</label>
+                <input type="number" id="su-threads" min="0" max="128" placeholder="0">
+              </div>
+              <div class="sfld">
+                <label>GPU 显存上限 %（0 = 不限制）</label>
+                <input type="number" id="su-gpumem" min="0" max="100" step="5" placeholder="0">
+              </div>
+            </div>
+            <div class="shint" style="margin-top:8px">显存上限按总显存比例限制本进程占用，达到上限会报显存不足，而不是把整机拖卡。内存（RAM）硬上限本版本未提供，交给系统管理。</div>
+          </details>
+        </section>
+
+        <!-- 第 3 页: 存放位置与偏好 -->
+        <section class="opage" data-page="2">
+          <div class="ogrp">
+            <h3>模型文件</h3>
+            <div class="sstatic">位置：<code id="su-models">检测中…</code></div>
+            <div class="smini">
+              <button id="su-checkmodels">检查是否齐全</button>
+              <button id="su-openmodels">打开模型目录</button>
+            </div>
+            <div class="shint" id="su-models-msg">只核对本机文件，不联网、不下载；缺失项在引擎预热时会自动补齐。自定义权重按 GPT-SoVITS 目录结构放进去即可，到「启动器 → 模型」切换生效。</div>
+          </div>
+
+          <div class="ogrp">
+            <h3>存放位置</h3>
+            <div class="sfld">
+              <label>声音档案存放目录（留空 = 默认位置）</label>
+              <input type="text" id="su-datadir" placeholder="%LOCALAPPDATA%\ADR\data" spellcheck="false">
+            </div>
+            <div class="shint">档案目录可自定义，模型目录由安装位置固定；两者都只在本机使用，不上传云端。</div>
+          </div>
+
+          <div class="ogrp">
+            <h3>启动与隐私</h3>
+            <div class="srow"><input type="checkbox" id="su-autostart"> 开机自动启动 ADR Studio</div>
+            <div class="srow"><input type="checkbox" id="su-audit" checked> 记录声音安全审计日志（只记事件，不记文本与声纹）</div>
+            <div class="srow"><input type="checkbox" id="su-wavmeta" checked> 导出的音频标注「AI 生成」</div>
+            <div class="srow"><input type="checkbox" id="su-deviceid" disabled> 采集设备唯一标识 —— 本版本不采集，仅列出以便知情</div>
+            <div class="shint">服务协议 / 隐私政策 / 开源许可：已在上一步「使用条款」中阅读并同意（AGPL-3.0-only，本地免费）。</div>
+          </div>
+
+          <details class="oadv">
+            <summary>高级（可选）：默认档案、流式节奏与下载源</summary>
+            <div class="sgrid">
+              <div class="sfld">
+                <label>默认声音档案（留空 = 不指定）</label>
+                <input type="text" id="su-profile" placeholder="如 my_voice" spellcheck="false">
+              </div>
+              <div class="sfld">
+                <label>流式首段最大字数（默认 14）</label>
+                <input type="number" id="su-streamhead" min="1" max="200" placeholder="14">
+              </div>
+              <div class="sfld">
+                <label>长句细分上限（默认 40）</label>
+                <input type="number" id="su-splitmax" min="1" max="400" placeholder="40">
+              </div>
+            </div>
+            <div class="srow" style="margin-top:10px"><input type="checkbox" id="su-autotune" checked> 启动后自动测量设备（Autopilot 自动标定）</div>
+            <div class="srow"><input type="checkbox" id="su-mirror"> 下载模型走 hf-mirror 国内镜像（更快）</div>
+            <div class="shint" style="margin-top:8px">启动后固定进入启动器，不会自动打开控制台；设备画像与调度报告后续版本提供。</div>
+          </details>
+        </section>
       </div>
-      <div class="shint" id="su-models-msg">⑨ 检查模型：只核对本机文件是否齐全，不联网、不下载。缺失项会列出文件名，可手动补齐后再次检查。</div>
-      <div class="shint">② 自定义导入权重：本向导不提供文件选择框（权重按 GPT-SoVITS 目录结构存放）；把 <code>.ckpt</code> / <code>.pth</code> 放进上面对应目录后，在「启动器 → 模型」里切换生效。</div>
-    </div>
 
-    <div class="scard">
-      <h3 class="sgrp">③ 推理设备 · ④ CPU 资源 · ⑤⑥ 显存与内存上限 · ⑦ 强度</h3>
-      <div class="sgrid">
-        <div class="sfld">
-          <label>推理设备（③ 推理 / 训练同设备）</label>
-          <select id="su-device">
-            <option value="auto">自动（按可用性）</option>
-            <option value="cuda">GPU（CUDA）</option>
-            <option value="cpu">CPU</option>
-          </select>
+      <div class="ofoot">
+        <div class="odots" id="o-dots"><i class="on"></i><i></i><i></i></div>
+        <div class="smsg" id="su-msg"></div>
+        <div class="obtns">
+          <button class="obtn ghost" id="suSkip">全部用默认</button>
+          <button class="obtn ghost" id="oBack" disabled>上一步</button>
+          <button class="obtn primary" id="oNext">下一步</button>
         </div>
-        <div class="sfld">
-          <label>CPU 线程上限（④ 0 = 按物理核）</label>
-          <input type="number" id="su-threads" min="0" max="128" placeholder="0">
-        </div>
-        <div class="sfld">
-          <label>GPU 显存上限（⑤⑥ 百分比，0 = 不限制）</label>
-          <input type="number" id="su-gpumem" min="0" max="100" step="5" placeholder="0">
-        </div>
-        <div class="sfld">
-          <label>强度档位（⑦ 并发 / 合批力度）</label>
-          <select id="su-strength">
-            <option value="auto">自动（引擎自行标定）</option>
-            <option value="low">低（串行，不合批，最省资源）</option>
-            <option value="mid">中（并发 2）</option>
-            <option value="balanced">均衡（并发 3）</option>
-            <option value="strong">高（并发 4）</option>
-            <option value="max">最高（并发 6）</option>
-          </select>
-        </div>
-      </div>
-      <div class="shint">⑤ 线程协同与 GPU 占用：显存上限按总显存比例限制本进程占用，达到上限即报显存不足（不会把整机拖进交换）；显卡占用率百分比上限由系统任务管理器控制，本版本不代管。</div>
-      <div class="shint">⑥ 内存（RAM）硬上限本版本未提供（由操作系统统一管理），后续版本补齐。</div>
-      <div class="shint">⑦ 强度档位会同时调整调度并发上限与跨请求合批开关，不是装饰性选项；训练与推理共用同一设备，不提供单独的「训练模式」开关。</div>
-    </div>
-
-    <div class="scard">
-      <h3 class="sgrp">⑧ 开机自启 · ⑩ 路径连接 · ⑪ 默认与流式配置</h3>
-      <div class="srow"><input type="checkbox" id="su-autostart"> 开机自动启动 ADR Studio</div>
-      <div class="sgrid">
-        <div class="sfld wide">
-          <label>声音档案存放目录（⑩ 留空 = 默认位置）</label>
-          <input type="text" id="su-datadir" placeholder="%LOCALAPPDATA%\ADR\data" spellcheck="false">
-        </div>
-        <div class="sfld">
-          <label>默认声音档案（⑪ 留空 = 后端缺省）</label>
-          <input type="text" id="su-profile" placeholder="如 my_voice" spellcheck="false">
-        </div>
-        <div class="sfld">
-          <label>流式首段最大字数（⑪ 默认 14）</label>
-          <input type="number" id="su-streamhead" min="1" max="200" placeholder="14">
-        </div>
-        <div class="sfld">
-          <label>长句细分上限（⑪ 默认 40）</label>
-          <input type="number" id="su-splitmax" min="1" max="400" placeholder="40">
-        </div>
-      </div>
-      <div class="shint">⑩ 定向路径连接：模型目录由安装位置固定（上文已列出），声音档案目录可自定义；两者都只在本机使用，不上传云端。</div>
-    </div>
-
-    <div class="scard">
-      <h3 class="sgrp">⑫ 协议 · ⑬ 声音安全 · ⑭ 设备标识 · ⑮⑯ 默认模式与 Autopilot</h3>
-      <div class="sstatic">⑫ 服务协议 / 隐私政策 / 开源许可：已在上一步的「使用条款与声音安全告知」中阅读并同意（AGPL-3.0-only，本地使用免费）。</div>
-      <div class="srow"><input type="checkbox" id="su-audit" checked> ⑬ 记录声音安全审计日志（上传 / 建档 / 合成事件，不含文本与声纹明文）</div>
-      <div class="srow"><input type="checkbox" id="su-wavmeta" checked> ⑬ 导出音频标注 AI 生成（WAV 元数据）</div>
-      <div class="srow"><input type="checkbox" id="su-deviceid" disabled> ⑭ 采集设备唯一标识（主板信息）—— <b>本版本不采集</b>，仅列出以便知情，不可开启</div>
-      <div class="srow"><input type="checkbox" id="su-autotune" checked> ⑯ Autopilot 自动标定（启动后自动测量设备并按画像调整流式节奏）</div>
-      <div class="shint">⑮ 默认模式（关闭 / 开启）：本版本启动后固定进入启动器，不自动打开控制台，该开关留待后续版本。</div>
-      <div class="shint">⑯ Autopilot 预算设置与调度报告：本版本提供自动标定开关，设备画像报告与调度报告在后续版本提供。</div>
-      <div class="srow"><input type="checkbox" id="su-mirror"> 模型下载走 hf-mirror 国内镜像（更快）</div>
-      <div class="smsg" id="su-msg"></div>
-      <div class="sacts">
-        <button id="suSave">保存并继续</button>
-        <button id="suSkip">跳过，使用默认配置</button>
       </div>
     </div>
   </div>
@@ -534,9 +580,30 @@ const $su = id => document.getElementById(id);
 let suBase = null;              // 现有 shell.json 配置 (保存时在其基础上改, 不丢其他字段)
 let suAuto = false;             // 注册表当前自启真值 (避免无谓写注册表)
 const STRENGTHS = ["auto", "low", "mid", "balanced", "strong", "max"];
+// 批次103: 3 页式向导 — 一页只做一件事 (账号 / 性能 / 存放·隐私)
+const O_PAGES = [
+  ["设置你的本机账号", "这个账号只在这台电脑上使用，用来解锁 ADR Studio，不会上传到任何服务器。"],
+  ["让引擎跑得合适", "只需选两项；不确定就保持「自动」，我们会按你的硬件挑一个稳妥的配置。"],
+  ["放在哪、注意什么", "模型位置已自动找好，下面只剩几个开关，拿不准的先按默认。"],
+];
+const oPages = Array.from(setupEl.querySelectorAll(".opage"));
+const oDots = Array.from(setupEl.querySelectorAll("#o-dots i"));
+let oIdx = 0;
+function showPage(i) {
+  oIdx = Math.max(0, Math.min(i, oPages.length - 1));
+  oPages.forEach((p, k) => p.classList.toggle("on", k === oIdx));
+  oDots.forEach((d, k) => d.classList.toggle("on", k === oIdx));
+  $su("o-step").textContent = "第 " + (oIdx + 1) + " 步，共 " + oPages.length + " 步";
+  $su("o-title").textContent = O_PAGES[oIdx][0];
+  $su("o-desc").textContent = O_PAGES[oIdx][1];
+  $su("oBack").disabled = oIdx === 0;
+  $su("oNext").textContent = oIdx === oPages.length - 1 ? "完成并启动" : "下一步";
+  suMsg("");
+  setupEl.querySelector(".obody").scrollTop = 0;
+}
 function setSetupMode(on) {
   document.body.classList.toggle("setup-mode", on);
-  if (on) setupEl.scrollIntoView({ block: "start" });
+  if (on) showPage(0);
 }
 function suMsg(text) {
   $su("su-msg").textContent = text || "";
@@ -591,7 +658,7 @@ async function initSetup() {
 }
 async function saveSetup() {
   const inv = window.__TAURI__?.core.invoke;
-  const btn = $su("suSave");
+  const btn = $su("oNext");
   if (!inv) { suMsg("请在 ADR Studio 桌面应用内使用"); return; }
   btn.disabled = true; btn.textContent = "保存中…";
   suMsg("");
@@ -628,10 +695,24 @@ async function saveSetup() {
     await initLogin();
   } catch (e) {
     suMsg(String(e));
-    btn.disabled = false; btn.textContent = "保存并继续";
+    btn.disabled = false; btn.textContent = "完成并启动";
   }
 }
-$su("suSave").addEventListener("click", saveSetup);
+// 批次103: 底部导航 — 前两页只翻页, 最后一页才落盘并启动引擎
+$su("oNext").addEventListener("click", () => {
+  if (oIdx < oPages.length - 1) {
+    // 第 1 页先本地校验口令长度, 免得走到最后一步才报错
+    if (oIdx === 0) {
+      const pass = $su("su-pass").value;
+      if (pass && pass.length < 6) { suMsg("密码至少 6 位（也可以直接留默认的 Adr12345@）"); return; }
+      if (!$su("su-user").value.trim()) { suMsg("请填写账号（默认 ADR 即可）"); return; }
+    }
+    showPage(oIdx + 1);
+    return;
+  }
+  saveSetup();
+});
+$su("oBack").addEventListener("click", () => showPage(oIdx - 1));
 $su("suSkip").addEventListener("click", async () => {
   const inv = window.__TAURI__?.core.invoke;
   try {
