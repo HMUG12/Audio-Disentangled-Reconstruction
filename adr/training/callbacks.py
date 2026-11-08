@@ -46,6 +46,18 @@ class Callback(ABC):
     def on_step_end(self, trainer: "Trainer", step: int, metrics: dict, **kwargs) -> None:
         pass
 
+    def state_dict(self) -> dict:
+        """可序列化的 resume 状态 (批次99 / R4-TRAIN-02)。
+
+        默认无状态; 有 best/耐心计数的回调覆盖。随 checkpoint 的
+        ``callback_state`` 一起保存, load_checkpoint 时按顺序回灌。
+        """
+        return {}
+
+    def load_state_dict(self, state: dict) -> None:
+        """恢复 state_dict 写入的状态 (默认忽略)。"""
+        pass
+
 
 class CheckpointCallback(Callback):
     """定期保存 checkpoint。"""
@@ -65,6 +77,13 @@ class CheckpointCallback(Callback):
         self.metric_name = metric_name
         self.mode = mode
         self.best_value: Optional[float] = None
+
+    def state_dict(self) -> dict:
+        return {"best_value": self.best_value}
+
+    def load_state_dict(self, state: dict) -> None:
+        if state.get("best_value") is not None:
+            self.best_value = float(state["best_value"])
 
     def on_epoch_end(self, trainer, epoch, metrics, **kwargs):
         if (epoch + 1) % self.save_every_n_epochs == 0:
@@ -101,6 +120,15 @@ class EarlyStoppingCallback(Callback):
         self.counter = 0
         self.best_value: Optional[float] = None
         self.should_stop = False
+
+    def state_dict(self) -> dict:
+        # should_stop 不持久化: resume 就是为了继续训练, 不能一启动就停
+        return {"best_value": self.best_value, "counter": self.counter}
+
+    def load_state_dict(self, state: dict) -> None:
+        if state.get("best_value") is not None:
+            self.best_value = float(state["best_value"])
+        self.counter = int(state.get("counter", 0) or 0)
 
     def on_epoch_end(self, trainer, epoch, metrics, **kwargs):
         if self.metric_name not in metrics:

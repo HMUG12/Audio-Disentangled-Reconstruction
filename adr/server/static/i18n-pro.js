@@ -53,7 +53,7 @@ const I18N_DICT = {
   /* ---- 声音克隆: 上传与参数 ---- */
   "pro.train_step1": ["1 · 上传录音与参数", "1 · Upload Audio & Parameters"],
   "pro.drop_pick": ["点击选择或拖入录音文件", "Click to pick or drop an audio file"],
-  "pro.drop_formats": ["wav / mp3 / flac / m4a / ogg / zip（≥1 分钟清晰人声效果最佳）", "wav / mp3 / flac / m4a / ogg / zip (≥1 min of clear voice works best)"],
+  "pro.drop_formats": ["wav / mp3 / flac / m4a / ogg（≥1 分钟清晰人声效果最佳）", "wav / mp3 / flac / m4a / ogg (≥1 min of clear voice works best)"],
   "pro.picked": ["已选择: {name} ({size} MB)", "Selected: {name} ({size} MB)"],
   "pro.uploading": ["上传中… {name}", "Uploading… {name}"],
   "pro.uploaded": ["✓ 已上传: {name}", "✓ Uploaded: {name}"],

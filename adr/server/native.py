@@ -14,13 +14,14 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel
 
 from adr.models import voice_library
 from adr.server import pathsafe
+from adr.server.origin_guard import require_browser_safe
 from adr.server.v2_compat import tts_handle
 
 logger = logging.getLogger(__name__)
@@ -378,6 +379,7 @@ async def tts_get(
     top_p: float = 1.0,
     temperature: float = 1.0,
     text_split_method: str = "cut1",
+    _guard: None = Depends(require_browser_safe),
 ):
     body = NativeTTS_Request(
         text=text, profile=profile, prompt_text=prompt_text or None,

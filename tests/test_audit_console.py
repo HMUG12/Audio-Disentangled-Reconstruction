@@ -278,6 +278,13 @@ def test_upload_probe_oserror_is_400_and_cleans(client, tmp_path, monkeypatch):
     assert not up.exists() or not any(up.iterdir())
 
 
+def test_upload_zip_rejected(client):
+    """批次99 (R4-DATA-01): 训练素材不再收 .zip (无人解压, 建档必失败)。"""
+    r = client.post("/api/adr/v1/train/upload",
+                    files={"file": ("a.zip", b"PK\x03\x04", "application/zip")})
+    assert r.status_code == 415
+
+
 # ─── #19: 建档失败保留堆栈 ───
 
 def test_profile_worker_logs_traceback(monkeypatch, caplog):

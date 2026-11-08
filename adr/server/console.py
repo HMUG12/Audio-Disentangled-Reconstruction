@@ -529,7 +529,9 @@ async def train_stop():
     return {"state": "stopped"}
 
 
-_UPLOAD_EXT = {".wav", ".mp3", ".flac", ".m4a", ".ogg", ".zip"}
+# 批次99 (R4-DATA-01): 不接受 .zip — 训练素材下游按单文件探测/切片, 旧实现
+# 收下 zip 但无人解压, 建档时才失败; 前端文案同步去掉 zip。
+_UPLOAD_EXT = {".wav", ".mp3", ".flac", ".m4a", ".ogg"}
 _UPLOAD_MAX_SIZE = 500 * 1024 * 1024      # 500MB (训练素材异常上传防呆)
 _UPLOAD_MAX_DURATION = 7200.0             # 2h; 训练素材建议 5~30 分钟
 
@@ -628,7 +630,7 @@ async def system_doctor_post(fix: bool = False,
     return await system_doctor(fix)
 
 
-@router.post("/train/upload", summary="上传克隆录音 (wav/mp3/flac/m4a/ogg/zip)")
+@router.post("/train/upload", summary="上传克隆录音 (wav/mp3/flac/m4a/ogg)")
 async def train_upload(file: UploadFile = File(...),
                        source_declaration: str = Form("")):
     """批次62 上传侧声音安全: ``source_declaration`` 为素材来源声明 (谁的声音/
@@ -667,17 +669,16 @@ async def train_upload(file: UploadFile = File(...),
         dest.unlink(missing_ok=True)
         raise HTTPException(400, "上传内容为空")
     duration_s = samplerate = None
-    if ext != ".zip":
-        try:
-            # 批次87 (PERF-02): 探测含 soundfile/ffprobe 子进程, 移出事件循环
-            probe = await asyncio.to_thread(_probe_audio, dest)
-        except ValueError as e:
-            dest.unlink(missing_ok=True)
-            raise HTTPException(400, str(e))
-        duration_s, samplerate = probe["duration_s"], probe["samplerate"]
-        if duration_s and duration_s > _UPLOAD_MAX_DURATION:
-            dest.unlink(missing_ok=True)
-            raise HTTPException(
+    try:
+        # 批次87 (PERF-02): 探测含 soundfile/ffprobe 子进程, 移出事件循环
+        probe = await asyncio.to_thread(_probe_audio, dest)
+    except ValueError as e:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(400, str(e))
+    duration_s, samplerate = probe["duration_s"], probe["samplerate"]
+    if duration_s and duration_s > _UPLOAD_MAX_DURATION:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(
                 413, f"音频时长 {duration_s / 60:.0f} 分钟超过 "
                      f"{_UPLOAD_MAX_DURATION // 3600} 小时上限; "
                      "训练素材建议 5~30 分钟, 请裁剪后上传")
@@ -854,7 +855,8 @@ async def models_download(body: ModelDownloadReq):
             proc = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, encoding="utf-8", errors="replace",
-                cwd=str(REPO), bufsize=1)
+                cwd=str(REPO), bufsize=1,
+                start_new_session=True)  # 批次99 (P3-04): 与训练/门禁一致, POSIX 整组可杀
         except Exception as e:
             raise HTTPException(500, f"下载进程启动失败: {e}")
         _dl.update(state="downloading", proc=proc, name=body.name,

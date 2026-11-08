@@ -19,6 +19,8 @@
 """
 from __future__ import annotations
 
+import os
+import signal
 from pathlib import Path
 from typing import Optional
 
@@ -29,6 +31,42 @@ _AUDIO_EXTS = {".wav", ".mp3", ".flac", ".m4a", ".ogg"}
 
 # 训练子进程超时 (秒)
 _TRAIN_TIMEOUT = 7200
+
+
+def _popen_kwargs() -> dict:
+    """子进程独立进程组 (批次99 / R4-WEBUI-01)。
+
+    Gradio 生成器被客户端断开时会抛 GeneratorExit, 旧实现没有 finally,
+    训练/门禁进程会脱离请求继续跑; 独立进程组让 finally 能整组回收。
+    """
+    import subprocess
+    if os.name == "nt":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
+
+
+def _stop_proc_tree(proc, timeout: float = 10.0) -> None:
+    """终止子进程及其进程组 (批次99 / R4-WEBUI-01), 已退出则空操作。"""
+    import subprocess
+    if proc is None or proc.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                           capture_output=True, timeout=timeout)
+        else:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=timeout)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
 _CLONE_TIMEOUT = 300
 
 
@@ -129,6 +167,14 @@ def _run_sing(utt_sel, custom_text, ref_audio, ph_seq, note_seq,
         t0 = time.time()
         out_dir = Path("output/webui_sing")
         out_dir.mkdir(parents=True, exist_ok=True)
+        # 批次99 (P3): 只保留最近 20 个产物, 防目录随使用无限增长
+        old = sorted(out_dir.glob("sing_*.wav"),
+                     key=lambda p: p.stat().st_mtime, reverse=True)
+        for p in old[19:]:
+            try:
+                p.unlink()
+            except OSError:
+                pass
         out_path = out_dir / f"sing_{int(t0)}.wav"
         sf.write(str(out_path), wav, sr)
         return str(out_path), {
@@ -682,6 +728,7 @@ def _run_train_cmd(
             cwd=str(REPO), bufsize=1,
             env={**os.environ, "PYTHONIOENCODING": "utf-8",
                  "PYTHONUTF8": "1"},  # 训练链全 utf-8, 否则 Windows GBK 输出乱码
+            **_popen_kwargs(),
         )
     except Exception as e:
         yield "\n".join(log_buf), _err(f"训练进程启动失败: {e}")
@@ -692,27 +739,35 @@ def _run_train_cmd(
     last_push = 0.0
     timed_out = False
 
-    while True:
-        line = proc.stdout.readline()
-        if line:
-            lines.append(line.rstrip())
-            # 限频推送: 每 0.5s 最多刷新一次 UI
-            now = time.time()
-            if now - last_push >= 0.5:
-                last_push = now
-                yield "\n".join(log_buf + lines[-120:]), {"status": "训练中..."}
-        elif proc.poll() is not None:
-            break
-        else:
-            time.sleep(0.2)
-            if time.time() - t0 > _TRAIN_TIMEOUT:
-                proc.kill()
-                timed_out = True
+    try:
+        while True:
+            line = proc.stdout.readline()
+            if line:
+                lines.append(line.rstrip())
+                # 限频推送: 每 0.5s 最多刷新一次 UI
+                now = time.time()
+                if now - last_push >= 0.5:
+                    last_push = now
+                    yield "\n".join(log_buf + lines[-120:]), {"status": "训练中..."}
+            elif proc.poll() is not None:
                 break
+            else:
+                time.sleep(0.2)
+                if time.time() - t0 > _TRAIN_TIMEOUT:
+                    proc.kill()
+                    timed_out = True
+                    break
 
-    rc = proc.wait()
-    tail = "\n".join(lines[-30:])
-    final_log = "\n".join(log_buf + lines[-120:])
+        rc = proc.wait()
+        tail = "\n".join(lines[-30:])
+        final_log = "\n".join(log_buf + lines[-120:])
+    finally:
+        # 批次99 (R4-WEBUI-01): 生成器被关闭 / 异常时不留训练子进程
+        _stop_proc_tree(proc)
+        try:
+            proc.stdout.close()
+        except Exception:
+            pass
 
     if timed_out:
         msg = f"训练超时 (>{_TRAIN_TIMEOUT // 3600}h), 已终止"
@@ -782,6 +837,7 @@ def _run_gsv_finetune(
 
     # 质量门禁: 训练前启动, CPU 打分, 达标往 logs/<exp>/STOP 写信号让 s2 早停
     gate_proc = None
+    gate_fh = None
     gate_curve = REPO / "output" / f"train_gate_{exp}.jsonl"
     if gate_on:
         gate_log = REPO / "output" / f"train_gate_{exp}.log"
@@ -797,6 +853,7 @@ def _run_gsv_finetune(
                 text=True, encoding="utf-8", errors="replace", cwd=str(REPO),
                 env={**os.environ, "PYTHONIOENCODING": "utf-8",
                      "PYTHONUTF8": "1"},
+                **_popen_kwargs(),
             )
             log_buf.append(f"[gate] 质量门禁已启动 (PID {gate_proc.pid}, CPU 打分, "
                            f"曲线 {gate_curve.name})")
@@ -817,6 +874,7 @@ def _run_gsv_finetune(
             cwd=str(REPO), bufsize=1,
             env={**os.environ, "PYTHONIOENCODING": "utf-8",
                  "PYTHONUTF8": "1"},
+            **_popen_kwargs(),
         )
     except Exception as e:
         yield "\n".join(log_buf), _err(f"微调进程启动失败: {e}")
@@ -848,36 +906,40 @@ def _run_gsv_finetune(
     gate_lines: list[str] = []
     timed_out = False
 
-    while True:
-        line = proc.stdout.readline()
-        if line:
-            lines.append(line.rstrip())
-            now = time.time()
-            if now - last_push >= 0.5:
-                last_push = now
-                gate_seen, new_gate = _gate_tail(gate_seen)
-                gate_lines.extend(new_gate)
-                yield "\n".join(log_buf + gate_lines + lines[-100:]), {"status": "微调中..."}
-        elif proc.poll() is not None:
-            break
-        else:
-            time.sleep(0.2)
-            if time.time() - t0 > _TRAIN_TIMEOUT:
-                proc.kill()
-                timed_out = True
+    try:
+        while True:
+            line = proc.stdout.readline()
+            if line:
+                lines.append(line.rstrip())
+                now = time.time()
+                if now - last_push >= 0.5:
+                    last_push = now
+                    gate_seen, new_gate = _gate_tail(gate_seen)
+                    gate_lines.extend(new_gate)
+                    yield "\n".join(log_buf + gate_lines + lines[-100:]), {"status": "微调中..."}
+            elif proc.poll() is not None:
                 break
+            else:
+                time.sleep(0.2)
+                if time.time() - t0 > _TRAIN_TIMEOUT:
+                    proc.kill()
+                    timed_out = True
+                    break
 
-    rc = proc.wait()
-    tail = "\n".join(lines[-30:])
-    final_log = "\n".join(log_buf + gate_lines + lines[-100:])
-
-    # 门禁收尾: 训练结束 (含早停) 后门禁也该退场
-    if gate_proc and gate_proc.poll() is None:
-        gate_proc.terminate()
-        try:
-            gate_proc.wait(timeout=10)
-        except Exception:
-            gate_proc.kill()
+        rc = proc.wait()
+        tail = "\n".join(lines[-30:])
+        final_log = "\n".join(log_buf + gate_lines + lines[-100:])
+    finally:
+        # 批次99 (R4-WEBUI-01): 训练结束 / 生成器被关闭 / 异常都整组回收,
+        # 门禁进程与日志句柄不留给后续请求 (旧实现只在正常路径收尾)。
+        _stop_proc_tree(proc)
+        _stop_proc_tree(gate_proc)
+        for fh in (gate_fh, getattr(proc, "stdout", None)):
+            try:
+                if fh is not None:
+                    fh.close()
+            except Exception:
+                pass
 
     if timed_out:
         msg = f"微调超时 (>{_TRAIN_TIMEOUT // 3600}h), 已终止"

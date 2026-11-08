@@ -782,6 +782,54 @@ def test_trainer_scaler_state_roundtrip():
         trainer3.load_checkpoint(ckpt_path)
 
 
+def test_trainer_ckpt_restores_early_stop_and_callback_state():
+    """批次99 (R4-TRAIN-02): resume 恢复 best/耐心计数与 callback best。"""
+    from adr.models.sovits import SoVITS, SoVITSConfig
+    from adr.training import Trainer, TrainerConfig
+    from adr.training.callbacks import CheckpointCallback, EarlyStoppingCallback
+    from adr.training.dataset import VoiceCloneDataset
+
+    def _mk():
+        return SoVITS(SoVITSConfig(
+            hidden_dim=32, n_layers=2, n_heads=2, ffn_dim=64,
+            vocab_size=607, content_dim=16, timbre_dim=16,
+        ))
+
+    samples = [_make_dummy_sample(i) for i in range(4)]
+    ds = VoiceCloneDataset(samples=samples)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        config = TrainerConfig(
+            epochs=3, batch_size=2, use_amp=False,
+            use_gradient_checkpointing=False,
+            output_dir=tmp_dir, val_ratio=0.0,
+        )
+        es1 = EarlyStoppingCallback(patience=3)
+        ck1 = CheckpointCallback(tmp_dir, save_best=False)
+        t1 = Trainer(model=_mk(), train_data=ds, config=config,
+                     callbacks=[es1, ck1])
+        t1.best_val_loss = 0.42
+        t1.epochs_no_improve = 2
+        es1.best_value = 0.42
+        es1.counter = 2
+        ck1.best_value = 0.37
+        ckpt = Path(tmp_dir) / "state.pt"
+        t1.save_checkpoint(ckpt)
+
+        es2 = EarlyStoppingCallback(patience=3)
+        ck2 = CheckpointCallback(tmp_dir, save_best=False)
+        t2 = Trainer(model=_mk(), train_data=ds, config=config,
+                     callbacks=[es2, ck2])
+        t2.load_checkpoint(ckpt)
+
+        assert t2.best_val_loss == pytest.approx(0.42)
+        assert t2.epochs_no_improve == 2
+        assert es2.best_value == pytest.approx(0.42)
+        assert es2.counter == 2
+        assert es2.should_stop is False   # resume 不应立刻停
+        assert ck2.best_value == pytest.approx(0.37)
+
+
 def test_trainer_ckpt_shape_mismatch_raises():
     """非 LoRA: 键存在但 shape 不一致应 raise (含 key/期望/实际 shape)。"""
     from adr.models.sovits import SoVITS, SoVITSConfig

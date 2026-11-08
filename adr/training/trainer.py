@@ -37,6 +37,24 @@ from adr.training.grad_ckpt import enable_gradient_checkpointing
 from adr.training.optimizer import OptimizerConfig, build_optimizer, build_scheduler
 
 
+def _replace_with_retry(src: Path, dst: Path, attempts: int = 5,
+                        delay: float = 0.2) -> None:
+    """os.replace + 退避重试 (批次99 / R4-TRAIN-01)。
+
+    Windows 上目标文件被杀毒/索引/另一个读取者短暂占用时 os.replace 抛
+    WinError 5/32; 旧实现一次失败就让整轮训练中止。这里按 0.2s 指数退避
+    重试, 仍失败才抛出 (最后一次异常保留原始错误信息)。
+    """
+    for i in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except OSError:
+            if i == attempts - 1:
+                raise
+            time.sleep(delay * (2 ** i))
+
+
 @dataclass
 class TrainerConfig:
     """训练器配置。"""
@@ -223,6 +241,9 @@ class Trainer:
         # 断点续训/进度状态 (load_checkpoint 恢复; save_checkpoint 写入)
         self._start_epoch = 0          # fit 起始 epoch (resume 时 > 0)
         self._start_global_step = 0    # fit 起始全局步
+        # Early Stopping 状态 (批次99 / R4-TRAIN-02: 随 checkpoint 持久化)
+        self.best_val_loss = float("inf")
+        self.epochs_no_improve = 0
         self.current_epoch = 0         # 已完成的 epoch 数 (下一个待跑 epoch)
         self.global_step = 0           # 累计 batch 步数
 
@@ -275,8 +296,11 @@ class Trainer:
             )
 
         # Early Stopping 状态 (M3)
-        best_val_loss = float("inf")
-        epochs_no_improve = 0
+        # 批次99 (R4-TRAIN-02): resume 时沿用 checkpoint 里的 best/耐心计数,
+        # 否则重启后 best 归零, 早停永不触发且 best.pt 会被更差的权重覆盖。
+        if self._start_epoch <= 0:
+            self.best_val_loss = float("inf")
+            self.epochs_no_improve = 0
         early_stopped = False
 
         for epoch in range(self._start_epoch, self.config.epochs):
@@ -320,22 +344,22 @@ class Trainer:
             # Early Stopping 检查 (M3)
             if self.config.early_stop_patience > 0 and "val/loss" in metrics:
                 val_loss = metrics["val/loss"]
-                if val_loss < best_val_loss - self.config.early_stop_min_delta:
-                    best_val_loss = val_loss
-                    epochs_no_improve = 0
+                if val_loss < self.best_val_loss - self.config.early_stop_min_delta:
+                    self.best_val_loss = val_loss
+                    self.epochs_no_improve = 0
                     self.log.info(
                         f"  [EarlyStop] val/loss improved to {val_loss:.4f}"
                     )
                 else:
-                    epochs_no_improve += 1
+                    self.epochs_no_improve += 1
                     self.log.info(
-                        f"  [EarlyStop] no improve ({epochs_no_improve}/"
+                        f"  [EarlyStop] no improve ({self.epochs_no_improve}/"
                         f"{self.config.early_stop_patience})"
                     )
-                    if epochs_no_improve >= self.config.early_stop_patience:
+                    if self.epochs_no_improve >= self.config.early_stop_patience:
                         self.log.info(
                             f"  [EarlyStop] STOP at epoch {epoch+1}, "
-                            f"best val/loss = {best_val_loss:.4f}"
+                            f"best val/loss = {self.best_val_loss:.4f}"
                         )
                         early_stopped = True
                         break
@@ -347,7 +371,7 @@ class Trainer:
         elapsed = time.time() - t_start
         self.log.info(f"Training done in {elapsed:.1f}s ({elapsed / 60:.2f} min)")
         if early_stopped:
-            self.log.info(f"  Best val/loss = {best_val_loss:.4f}")
+            self.log.info(f"  Best val/loss = {self.best_val_loss:.4f}")
         return best_metrics
 
     def _step_optimizer(self) -> None:
@@ -518,6 +542,16 @@ class Trainer:
             # 训练进度 (resume 时恢复 epoch/global_step)
             "epoch": self.current_epoch,
             "global_step": self.global_step,
+            # 批次99 (R4-TRAIN-02): 早停状态 + 各 callback 的 best 状态,
+            # 否则 resume 后 best 归零 (早停失效 / best.pt 被更差权重覆盖)
+            "trainer_state": {
+                "best_val_loss": self.best_val_loss,
+                "epochs_no_improve": self.epochs_no_improve,
+            },
+            "callback_state": [
+                cb.state_dict() if hasattr(cb, "state_dict") else {}
+                for cb in self.callbacks
+            ],
         }
         # AMP GradScaler 状态 (scale/增长追踪器), 保证 resume 后梯度缩放稳定
         if self.scaler is not None:
@@ -534,11 +568,11 @@ class Trainer:
             torch.save(ckpt, tmp)
             if path.exists():
                 try:
-                    os.replace(path, bak)
+                    _replace_with_retry(path, bak)
                 except OSError:
                     # 备份失败不阻断保存: 换名失败时旧文件还在, 仍是完整的
                     self.log.warning(f"  checkpoint: 覆盖前备份失败 ({bak.name})")
-            os.replace(tmp, path)
+            _replace_with_retry(tmp, path)
         except BaseException:
             # 换名失败且旧文件已被挪走 → 立刻还原, 保证异常后仍有一份可加载的
             if not path.exists() and bak.exists():
@@ -624,6 +658,19 @@ class Trainer:
         self._start_global_step = int(ckpt.get("global_step", 0) or 0)
         self.current_epoch = self._start_epoch
         self.global_step = self._start_global_step
+        # 批次99 (R4-TRAIN-02): 恢复早停状态 (旧 ckpt 缺键则保持默认)
+        state = ckpt.get("trainer_state") or {}
+        if state:
+            self.best_val_loss = float(state.get("best_val_loss", float("inf")))
+            self.epochs_no_improve = int(state.get("epochs_no_improve", 0) or 0)
+        cb_states = ckpt.get("callback_state") or []
+        for cb, st in zip(self.callbacks, cb_states):
+            if isinstance(st, dict) and st and hasattr(cb, "load_state_dict"):
+                try:
+                    cb.load_state_dict(st)
+                except Exception as e:
+                    self.log.warning(
+                        f"  callback state skipped ({type(cb).__name__}): {e}")
 
     @classmethod
     def from_config(
