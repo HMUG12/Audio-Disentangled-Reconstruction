@@ -213,3 +213,34 @@ def test_console_pages_format_backend_error():
         assert "j.detail ||" not in src, page
         assert "j.message || j.detail" not in src, page
         assert "errJ.detail ||" not in src, page
+
+
+# ===== 批次113 (审计 R5-FE-03/06/07): 控制台错误可见 + 统一转义 =====
+def test_console_error_surface_and_escaping():
+    """call 页: 401 不再伪装成「没有档案」、补超时与取消、换音频释放 blob;
+    后端文本不进 innerHTML; easy/pro 共用同一套 HTML 转义。"""
+    static = REPO / "adr" / "server" / "static"
+    i18n = (static / "i18n.js").read_text(encoding="utf-8")
+    assert "function adrEsc" in i18n
+    assert '"&#39;"' in i18n          # 单引号也转, 属性上下文才安全
+
+    easy = (static / "easy.html").read_text(encoding="utf-8")
+    assert 'replace(/</g, "&lt;")' not in easy
+    assert "adrEsc(p.name)" in easy
+
+    pro = (static / "pro.html").read_text(encoding="utf-8")
+    assert "const esc = adrEsc;" in pro
+    assert 'replace(/[&<>"]/g' not in pro
+
+    call = (static / "call.html").read_text(encoding="utf-8")
+    assert ".json()" in call and "call.err_auth" in call     # 401/403 有专门说明
+    assert "new AbortController()" in call and "600000" in call
+    assert "URL.revokeObjectURL(audioUrl)" in call
+    assert '$("meta").innerHTML = I.t("call.meta_fail"' not in call
+    assert '$("meta").textContent = I.t("call.meta_fail"' in call
+    assert "adrEsc(row.status)" in call
+
+    call_dict = (static / "i18n-call.js").read_text(encoding="utf-8")
+    for key in ("call.err_auth", "call.err_profiles", "call.err_timeout",
+                "call.err_aborted", "call.btn_cancel"):
+        assert f'"{key}"' in call_dict, key

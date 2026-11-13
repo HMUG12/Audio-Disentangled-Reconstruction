@@ -285,6 +285,8 @@ const STAGE_TXT = () => ({
 let endpoint = "native";   // native | v2 | openai
 let codeLang = "curl";     // curl | python | js
 let profiles = [];
+let curCtrl = null;        // 批次113: 在途合成的 AbortController (再点按钮 = 取消)
+let audioUrl = "";         // 批次113: 当前试听 blob URL, 换新音频前 revoke
 
 /* ---- 桌面壳内 (?desktop=1): 返回链接指向壳内启动器 (init 后调用) ---- */
 function applyBackLink() {
@@ -329,9 +331,24 @@ $("plang").value = "zh";
 /* ---- 档案下拉 → 自动填充 prompt_text / ref_audio_path ---- */
 async function loadProfiles() {
   try {
-    const d = await fetch(api("/api/adr/v1/profiles")).then(r => r.json());
+    const r = await fetch(api("/api/adr/v1/profiles"));
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      // 批次113 (R5-FE-03): 401/403 是「API key 无效或未携带」, 不能显示成
+      // 「没有档案」——否则用户以为档案丢了, 完全找不到问题所在。
+      const e = new Error(adrErrMsg(j, r.status));
+      e.auth = r.status === 401 || r.status === 403;
+      throw e;
+    }
+    const d = await r.json();
     profiles = d.profiles || [];
-  } catch { profiles = []; }
+  } catch (e) {
+    profiles = [];
+    const msg = e.auth ? I.t("call.err_auth")
+                       : I.t("call.err_profiles", { msg: e.message });
+    $("prof").title = msg;
+    if (!$("meta").textContent) $("meta").textContent = msg;
+  }
   const sel = $("prof");
   sel.innerHTML = "";
   const none = document.createElement("option");
@@ -462,14 +479,17 @@ document.querySelectorAll(".copy[data-copy]").forEach(b => {
 /* ---- 合成试听: 记录 TTFB / 总耗时 / 日志 ---- */
 function addLog(row) {
   const tr = document.createElement("tr");
-  tr.innerHTML = `<td>${row.t}</td><td>${row.ep}</td><td>${row.sm}</td>` +
-    `<td>${row.ttfb}</td><td>${row.total}</td><td>${row.size}</td>` +
-    `<td class="${row.cls}">${row.status}</td>`;
+  // 批次113 (R5-FE-07): 失败原因可能回显后端/用户输入的路径, 一律转义后再拼 HTML
+  tr.innerHTML = `<td>${adrEsc(row.t)}</td><td>${adrEsc(row.ep)}</td><td>${adrEsc(row.sm)}</td>` +
+    `<td>${adrEsc(row.ttfb)}</td><td>${adrEsc(row.total)}</td><td>${adrEsc(row.size)}</td>` +
+    `<td class="${adrEsc(row.cls)}">${adrEsc(row.status)}</td>`;
   $("logBody").prepend(tr);
   while ($("logBody").children.length > 8) $("logBody").lastChild.remove();
 }
 
 $("go").onclick = async () => {
+  // 批次113 (R5-FE-03): 合成中点按钮 = 取消 (原先必须等 600 秒超时或杀进程)
+  if (curCtrl) { curCtrl.abort(); return; }
   const body = buildBody();
   if (!body.text?.trim()) { $("meta").textContent = I.t("call.err_notext"); return; }
   if (endpoint === "native" && !body.profile) { $("meta").textContent = I.t("call.err_noprofile"); return; }
@@ -482,13 +502,18 @@ $("go").onclick = async () => {
   const url = endpoint === "native" ? "/api/adr/v1/tts"
             : endpoint === "openai" ? "/v1/audio/speech" : "/api/v2/tts";
   const btn = $("go");
-  btn.disabled = true; btn.textContent = I.t("call.btn_synth_ing");
+  btn.textContent = I.t("call.btn_cancel");
   $("meta").textContent = I.t("call.meta_synth");
   const t0 = performance.now();
+  // 批次113: 与 pro/easy 对齐的 600 秒超时; 超时与手动取消分开提示
+  const ctrl = new AbortController();
+  curCtrl = ctrl;
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, 600000);
   try {
     const r = await fetch(api(url), {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify(body), signal: ctrl.signal,
     });
     const ttfb = Math.round(performance.now() - t0);
     if (!r.ok) {
@@ -497,7 +522,10 @@ $("go").onclick = async () => {
     }
     const blob = await r.blob();
     const total = Math.round(performance.now() - t0);
-    $("au").src = URL.createObjectURL(blob);
+    // 换音频前释放上一个 objectURL: 反复合成不再累积 blob 内存
+    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    audioUrl = URL.createObjectURL(blob);
+    $("au").src = audioUrl;
     const kb = blob.size >= 1 << 20 ? (blob.size / (1 << 20)).toFixed(2) + " MB"
                                     : Math.round(blob.size / 1024) + " KB";
     $("meta").innerHTML = I.t("call.meta_done", { ttfb, total, kb }) +
@@ -507,11 +535,16 @@ $("go").onclick = async () => {
              ttfb: ttfb + "ms", total: total + "ms", size: kb, cls: "ok", status: I.t("call.status_ok") });
   } catch (e) {
     const total = Math.round(performance.now() - t0);
-    $("meta").innerHTML = I.t("call.meta_fail", { msg: e.message });
+    const msg = timedOut ? I.t("call.err_timeout")
+              : e.name === "AbortError" ? I.t("call.err_aborted")
+              : e.message;
+    // 批次113 (R5-FE-07): 后端文本不当作 HTML —— 原先 innerHTML 拼接是自 XSS 面
+    $("meta").textContent = I.t("call.meta_fail", { msg });
     addLog({ t: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
              ep: endpoint, sm: endpoint === "openai" ? (body.stream ? I.t("call.stream_y") : I.t("call.stream_n")) : body.streaming_mode,
-             ttfb: "—", total: total + "ms", size: "—", cls: "err", status: e.message.slice(0, 40) });
+             ttfb: "—", total: total + "ms", size: "—", cls: "err", status: msg.slice(0, 40) });
   } finally {
+    clearTimeout(timer); curCtrl = null;
     btn.disabled = false; btn.textContent = I.t("call.go");
   }
 };

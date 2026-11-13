@@ -508,7 +508,8 @@ async function jfetch(url, opts) {
   }
   return r.json();
 }
-const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+// 批次113 (R5-FE-06): 与 easy/call 共用 i18n.js 的同一套转义 (& < > " ')
+const esc = adrEsc;
 const fmtGB = v => v == null ? "—" : v.toFixed(1);
 
 /* ---- 环境诊断 (一键 / 自动修复, 批次18; 修复指引+复制报告 批次92) ---- */

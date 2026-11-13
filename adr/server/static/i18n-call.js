@@ -44,6 +44,7 @@ const I18N_DICT = {
   "call.ph_vits": ["output/logs/…/你的s2.pth", "output/logs/…/your-s2.pth"],
   "call.go": ["✦ 合成试听", "✦ Synthesize"],
   "call.btn_synth_ing": ["⟳ 合成中…", "⟳ Synthesizing…"],
+  "call.btn_cancel": ["✕ 取消合成", "✕ Cancel"],
   "call.hint_wait": ["引擎未就绪时点合成会自动等待加载完成，耗时属正常。", "If the engine isn't ready yet, synthesizing will wait for it to load — the wait is normal."],
   "call.hint_compat": ["兼容性说明：aux_ref_audio_paths / batch_size / batch_threshold / split_bucket / fragment_interval / parallel_infer / repetition_penalty / sample_steps 等参数按 GSV 协议接受但被 ADR 引擎忽略（差异清单见 docs/tts-api-spec.md）。", "Compatibility note: aux_ref_audio_paths / batch_size / batch_threshold / split_bucket / fragment_interval / parallel_infer / repetition_penalty / sample_steps and similar params are accepted per the GSV protocol but ignored by the ADR engine (see docs/tts-api-spec.md for the diff list)."],
 
@@ -96,6 +97,10 @@ const I18N_DICT = {
   "call.err_noprofile": ["⚠ 原生端点必须选择音色档案", "⚠ The native endpoint requires a voice profile"],
   "call.err_gsv": ["⚠ GSV 兼容端点需要档案或 ref_audio_path", "⚠ The GSV compat endpoint needs a profile or ref_audio_path"],
   "call.err_openai": ["⚠ OpenAI 端点需要选择音色档案 (model)", "⚠ The OpenAI endpoint needs a voice profile (model)"],
+  "call.err_auth": ["⚠ 无法读取音色档案：API key 无效或未携带", "⚠ Cannot load voice profiles: API key missing or invalid"],
+  "call.err_profiles": ["⚠ 音色档案读取失败：{msg}", "⚠ Failed to load voice profiles: {msg}"],
+  "call.err_timeout": ["合成超时（600 秒），已中止", "Timed out after 600 s — aborted"],
+  "call.err_aborted": ["已取消合成", "Synthesis cancelled"],
   "call.meta_synth": ["合成中… (流式模式下音频完整下载后播放)", "Synthesizing… (in streaming mode the audio plays after the full download)"],
   "call.meta_done": ["✔ 合成完成 · 首包 <b>{ttfb} ms</b> · 总耗时 <b>{total} ms</b> · 音频 <b>{kb}</b>", "✔ Done · first byte <b>{ttfb} ms</b> · total <b>{total} ms</b> · audio <b>{kb}</b>"],
   "call.meta_tiny": ["<br>⚠ 音频异常小, 可能合成失败", "<br>⚠ Audio is suspiciously small — synthesis may have failed"],

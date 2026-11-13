@@ -149,3 +149,11 @@ function adrErrMsg(body, status, fallback) {
   if (d && typeof d === "object") { try { return JSON.stringify(d); } catch (_) { return fb; } }
   return fb;
 }
+
+/* 批次113 (审计 R5-FE-06): 三页共用的 HTML 转义 — 模板字符串拼 innerHTML 时
+ * 用这一套 (& < > " '); easy 原先只转 "<", 属性/引号型内容仍可注入。
+ * 纯文本场景优先 textContent, 不必走这里。 */
+function adrEsc(s) {
+  return String(s === undefined || s === null ? "" : s).replace(/[&<>"']/g,
+    c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}

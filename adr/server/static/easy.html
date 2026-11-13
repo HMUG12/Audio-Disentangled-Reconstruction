@@ -462,8 +462,8 @@ function renderVoices() {
           <path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/>
         </svg>
       </div>
-      <div class="nm">${p.name.replace(/</g, "&lt;")}</div>
-      <div class="tag">${p.style ? p.style.replace(/</g, "&lt;") : I.t("easy.tag_pick")}</div>
+      <div class="nm">${adrEsc(p.name)}</div>
+      <div class="tag">${p.style ? adrEsc(p.style) : I.t("easy.tag_pick")}</div>
     </div>`).join("") + `
     <div class="vc add" id="addCard">
       <div class="plus">＋</div><b>${I.t("easy.add_title")}</b>
