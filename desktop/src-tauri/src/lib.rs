@@ -933,16 +933,22 @@ fn autostart_set(_enable: bool) -> Result<(), String> {
     Err("仅支持 Windows".into())
 }
 
-/// 用系统默认程序打开目标: 目录 (日志/数据/迁移引导) 或 URL (检查更新直达
-/// Releases 页)。URL 不做存在性校验, 本地路径必须存在。
+/// 用系统默认程序打开目标: 目录 (日志/数据/配置) 或 HTTPS 链接 (Releases 页)。
+/// 批次116 (审计 R5-LIB-01): 收紧信任边界 —— URL 只放行 https; 本地目标只放行
+/// 已存在的**目录**。原先 https/http 与任意存在的文件都放行, 前端一旦被注入
+/// (见 R5-FE-01) 就能借壳执行任意本地可执行文件 (`open::that` 对 .exe 是直接运行)。
 #[tauri::command]
 fn open_path(path: String) -> Result<(), String> {
-    if path.starts_with("http://") || path.starts_with("https://") {
-        return open::that(&path).map_err(|e| format!("打开失败: {e}"));
+    let target = path.trim();
+    if target.starts_with("https://") {
+        return open::that(target).map_err(|e| format!("打开失败: {e}"));
     }
-    let p = PathBuf::from(&path);
-    if !p.exists() {
-        return Err(format!("路径不存在: {path}"));
+    if target.contains("://") {
+        return Err("仅支持 https 链接".into());
+    }
+    let p = PathBuf::from(target);
+    if !p.is_dir() {
+        return Err(format!("路径不存在或不是目录: {target}"));
     }
     open::that(&p).map_err(|e| format!("打开失败: {e}"))
 }

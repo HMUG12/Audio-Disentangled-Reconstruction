@@ -274,6 +274,23 @@ def test_console_a11y_status_and_labels():
             assert f'id="{fid}"' in src, f"{page}: 缺输入框 id={fid}"
 
 
+# ===== 批次116 (审计 R5-LIB-01): open_path 信任边界 =====
+def test_open_path_rejects_files_and_plain_http():
+    """open::that 对 .exe 是直接运行: 前端一旦被注入, 旧实现（放行 http/https
+    任意 URL + 任意存在文件）等于任意本地程序执行。现在只放行 https 链接与
+    已存在的目录。"""
+    src = LIB_RS.read_text(encoding="utf-8")
+    fn = src[src.index("fn open_path(path: String)"):]
+    fn = fn[: fn.index("/// CPU 自动兼容检测结果")]
+    assert 'starts_with("https://")' in fn
+    assert 'starts_with("http://")' not in fn
+    assert "仅支持 https 链接" in fn
+    assert "p.is_dir()" in fn
+    assert "路径不存在或不是目录" in fn
+    # 不得再出现「文件存在即放行」的老写法
+    assert "p.exists()" not in fn
+
+
 # ===== 批次115 (审计 R5-FE-05): 账号修改文案与校验同口径 =====
 def test_launcher_account_hint_matches_validation():
     """设置中心原先写「密码留空 = 不修改」, 但校验要求必填 — 按提示操作必失败。"""
