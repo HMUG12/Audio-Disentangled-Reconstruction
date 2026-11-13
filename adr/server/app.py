@@ -173,6 +173,41 @@ class JSONCharsetMiddleware:
         await self.app(scope, receive, _send)
 
 
+class SecurityHeadersMiddleware:
+    """基础安全响应头 (批次112 / 审计 R5-SEC-01)。
+
+    服务面向本机浏览器与壳内 WebView, 缺这三类头时: MIME 嗅探可把上传的
+    ``.txt`` 当脚本执行、外链 Referer 会带出本机控制台地址、控制台页可被
+    第三方站点用 iframe 套壳点击劫持。只加头不改 body, 已存在同名头的响应
+    (路由自己设的 CSP) 一律不覆盖。
+    """
+
+    _HEADERS = (
+        (b"x-content-type-options", b"nosniff"),
+        (b"referrer-policy", b"no-referrer"),
+        (b"x-frame-options", b"DENY"),
+        (b"content-security-policy", b"frame-ancestors 'none'"),
+    )
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+
+        async def _send(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers") or [])
+                existing = {k.lower() for k, _ in headers}
+                headers.extend((k, v) for k, v in self._HEADERS
+                               if k not in existing)
+                message["headers"] = headers
+            await send(message)
+
+        await self.app(scope, receive, _send)
+
+
 def create_app(engine=None) -> FastAPI:
     default_profile = settings.default_profile()
 
@@ -244,6 +279,9 @@ def create_app(engine=None) -> FastAPI:
     # 批次96: JSON 响应补 charset=utf-8 — 放最外层, 鉴权/守卫/413 等
     # 中间件直接产出的 JSON 也一并覆盖 (它们本就带 charset, 命中即跳过)。
     app.add_middleware(JSONCharsetMiddleware)
+    # 批次112 (R5-SEC-01): 基础安全响应头 — 放最外层, 401/403/413/404 等
+    # 中间件与异常处理器直接产出的响应也一并覆盖。
+    app.add_middleware(SecurityHeadersMiddleware)
     # 批次41a: HTTPException 响应增量补结构化 code — 既有 detail 字段与
     # 文本逐字保留 (wire 兼容)。
     # 批次84 (#13): 再增量补 ``message``, 与 v2/v3 的 {"message","code"} 契约对齐;

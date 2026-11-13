@@ -156,6 +156,19 @@ def test_http_error_responses_carry_code(security_client):
     assert "当前没有进行中的训练" in body["detail"]
 
 
+# ─── 批次112 (审计 R5-SEC-01): 基础安全响应头 ───
+
+def test_security_headers_on_all_responses(security_client):
+    """nosniff / no-referrer / 反套壳 三类头必须覆盖正常响应与错误响应
+    (中间件与异常处理器直接产出的 401/413 等也在内)。"""
+    for r in (security_client.get("/health"),                 # 200
+              security_client.post("/api/adr/v1/train/stop")):  # 409
+        assert r.headers["x-content-type-options"] == "nosniff"
+        assert r.headers["referrer-policy"] == "no-referrer"
+        assert r.headers["x-frame-options"] == "DENY"
+        assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
+
+
 # ─── 批次41a: voice_library 档案名安全 + meta.json 原子写 ───
 
 def _mk_ref_wav(tmp_path):
