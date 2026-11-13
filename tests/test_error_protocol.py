@@ -279,3 +279,20 @@ def test_v3_synth_error_code(client, voice_dir):
         assert err is not None
         assert err["message"] == "boom"
         assert err["code"] == "internal_error"
+
+
+# ─── 批次111 (审计 R5-WEBUI-02): 流式克隆失败必须可见 ───
+
+def test_webui_stream_clone_surfaces_errors():
+    """输出端只有流式音频, 没有地方放错误 dict; 旧实现三条失败路径裸 return,
+    点「流式克隆」后界面无输出无报错。现在统一 raise gr.Error。"""
+    gr = pytest.importorskip("gradio")
+    from adr.webui import _stream_clone_cmd
+
+    with pytest.raises(gr.Error):
+        list(_stream_clone_cmd(None, "   ", "", "", "cut3"))
+    # 参考音频不合规 → 报错要带原因, 不能只丢个空响应
+    with pytest.raises(gr.Error) as ei:
+        list(_stream_clone_cmd(None, "你好", "", "", "cut3"))
+    assert "参考音频" in str(ei.value)
+

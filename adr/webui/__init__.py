@@ -1070,13 +1070,17 @@ def _stream_clone_cmd(ref_path, text, prompt_text, voice_name, split_method="cut
     """A3: 流式克隆回调 — 逐块 yield (sr, int16) 给 streaming Audio。
 
     voice_name 命中档案时用档案参考/微调权重。
+    批次111 (审计 R5-WEBUI-02): 输出端只有流式音频, 无处展示错误 dict,
+    失败路径一律 `raise gr.Error` 走 Gradio 的可见报错 (原先裸 return,
+    界面完全无反馈, 用户只能怀疑卡死)。
     """
+    import gradio as gr
     import numpy as np
 
     from adr.services import SynthesisService
 
     if not (text or "").strip():
-        return
+        raise gr.Error("请输入要朗读的文本")
     t2s_w = vits_w = None
     if voice_name and voice_name.strip():
         try:
@@ -1086,10 +1090,13 @@ def _stream_clone_cmd(ref_path, text, prompt_text, voice_name, split_method="cut
             prompt_text = fill["prompt_text"]
             t2s_w = fill["t2s_weights"]
             vits_w = fill["vits_weights"]
-        except Exception:
-            return
-    if _validate_audio(ref_path):
-        return
+        except Exception as e:
+            raise gr.Error(f"音色档案加载失败: {e}") from e
+    if err := _validate_audio(ref_path):
+        msg = err.get("error", "参考音频不可用")
+        if err.get("suggestion"):
+            msg += f"（{err['suggestion']}）"
+        raise gr.Error(msg)
     try:
         from adr.models.gsv_engine import get_gsv_engine
         eng = get_gsv_engine()
@@ -1099,8 +1106,8 @@ def _stream_clone_cmd(ref_path, text, prompt_text, voice_name, split_method="cut
                 split_method=split_method):
             pcm = np.clip(chunk, -1.0, 1.0)
             yield sr, (pcm * 32767).astype(np.int16)
-    except Exception:
-        return
+    except Exception as e:
+        raise gr.Error(f"流式合成失败: {e}") from e
 
 
 def _run_clone_cmd(ref_path: Optional[str], text: str, ckpt_value: str,
