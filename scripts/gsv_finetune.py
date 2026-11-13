@@ -20,15 +20,18 @@ PRE_GSV = GSV / "GPT_SoVITS" / "pretrained_models" / "gsv-v2final-pretrained"
 PRE = GSV / "GPT_SoVITS" / "pretrained_models"
 
 
-def run(cmd: str, env: dict = None, desc: str = ""):
-    print(f"\n{'=' * 60}\n>>> {desc}\n{cmd}\n{'=' * 60}", flush=True)
+def run(argv: list, env: dict = None, desc: str = ""):
+    """argv 一律传参数列表 (shell=False): 路径含空格/中文/特殊字符不会被二次
+    解析, 也不存在命令注入面 (审计 R5-SCR-01)。"""
+    print(f"\n{'=' * 60}\n>>> {desc}\n{subprocess.list2cmdline(argv)}\n{'=' * 60}",
+          flush=True)
     e = os.environ.copy()
     # 官方脚本依赖从仓库根 import (tools./GPT_SoVITS.), 需显式 PYTHONPATH
     e["PYTHONPATH"] = f"{GSV};{GSV / 'GPT_SoVITS'}" + \
         (os.pathsep + e["PYTHONPATH"] if e.get("PYTHONPATH") else "")
     if env:
         e.update({k: str(v) for k, v in env.items()})
-    r = subprocess.run(cmd, shell=True, cwd=str(GSV), env=e)
+    r = subprocess.run(argv, cwd=str(GSV), env=e)
     if r.returncode != 0:
         raise RuntimeError(f"步骤失败 ({desc}): exit={r.returncode}")
 
@@ -89,8 +92,8 @@ def main():
     args = ap.parse_args()
 
     exp = args.exp
-    # 批次99 (P3-08): exp 会拼进 shell=True 命令串 — 入口统一清洗, 去 shell
-    # 元字符/路径成分 (合法中文/下划线名不受影响)
+    # exp 会拼进目录名/权重 glob 与临时配置 — 入口统一清洗, 去路径成分与
+    # 元字符 (合法中文/下划线名不受影响)
     from adr.core.naming import sanitize_exp_name
     exp = sanitize_exp_name(exp, fallback="user_voice")
     if args.max_clip_sec:
@@ -169,11 +172,14 @@ def main():
         print("[O1] 无 CUDA: batch_size=1 (本轮仅数据准备)")
 
     if start <= 0:
-        run(f'"{PY}" -s tools/slice_audio.py "{audio}" "{sliced}" -34 4000 300 10 500 0.9 0.25 0 1',
+        run([PY, "-s", "tools/slice_audio.py", str(audio), str(sliced),
+             "-34", "4000", "300", "10", "500", "0.9", "0.25", "0", "1"],
             desc="1/7 静音切片")
     if start <= 1:
         # ASR: 中文自动转 FunASR (modelscope 下载 paraformer, 一次性的)
-        run(f'"{PY}" -s tools/asr/fasterwhisper_asr.py -i "{sliced}" -o "{asr_out}" -s medium -l zh -p {asr_prec}',
+        run([PY, "-s", "tools/asr/fasterwhisper_asr.py",
+             "-i", str(sliced), "-o", str(asr_out),
+             "-s", "medium", "-l", "zh", "-p", asr_prec],
             desc=f"2/7 ASR 转录 (中文走 FunASR, 精度 {asr_prec})")
         list_file = asr_out / f"{sliced.name}.list"
 
@@ -183,16 +189,16 @@ def main():
         "is_half": is_half, "version": "v2",
     }
     if start <= 2:
-        run(f'"{PY}" -s GPT_SoVITS/prepare_datasets/1-get-text.py',
+        run([PY, "-s", "GPT_SoVITS/prepare_datasets/1-get-text.py"],
             env={**common_env,
                  "bert_pretrained_dir": PRE / "chinese-roberta-wwm-ext-large"},
             desc="3/7 文本+BERT 特征")
     if start <= 3:
-        run(f'"{PY}" -s GPT_SoVITS/prepare_datasets/2-get-hubert-wav32k.py',
+        run([PY, "-s", "GPT_SoVITS/prepare_datasets/2-get-hubert-wav32k.py"],
             env={**common_env, "cnhubert_base_dir": PRE / "chinese-hubert-base"},
             desc="4/7 HuBERT 特征")
     if start <= 4:
-        run(f'"{PY}" -s GPT_SoVITS/prepare_datasets/3-get-semantic.py',
+        run([PY, "-s", "GPT_SoVITS/prepare_datasets/3-get-semantic.py"],
             env={**common_env, "pretrained_s2G": PRE_GSV / "s2G2333k.pth",
                  "s2config_path": GSV / "GPT_SoVITS" / "configs" / "s2.json"},
             desc="5/7 语义 token")
@@ -246,7 +252,7 @@ def main():
         # O3: Ampere+ 显卡 (A2000/30/40 系) 走 bf16 混合精度 — 显存降 30~40%,
         # 免 loss scale 更稳; 老卡 (Turing-) 自动回落 fp16 现状
         s2_env = {"ADR_S2_BF16": "1"} if torch.cuda.is_bf16_supported() else None
-        run(f'"{PY}" -s GPT_SoVITS/s2_train.py --config "{tmp_cfg}"',
+        run([PY, "-s", "GPT_SoVITS/s2_train.py", "--config", str(tmp_cfg)],
             env=s2_env, desc=f"6/7 SoVITS 微调 ({args.s2_epochs} epochs)")
 
         # C3: 训完自动把最新 s2 权重绑定到音色档案 (不存在则自动建档, 闭环断点修复)
@@ -295,7 +301,7 @@ def main():
         tmp_cfg.parent.mkdir(exist_ok=True)
         tmp_cfg.write_text(yaml.dump(cfg, allow_unicode=True), encoding="utf-8")
         env = {"_CUDA_VISIBLE_DEVICES": "0", "hz": "25hz"}
-        run(f'"{PY}" -s GPT_SoVITS/s1_train.py --config_file "{tmp_cfg}"',
+        run([PY, "-s", "GPT_SoVITS/s1_train.py", "--config_file", str(tmp_cfg)],
             env=env, desc=f"7/7 GPT 微调 ({args.s1_epochs} epochs)")
 
     print(f"\n[DONE] 权重: {GSV}/SoVITS_weights_v2 与 GPT_weights_v2 下找 {exp}")

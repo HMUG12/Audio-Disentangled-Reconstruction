@@ -17,11 +17,14 @@ RVC = REPO / "third_party" / "rvc"
 PY = sys.executable
 
 
-def run(cmd: str, desc: str = ""):
-    print(f"\n{'=' * 60}\n>>> {desc}\n{cmd}\n{'=' * 60}", flush=True)
+def run(argv: list, desc: str = ""):
+    """argv 一律传参数列表 (shell=False): 路径含空格/中文/特殊字符不会被二次
+    解析, 也不存在命令注入面 (审计 R5-SCR-01)。"""
+    print(f"\n{'=' * 60}\n>>> {desc}\n{subprocess.list2cmdline(argv)}\n{'=' * 60}",
+          flush=True)
     env = os.environ.copy()
     env["PYTHONPATH"] = str(RVC) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
-    r = subprocess.run(cmd, shell=True, cwd=str(RVC), env=env)
+    r = subprocess.run(argv, cwd=str(RVC), env=env)
     if r.returncode != 0:
         raise RuntimeError(f"步骤失败 ({desc}): exit={r.returncode}")
 
@@ -86,25 +89,31 @@ def main():
     start = steps.index(args.skip_to)
 
     if start <= 0:
-        run(f'"{PY}" -m train.preprocess "{inp_root}" 48000 4 "{exp_dir}" False 3.7',
+        run([PY, "-m", "train.preprocess", str(inp_root), "48000", "4",
+             str(exp_dir), "False", "3.7"],
             desc="1/5 预处理 (切片+响度+滤波)")
     if start <= 1:
-        run(f'"{PY}" -m train.dataset.extract_f0 cuda 1 0 0 "{exp_dir}" True',
+        run([PY, "-m", "train.dataset.extract_f0", "cuda", "1", "0", "0",
+             str(exp_dir), "True"],
             desc="2/5 F0 提取 (rmvpe)")
     if start <= 2:
-        run(f'"{PY}" -m train.dataset.extract_hubert_feature cuda 1 0 0 "{exp_dir}" v2 True',
+        run([PY, "-m", "train.dataset.extract_hubert_feature", "cuda", "1", "0",
+             "0", str(exp_dir), "v2", "True"],
             desc="3/5 HuBERT 特征")
     if start <= 3:
         # 官方 webui 在训练前生成 filelist.txt + config.json, 这里复刻
         _gen_filelist(exp_dir)
         import shutil
         shutil.copy2(RVC / "configs" / "v2" / "48k.json", exp_dir / "config.json")
-        run(f'"{PY}" -m train.train -se {args.save_every} -te {args.epochs} '
-            f'-pg assets/pretrained_v2/f0G48k.pth -pd assets/pretrained_v2/f0D48k.pth '
-            f'-g 0 -bs {args.batch_size} -e "{exp}" -sr 48k -sw 1 -v v2 -f0 1 -l 0 -c 0',
+        run([PY, "-m", "train.train",
+             "-se", str(args.save_every), "-te", str(args.epochs),
+             "-pg", "assets/pretrained_v2/f0G48k.pth",
+             "-pd", "assets/pretrained_v2/f0D48k.pth",
+             "-g", "0", "-bs", str(args.batch_size), "-e", exp,
+             "-sr", "48k", "-sw", "1", "-v", "v2", "-f0", "1", "-l", "0", "-c", "0"],
             desc=f"4/5 训练 ({args.epochs} epochs)")
     if start <= 4:
-        run(f'"{PY}" -m train.train_index {exp} v2 "" 4',
+        run([PY, "-m", "train.train_index", exp, "v2", "", "4"],
             desc="5/5 检索索引 (faiss)")
 
     weights = list((RVC / "assets" / "weights").glob(f"{exp}*.pth")) \

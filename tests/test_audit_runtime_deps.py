@@ -69,3 +69,15 @@ def test_check_runtime_probes_do_not_write_bytecode():
     """探针必须带 -B: 否则体检自己就把 .pyc 写回 runtime, 卫生门禁自打脸。"""
     src = CHECK_RUNTIME.read_text(encoding="utf-8")
     assert src.count('"-B", "-c"') >= 3
+
+
+# ===== 批次117 (审计 R5-SCR-01): 训练脚本不得再拼 shell 命令串 =====
+def test_train_scripts_pass_argv_list_without_shell():
+    """此前音频路径 / exp 用双引号拼进 shell=True 命令串, POSIX 下文件名含
+    `$()` / 反引号即可注入 (R4-P3-08 的完整形态)。现一律 argv 列表。"""
+    for name in ("gsv_finetune.py", "rvc_train.py"):
+        src = (REPO / "scripts" / name).read_text(encoding="utf-8")
+        assert "shell=True" not in src, name
+        assert "def run(argv: list" in src, name
+        assert "subprocess.run(argv" in src, name
+        assert "subprocess.run(cmd" not in src, name

@@ -282,8 +282,9 @@ def _train_snapshot() -> dict:
 
 
 def _kill_tree(p: subprocess.Popen, graceful: bool = False) -> None:
-    """批次66: 连同孙进程整树终止 — gsv_finetune 以 shell=True 起 s2_train,
-    只杀父进程时孙进程继续占显卡并握着 stdout 管道, reader 永远等不到 EOF。
+    """批次66: 连同孙进程整树终止 — gsv_finetune 再起 s2_train 子进程 (批次117
+    起 shell=False 列表参数), 只杀父进程时孙进程继续占显卡并握着 stdout 管道,
+    reader 永远等不到 EOF。
     Windows: taskkill /T /F (须在父进程存活时调用, 否则查不到子树);
     POSIX: 子进程以 start_new_session 起, 按进程组发信号。"""
     if os.name == "nt":
