@@ -244,3 +244,31 @@ def test_console_error_surface_and_escaping():
     for key in ("call.err_auth", "call.err_profiles", "call.err_timeout",
                 "call.err_aborted", "call.btn_cancel"):
         assert f'"{key}"' in call_dict, key
+
+
+# ===== 批次114 (审计 R5-FE-08): 状态区 aria-live + label 关联 =====
+def test_console_a11y_status_and_labels():
+    """状态/错误区补 aria-live (读屏用户才听得到合成失败), 关键表单 label
+    用 for 关联到输入框 (点标签即可聚焦)。"""
+    static = REPO / "adr" / "server" / "static"
+    for page, anchor in (
+        ("pro.html", 'id="errline" role="alert" aria-live="assertive"'),
+        ("pro.html", 'id="toast" role="status" aria-live="polite"'),
+        ("easy.html", 'id="toast" role="status" aria-live="polite"'),
+        ("call.html", 'id="meta" role="status" aria-live="polite"'),
+    ):
+        assert anchor in (static / page).read_text(encoding="utf-8"), page
+
+    cases = {
+        "pro.html": ("tExp", "tEp", "tRecipe", "tBind", "sText", "sSp",
+                     "sSeed", "sFmt", "sLang", "sPromptLang", "sCut",
+                     "sTopK", "sTopP", "sTemp"),
+        "call.html": ("prof", "ref", "text", "tlang", "plang", "ptext", "cut",
+                      "sm", "topk", "topp", "temp", "spd", "seed", "mt",
+                      "t2s", "vits"),
+    }
+    for page, ids in cases.items():
+        src = (static / page).read_text(encoding="utf-8")
+        for fid in ids:
+            assert f'for="{fid}"' in src, f"{page}: label 未关联 {fid}"
+            assert f'id="{fid}"' in src, f"{page}: 缺输入框 id={fid}"

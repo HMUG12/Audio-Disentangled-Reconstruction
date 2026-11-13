@@ -273,7 +273,7 @@
       <div class="card"><div class="k" data-i18n="pro.pretrained_model">预训练模型</div><div class="v" id="cModel">—</div></div>
       <div class="card"><div class="k" data-i18n="pro.ov_train_jobs">训练任务</div><div class="v" id="cTrain">—</div></div>
     </div>
-    <div id="errline"></div>
+    <div id="errline" role="alert" aria-live="assertive"></div>
   </div>
 
   <div class="panel">
@@ -299,16 +299,16 @@
         <div data-i18n="pro.drop_formats">wav / mp3 / flac / m4a / ogg（≥1 分钟清晰人声效果最佳）</div>
       </div>
 
-      <label class="f" data-i18n="pro.f_exp_name">实验名称</label>
+      <label class="f" for="tExp" data-i18n="pro.f_exp_name">实验名称</label>
       <input type="text" id="tExp" value="my_voice" placeholder="英文/数字/下划线" data-i18n-ph="pro.ph_exp_name">
 
       <div class="grid g2" style="gap:14px; margin-top:4px">
         <div>
-          <label class="f"><span data-i18n="pro.f_epochs">训练轮数</span> <span id="tEpV" style="color:var(--accent)">8</span></label>
+          <label class="f" for="tEp"><span data-i18n="pro.f_epochs">训练轮数</span> <span id="tEpV" style="color:var(--accent)">8</span></label>
           <input type="range" id="tEp" min="4" max="24" step="1" value="8">
         </div>
         <div>
-          <label class="f" data-i18n="pro.f_recipe">显存配方</label>
+          <label class="f" for="tRecipe" data-i18n="pro.f_recipe">显存配方</label>
           <select id="tRecipe">
             <option value="8gb" data-i18n="pro.recipe_8gb">8GB+ 显存（batch 4，速度优先）</option>
             <option value="4gb" data-i18n="pro.recipe_4gb">4GB 显存（batch 1，片段 ≤10s）</option>
@@ -316,7 +316,7 @@
         </div>
       </div>
 
-      <label class="f" data-i18n="pro.f_bind_after">训练后绑定到音色档案（可选）</label>
+      <label class="f" for="tBind" data-i18n="pro.f_bind_after">训练后绑定到音色档案（可选）</label>
       <select id="tBind"><option value="__auto__" data-i18n="pro.bind_auto">自动建档绑定（用实验名, 推荐）</option><option value="" data-i18n="pro.bind_none">不绑定（仅产出权重）</option></select>
 
       <div class="row" style="margin-top:16px">
@@ -373,20 +373,20 @@
         <input type="file" id="pImportFile" accept=".adrvoice,.zip" style="display:none"></label>
       <select id="pSel"><option value="" data-i18n="pro.loading">加载中…</option></select>
 
-      <label class="f" data-i18n="pro.f_text">合成文本</label>
+      <label class="f" for="sText" data-i18n="pro.f_text">合成文本</label>
       <textarea id="sText" placeholder="输入要合成的文字…" data-i18n-ph="pro.ph_text"></textarea>
 
       <div class="grid g3" style="gap:14px">
         <div>
-          <label class="f"><span data-i18n="pro.f_speed">语速</span> <span id="sSpV" style="color:var(--accent)">1.00</span></label>
+          <label class="f" for="sSp"><span data-i18n="pro.f_speed">语速</span> <span id="sSpV" style="color:var(--accent)">1.00</span></label>
           <input type="range" id="sSp" min="0.5" max="2" step="0.05" value="1">
         </div>
         <div>
-          <label class="f" data-i18n="pro.f_seed">随机种子</label>
+          <label class="f" for="sSeed" data-i18n="pro.f_seed">随机种子</label>
           <input type="number" id="sSeed" value="-1" step="1">
         </div>
         <div>
-          <label class="f" data-i18n="pro.f_format">音频格式</label>
+          <label class="f" for="sFmt" data-i18n="pro.f_format">音频格式</label>
           <select id="sFmt">
             <option value="wav">wav</option>
             <option value="ogg">ogg</option>
@@ -399,7 +399,7 @@
         <summary style="cursor:pointer;color:var(--dim);font-size:12.5px;user-select:none" data-i18n="pro.adv_summary">高级参数（采样 / 切句 / 语言）</summary>
         <div class="grid g3" style="gap:14px;margin-top:12px">
           <div>
-            <label class="f" data-i18n="pro.f_text_lang">文本语言</label>
+            <label class="f" for="sLang" data-i18n="pro.f_text_lang">文本语言</label>
             <select id="sLang">
               <option value="zh" selected data-i18n="pro.lang_zh">中文 zh</option>
               <option value="en" data-i18n="pro.lang_en">英文 en</option>
@@ -409,7 +409,7 @@
             </select>
           </div>
           <div>
-            <label class="f" data-i18n="pro.f_prompt_lang">参考音频语言</label>
+            <label class="f" for="sPromptLang" data-i18n="pro.f_prompt_lang">参考音频语言</label>
             <select id="sPromptLang">
               <option value="zh" selected data-i18n="pro.lang_zh">中文 zh</option>
               <option value="en" data-i18n="pro.lang_en">英文 en</option>
@@ -419,7 +419,7 @@
             </select>
           </div>
           <div>
-            <label class="f" data-i18n="pro.f_cut">切句方式</label>
+            <label class="f" for="sCut" data-i18n="pro.f_cut">切句方式</label>
             <select id="sCut">
               <option value="cut1" selected data-i18n="pro.cut1">凑四句一切 (稳)</option>
               <option value="cut0" data-i18n="pro.cut0">不切 (整段)</option>
@@ -430,15 +430,15 @@
         </div>
         <div class="grid g3" style="gap:14px;margin-top:12px">
           <div>
-            <label class="f">top_k <span style="color:var(--dim)" data-i18n="pro.hint_topk">(候选收窄, 短句防跑偏)</span></label>
+            <label class="f" for="sTopK">top_k <span style="color:var(--dim)" data-i18n="pro.hint_topk">(候选收窄, 短句防跑偏)</span></label>
             <input type="number" id="sTopK" value="15" min="1" max="100" step="1">
           </div>
           <div>
-            <label class="f">top_p <span id="sTopPV" style="color:var(--accent)">1.00</span></label>
+            <label class="f" for="sTopP">top_p <span id="sTopPV" style="color:var(--accent)">1.00</span></label>
             <input type="range" id="sTopP" min="0.05" max="1" step="0.05" value="1">
           </div>
           <div>
-            <label class="f">temperature <span id="sTempV" style="color:var(--accent)">1.00</span></label>
+            <label class="f" for="sTemp">temperature <span id="sTempV" style="color:var(--accent)">1.00</span></label>
             <input type="range" id="sTemp" min="0.1" max="2" step="0.05" value="1">
           </div>
         </div>
@@ -483,7 +483,7 @@
 </section>
 
 </main>
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script>
 "use strict";

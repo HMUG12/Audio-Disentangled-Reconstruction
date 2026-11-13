@@ -142,29 +142,29 @@
         <button data-ep="openai">OpenAI /v1/audio/speech</button>
       </div>
 
-      <label><span data-i18n="call.l_profile">音色档案 profile</span> <span id="profReq" style="color:var(--err)">*</span></label>
+      <label for="prof"><span data-i18n="call.l_profile">音色档案 profile</span> <span id="profReq" style="color:var(--err)">*</span></label>
       <select id="prof"><option value="" data-i18n="call.loading">加载中…</option></select>
 
       <div id="refRow" style="display:none">
-        <label data-i18n-html="call.l_ref">参考音频绝对路径 ref_audio_path <b>*</b></label>
+        <label for="ref" data-i18n-html="call.l_ref">参考音频绝对路径 ref_audio_path <b>*</b></label>
         <input id="ref" placeholder="D:\audio\my_voice.wav (3-10 秒干净人声)" data-i18n-ph="call.ph_ref">
       </div>
 
-      <label data-i18n-html="call.l_text">合成文本 text <b>*</b></label>
+      <label for="text" data-i18n-html="call.l_text">合成文本 text <b>*</b></label>
       <textarea id="text" data-i18n-value="call.text_demo">你好，这是一次 ADR 声音克隆合成测试，引擎就绪后响应非常快。</textarea>
 
       <div class="two">
         <div>
-          <label data-i18n="call.l_tlang">文本语言 text_lang</label>
+          <label for="tlang" data-i18n="call.l_tlang">文本语言 text_lang</label>
           <select id="tlang"></select>
         </div>
         <div>
-          <label data-i18n="call.l_plang">参考语言 prompt_lang</label>
+          <label for="plang" data-i18n="call.l_plang">参考语言 prompt_lang</label>
           <select id="plang"></select>
         </div>
       </div>
 
-      <label data-i18n="call.l_ptext">参考音频文本 prompt_text (参考音频里说的那句话, 可空)</label>
+      <label for="ptext" data-i18n="call.l_ptext">参考音频文本 prompt_text (参考音频里说的那句话, 可空)</label>
       <input id="ptext" placeholder="与参考音频逐字一致可提升相似度" data-i18n-ph="call.ph_ptext">
 
       <details>
@@ -172,7 +172,7 @@
         <div class="inner">
           <div class="two">
             <div>
-              <label data-i18n="call.l_cut">切句方式 text_split_method</label>
+              <label for="cut" data-i18n="call.l_cut">切句方式 text_split_method</label>
               <select id="cut">
                 <option value="cut0" data-i18n="call.cut0">cut0 · 不切</option>
                 <option value="cut1" data-i18n="call.cut1">cut1 · 凑四句一切</option>
@@ -183,7 +183,7 @@
               </select>
             </div>
             <div>
-              <label data-i18n="call.l_sm">流式模式 streaming_mode</label>
+              <label for="sm" data-i18n="call.l_sm">流式模式 streaming_mode</label>
               <select id="sm">
                 <option value="0" selected data-i18n="call.sm0">0 · 非流式 (整段返回)</option>
                 <option value="1" data-i18n="call.sm1">1 · 分段流</option>
@@ -193,15 +193,15 @@
             </div>
           </div>
           <div class="four">
-            <div><label>top_k</label><input id="topk" type="number" value="15" min="1" max="100" step="1"></div>
-            <div><label>top_p</label><input id="topp" type="number" value="1.0" min="0" max="1" step="0.05"></div>
-            <div><label>temperature</label><input id="temp" type="number" value="1.0" min="0.01" max="2" step="0.05"></div>
-            <div><label data-i18n="call.l_spd">语速 speed_factor</label><input id="spd" type="number" value="1.0" min="0.5" max="2" step="0.05"></div>
+            <div><label for="topk">top_k</label><input id="topk" type="number" value="15" min="1" max="100" step="1"></div>
+            <div><label for="topp">top_p</label><input id="topp" type="number" value="1.0" min="0" max="1" step="0.05"></div>
+            <div><label for="temp">temperature</label><input id="temp" type="number" value="1.0" min="0.01" max="2" step="0.05"></div>
+            <div><label for="spd" data-i18n="call.l_spd">语速 speed_factor</label><input id="spd" type="number" value="1.0" min="0.5" max="2" step="0.05"></div>
           </div>
           <div class="two">
-            <div><label data-i18n="call.l_seed">随机种子 seed (-1 随机)</label><input id="seed" type="number" value="-1" step="1"></div>
+            <div><label for="seed" data-i18n="call.l_seed">随机种子 seed (-1 随机)</label><input id="seed" type="number" value="-1" step="1"></div>
             <div>
-              <label data-i18n="call.l_mt">封装格式 media_type</label>
+              <label for="mt" data-i18n="call.l_mt">封装格式 media_type</label>
               <select id="mt">
                 <option value="wav" selected>wav</option>
                 <option value="mp3" data-i18n="call.mt_mp3">mp3 (OpenAI 默认)</option>
@@ -212,8 +212,8 @@
             </div>
           </div>
           <div class="two">
-            <div><label data-i18n="call.l_t2s">GPT 权重 t2s_weights (空 = 档案/默认)</label><input id="t2s" placeholder="output/logs/…/你的s1.ckpt" data-i18n-ph="call.ph_t2s"></div>
-            <div><label data-i18n="call.l_vits">SoVITS 权重 vits_weights</label><input id="vits" placeholder="output/logs/…/你的s2.pth" data-i18n-ph="call.ph_vits"></div>
+            <div><label for="t2s" data-i18n="call.l_t2s">GPT 权重 t2s_weights (空 = 档案/默认)</label><input id="t2s" placeholder="output/logs/…/你的s1.ckpt" data-i18n-ph="call.ph_t2s"></div>
+            <div><label for="vits" data-i18n="call.l_vits">SoVITS 权重 vits_weights</label><input id="vits" placeholder="output/logs/…/你的s2.pth" data-i18n-ph="call.ph_vits"></div>
           </div>
         </div>
       </details>
@@ -261,7 +261,7 @@
     <div class="panel">
       <h2 data-i18n="call.h_result">试听结果</h2>
       <audio id="au" controls></audio>
-      <div id="meta" data-i18n="call.meta_init">尚未合成。点左侧「合成试听」，右键音频可另存为文件。</div>
+      <div id="meta" role="status" aria-live="polite" data-i18n="call.meta_init">尚未合成。点左侧「合成试听」，右键音频可另存为文件。</div>
       <table>
         <thead><tr><th data-i18n="call.th_time">时间</th><th data-i18n="call.th_ep">端点</th><th data-i18n="call.th_stream">流式</th><th data-i18n="call.th_ttfb">首包</th><th data-i18n="call.th_total">总耗时</th><th data-i18n="call.th_size">大小</th><th data-i18n="call.th_status">状态</th></tr></thead>
         <tbody id="logBody"></tbody>
