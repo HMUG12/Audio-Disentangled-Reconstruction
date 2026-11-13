@@ -41,14 +41,14 @@ def make_small_model():
     return SoVITS(cfg)
 
 
-def test_wav_quality_callback_runs():
+def test_wav_quality_callback_runs(tmp_path):
     """WavQualityCallback 应该在每个 epoch 后跑, 记录 wav 指标。"""
     ds = make_dataset(20)
     model = make_small_model()
     cb = WavQualityCallback(n_samples=2, n_timesteps=2, patience=2)
     config = TrainerConfig(
         epochs=2, batch_size=2, val_ratio=0.3,
-        output_dir=str(REPO / "tests" / "_tmp_wq_runs"),
+        output_dir=str(tmp_path / "out"),
         log_every_n_steps=100, save_every_n_epochs=100,
     )
     trainer = Trainer(model=model, train_data=ds, config=config, callbacks=[cb])
@@ -60,12 +60,9 @@ def test_wav_quality_callback_runs():
     assert "wav_rms_mean" in last
     assert "wav_centroid_mean" in last
     assert "wav_quality" in last
-    # 清理
-    import shutil
-    shutil.rmtree(REPO / "tests" / "_tmp_wq_runs", ignore_errors=True)
 
 
-def test_wav_quality_callback_can_stop():
+def test_wav_quality_callback_can_stop(tmp_path):
     """WavQualityCallback 在 wav quality 不变时能触发 should_stop。"""
     ds = make_dataset(20)
     model = make_small_model()
@@ -74,26 +71,23 @@ def test_wav_quality_callback_can_stop():
     # min_delta=1e9 让它永远不"改善", 立即触发
     config = TrainerConfig(
         epochs=5, batch_size=2, val_ratio=0.3,
-        output_dir=str(REPO / "tests" / "_tmp_wq_stop"),
+        output_dir=str(tmp_path / "out"),
         log_every_n_steps=100, save_every_n_epochs=100,
     )
     trainer = Trainer(model=model, train_data=ds, config=config, callbacks=[cb])
     trainer.fit()
     # should_stop 应被设置
     assert cb.should_stop is True
-    # 清理
-    import shutil
-    shutil.rmtree(REPO / "tests" / "_tmp_wq_stop", ignore_errors=True)
 
 
-def test_wav_quality_callback_skips_without_val():
+def test_wav_quality_callback_skips_without_val(tmp_path):
     """没有 val_loader 时应 skip。"""
     ds = make_dataset(20)
     model = make_small_model()
     cb = WavQualityCallback(n_samples=2, n_timesteps=2, patience=2)
     config = TrainerConfig(
         epochs=2, batch_size=2, val_ratio=0.0,  # 没 val
-        output_dir=str(REPO / "tests" / "_tmp_wq_noval"),
+        output_dir=str(tmp_path / "out"),
         log_every_n_steps=100, save_every_n_epochs=100,
     )
     trainer = Trainer(model=model, train_data=ds, config=config, callbacks=[cb])
@@ -102,9 +96,6 @@ def test_wav_quality_callback_skips_without_val():
     assert len(cb._history) == 0
     # 不应 stop
     assert cb.should_stop is False
-    # 清理
-    import shutil
-    shutil.rmtree(REPO / "tests" / "_tmp_wq_noval", ignore_errors=True)
 
 
 def test_wav_metrics_computation():
@@ -203,7 +194,7 @@ def test_wav_quality_f0_extraction_handles_silence():
     assert len(f0) == 0  # 静音无 F0
 
 
-def test_wav_quality_f0_metrics_in_computation():
+def test_wav_quality_f0_metrics_in_computation(tmp_path):
     """_compute_wav_metrics 应返回 F0 指标 (如果有 waveform)。"""
     import numpy as np
     ds = make_dataset(20)
@@ -214,7 +205,7 @@ def test_wav_quality_f0_metrics_in_computation():
     )
     config = TrainerConfig(
         epochs=1, batch_size=2, val_ratio=0.3,
-        output_dir=str(REPO / "tests" / "_tmp_wq_f0"),
+        output_dir=str(tmp_path / "out"),
         log_every_n_steps=100, save_every_n_epochs=100,
     )
     trainer = Trainer(model=model, train_data=ds, config=config, callbacks=[cb])
@@ -224,6 +215,3 @@ def test_wav_quality_f0_metrics_in_computation():
     last = cb._history[-1]
     # M3.6 必有的字段
     assert "f0_pred_mean" in last or "wav_quality" in last
-    # 清理
-    import shutil
-    shutil.rmtree(REPO / "tests" / "_tmp_wq_f0", ignore_errors=True)

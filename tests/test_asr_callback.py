@@ -252,7 +252,7 @@ class TestASRCallbackConstruction:
 class TestASRCallbackRunWithoutASR:
     """测试 ASRCallback 在没有 faster-whisper 时的安全行为。"""
 
-    def test_skips_when_asr_unavailable(self, monkeypatch):
+    def test_skips_when_asr_unavailable(self, monkeypatch, tmp_path):
         """ASR 不可用时, 回调应 skip 而不抛异常。"""
         # 模拟 faster_whisper 导入失败
         import sys as _sys
@@ -269,7 +269,7 @@ class TestASRCallbackRunWithoutASR:
         model = make_small_model()
         config = TrainerConfig(
             epochs=2, batch_size=2, val_ratio=0.3,
-            output_dir=str(REPO / "tests" / "_tmp_asr_skip"),
+            output_dir=str(tmp_path / "out"),
             log_every_n_steps=100, save_every_n_epochs=100,
         )
         trainer = Trainer(model=model, train_data=ds, config=config, callbacks=[cb])
@@ -278,11 +278,8 @@ class TestASRCallbackRunWithoutASR:
         assert len(cb._history) == 0
         # 不应 stop
         assert cb.should_stop is False
-        # 清理
-        import shutil
-        shutil.rmtree(REPO / "tests" / "_tmp_asr_skip", ignore_errors=True)
 
-    def test_skips_without_val(self):
+    def test_skips_without_val(self, tmp_path):
         """没有 val_loader 时应 skip。"""
         cb = ASRCallback(
             n_samples=2, n_timesteps=2, patience=2,
@@ -295,22 +292,19 @@ class TestASRCallbackRunWithoutASR:
         model = make_small_model()
         config = TrainerConfig(
             epochs=2, batch_size=2, val_ratio=0.0,  # 没 val
-            output_dir=str(REPO / "tests" / "_tmp_asr_noval"),
+            output_dir=str(tmp_path / "out"),
             log_every_n_steps=100, save_every_n_epochs=100,
         )
         trainer = Trainer(model=model, train_data=ds, config=config, callbacks=[cb])
         trainer.fit()
         assert len(cb._history) == 0
         assert cb.should_stop is False
-        # 清理
-        import shutil
-        shutil.rmtree(REPO / "tests" / "_tmp_asr_noval", ignore_errors=True)
 
 
 class TestASRCallbackWithMockASR:
     """用 mock ASR 测试完整流程。"""
 
-    def test_mock_asr_improves_over_time(self, monkeypatch):
+    def test_mock_asr_improves_over_time(self, monkeypatch, tmp_path):
         """用 mock ASR 模拟 CER 随 epoch 改善, 验证 callback 能收集样本。"""
         # 创建 mock ASR, 每次返回不同长度错文本
         class MockASR:
@@ -338,7 +332,7 @@ class TestASRCallbackWithMockASR:
         model = make_small_model()
         config = TrainerConfig(
             epochs=2, batch_size=2, val_ratio=0.3,
-            output_dir=str(REPO / "tests" / "_tmp_asr_mock"),
+            output_dir=str(tmp_path / "out"),
             log_every_n_steps=100, save_every_n_epochs=100,
         )
         trainer = Trainer(model=model, train_data=ds, config=config, callbacks=[cb])
@@ -348,15 +342,12 @@ class TestASRCallbackWithMockASR:
         # 每个 history 都有 asr_cer 指标
         for entry in cb._history:
             assert "asr_cer" in entry or "asr_wer" in entry
-        # 清理
-        import shutil
-        shutil.rmtree(REPO / "tests" / "_tmp_asr_mock", ignore_errors=True)
 
 
 class TestASRCallbackEarlyStop:
     """测试早停触发。"""
 
-    def test_early_stop_when_no_improvement(self):
+    def test_early_stop_when_no_improvement(self, tmp_path):
         """当 CER 在 patience 个 epoch 内不变, 应触发早停。"""
         # Mock 一个永远返回相同文本的 ASR (CER 永远 = 1.0)
         class MockASR:
@@ -383,16 +374,13 @@ class TestASRCallbackEarlyStop:
         model = make_small_model()
         config = TrainerConfig(
             epochs=5, batch_size=2, val_ratio=0.3,
-            output_dir=str(REPO / "tests" / "_tmp_asr_stop"),
+            output_dir=str(tmp_path / "out"),
             log_every_n_steps=100, save_every_n_epochs=100,
         )
         trainer = Trainer(model=model, train_data=ds, config=config, callbacks=[cb])
         trainer.fit()
         # patience=1 + CER 不变, 应在 epoch 2 后 stop
         assert cb.should_stop is True
-        # 清理
-        import shutil
-        shutil.rmtree(REPO / "tests" / "_tmp_asr_stop", ignore_errors=True)
 
 
 class TestASRCudaFallback:

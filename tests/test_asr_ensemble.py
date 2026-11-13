@@ -143,7 +143,7 @@ def _mock_faster_whisper(outputs_by_size: dict):
 
 
 class TestEnsembleE2E:
-    def test_ensemble_metrics_in_history(self):
+    def test_ensemble_metrics_in_history(self, tmp_path):
         """集成模式下, _history 应含 consensus CER + median/std/agreement。"""
         # 两个 mock 模型输出不同文本
         _mock_faster_whisper({"tiny": "测话", "small": "测试"})
@@ -157,7 +157,7 @@ class TestEnsembleE2E:
         model = make_small_model()
         config = TrainerConfig(
             epochs=1, batch_size=2, val_ratio=0.3,
-            output_dir=str(REPO / "tests" / "_tmp_m7_e2e"),
+            output_dir=str(tmp_path / "out"),
             log_every_n_steps=100, save_every_n_epochs=100,
         )
         trainer = Trainer(model=model, train_data=ds, config=config, callbacks=[cb])
@@ -172,10 +172,8 @@ class TestEnsembleE2E:
         assert last["asr_agreement"] >= 0.5
         # std 应 > 0 (一个全对一个全错)
         assert last["asr_cer_std"] >= 0
-        import shutil
-        shutil.rmtree(REPO / "tests" / "_tmp_m7_e2e", ignore_errors=True)
 
-    def test_ensemble_degrades_on_single_failure(self):
+    def test_ensemble_degrades_on_single_failure(self, tmp_path):
         """一个模型返回空 (失败) 时, 降级为单模型, 不报错。"""
         _mock_faster_whisper({"tiny": "测试", "small": ""})  # small 失败
 
@@ -188,7 +186,7 @@ class TestEnsembleE2E:
         model = make_small_model()
         config = TrainerConfig(
             epochs=1, batch_size=2, val_ratio=0.3,
-            output_dir=str(REPO / "tests" / "_tmp_m7_deg"),
+            output_dir=str(tmp_path / "out"),
             log_every_n_steps=100, save_every_n_epochs=100,
         )
         trainer = Trainer(model=model, train_data=ds, config=config, callbacks=[cb])
@@ -197,10 +195,8 @@ class TestEnsembleE2E:
         assert len(cb._history) > 0
         last = cb._history[-1]
         assert "asr_cer" in last
-        import shutil
-        shutil.rmtree(REPO / "tests" / "_tmp_m7_deg", ignore_errors=True)
 
-    def test_single_model_mode_unchanged(self):
+    def test_single_model_mode_unchanged(self, tmp_path):
         """单模型模式不应有集成指标。"""
         _mock_faster_whisper({"tiny": "测试"})
 
@@ -213,7 +209,7 @@ class TestEnsembleE2E:
         model = make_small_model()
         config = TrainerConfig(
             epochs=1, batch_size=2, val_ratio=0.3,
-            output_dir=str(REPO / "tests" / "_tmp_m7_single"),
+            output_dir=str(tmp_path / "out"),
             log_every_n_steps=100, save_every_n_epochs=100,
         )
         trainer = Trainer(model=model, train_data=ds, config=config, callbacks=[cb])
@@ -224,8 +220,6 @@ class TestEnsembleE2E:
         # 单模型模式: 无集成统计
         assert "asr_cer_median" not in last
         assert "asr_agreement" not in last
-        import shutil
-        shutil.rmtree(REPO / "tests" / "_tmp_m7_single", ignore_errors=True)
 
 
 class TestEnsembleCache:

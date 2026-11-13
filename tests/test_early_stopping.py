@@ -42,13 +42,13 @@ def make_small_model():
     return SoVITS(cfg)
 
 
-def test_early_stopping_disabled_by_default():
+def test_early_stopping_disabled_by_default(tmp_path):
     """默认 early_stop_patience=0, 不应触发早停。"""
     ds = make_dataset(10)
     model = make_small_model()
     config = TrainerConfig(
         epochs=2, batch_size=2, val_ratio=0.3,
-        output_dir=str(REPO / "tests" / "_tmp_es_disabled"),
+        output_dir=str(tmp_path / "out"),
         log_every_n_steps=10, save_every_n_epochs=10,
         early_stop_patience=0,  # 关闭
     )
@@ -56,18 +56,15 @@ def test_early_stopping_disabled_by_default():
     metrics = trainer.fit()
     # 应跑完所有 epoch
     assert "val/loss" in metrics
-    # 清理
-    import shutil
-    shutil.rmtree(REPO / "tests" / "_tmp_es_disabled", ignore_errors=True)
 
 
-def test_early_stopping_triggers_on_plateau():
+def test_early_stopping_triggers_on_plateau(tmp_path):
     """早停应在 val loss plateau 时触发。"""
     ds = make_dataset(20)
     model = make_small_model()
     config = TrainerConfig(
         epochs=20, batch_size=2, val_ratio=0.3,
-        output_dir=str(REPO / "tests" / "_tmp_es_trigger"),
+        output_dir=str(tmp_path / "out"),
         log_every_n_steps=100, save_every_n_epochs=100,
         early_stop_patience=2,  # 2 epoch 不下降就停
         early_stop_min_delta=1e-3,
@@ -76,9 +73,6 @@ def test_early_stopping_triggers_on_plateau():
     metrics = trainer.fit()
     # 应有 val/loss
     assert "val/loss" in metrics
-    # 清理
-    import shutil
-    shutil.rmtree(REPO / "tests" / "_tmp_es_trigger", ignore_errors=True)
 
 
 def test_early_stop_config_exists():
