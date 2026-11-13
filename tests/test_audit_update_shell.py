@@ -272,3 +272,12 @@ def test_console_a11y_status_and_labels():
         for fid in ids:
             assert f'for="{fid}"' in src, f"{page}: label 未关联 {fid}"
             assert f'id="{fid}"' in src, f"{page}: 缺输入框 id={fid}"
+
+
+# ===== 批次115 (审计 R5-FE-05): 账号修改文案与校验同口径 =====
+def test_launcher_account_hint_matches_validation():
+    """设置中心原先写「密码留空 = 不修改」, 但校验要求必填 — 按提示操作必失败。"""
+    src = LAUNCHER.read_text(encoding="utf-8")
+    assert "密码留空 = 不修改" not in src
+    assert "用户名与新密码都要填" in src
+    assert 'if (pass.length < 6) { showToast("请填写新密码（至少 6 位）"); return; }' in src

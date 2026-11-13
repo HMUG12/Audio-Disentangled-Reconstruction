@@ -440,7 +440,7 @@
         <span class="st-inline"><code id="st-acct">…</code></span>
       </div>
       <div class="st-input-row">
-        <span>修改账号 / 密码（密码留空 = 不修改）</span>
+        <span>修改账号 / 密码（用户名与新密码都要填，密码至少 6 位）</span>
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
           <input type="text" id="st-acct-user" placeholder="用户名" spellcheck="false" style="flex:1">
           <input type="password" id="st-acct-pass" placeholder="新密码（至少 6 位）" autocomplete="new-password" style="flex:1">
@@ -793,7 +793,7 @@ document.getElementById("st-acct-save").addEventListener("click", async () => {
   const user = document.getElementById("st-acct-user").value.trim();
   const pass = document.getElementById("st-acct-pass").value;
   if (!user) { showToast("用户名不能为空"); return; }
-  if (!pass) { showToast("请填写新密码（留空 = 不修改）"); return; }
+  if (pass.length < 6) { showToast("请填写新密码（至少 6 位）"); return; }
   try {
     await inv("account_set", { username: user, password: pass });
     document.getElementById("st-acct-pass").value = "";
