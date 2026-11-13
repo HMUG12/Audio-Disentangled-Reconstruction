@@ -257,9 +257,39 @@
   .lacts button:hover { transform: translateY(-2px); }
   .lacts button:disabled { opacity: .55; cursor: default; transform: none; }
   #pwLogin { background: var(--agree-bg); color: var(--agree-txt); border: 1px solid var(--agree-line); box-shadow: var(--agree-shadow); }
+
+  /* 批次108: 二次元形象 ADRia — 预热 / 向导 / 登录三处共用。
+     五张同画布同锚点差分 (1080×1440), 只换 src, 位置不抖; z-index:-1 保证
+     永远在内容之下、背景光晕之上, 并且 pointer-events:none 不吃点击。 */
+  #mascot {
+    position: fixed; right: max(10px, 3vw); bottom: -2%; z-index: -1;
+    width: min(380px, 27vw); pointer-events: none; user-select: none;
+    transition: opacity .3s ease;
+    animation: mascotBreath 5.4s ease-in-out infinite;
+    transform-origin: 50% 100%;
+  }
+  #mascot img {
+    display: block; width: 100%; height: auto;
+    filter: drop-shadow(0 16px 26px rgba(20, 40, 80, .18));
+  }
+  @keyframes mascotBreath {
+    0%, 100% { transform: translateY(0) rotate(0deg); }
+    50% { transform: translateY(-7px) rotate(-.35deg); }
+  }
+  @media (prefers-reduced-motion: reduce) { #mascot { animation: none; } }
+  /* 向导卡片 780px 居中, 形象缩到右侧留白里, 窄窗直接让位 */
+  body.setup-mode #mascot { width: min(210px, 16vw); right: max(6px, 1vw); }
+  body.terms-mode #mascot { opacity: 0; }
+  /* 壳默认窗口 1280×820 / 最小 960×600: 逐级收敛, 不留遮挡 */
+  @media (max-width: 1200px) { #mascot { width: min(300px, 24vw); } }
+  @media (max-width: 1180px) { body.setup-mode #mascot { display: none; } }
+  @media (max-width: 900px) { #mascot { display: none; } }
 </style>
 </head>
 <body>
+  <!-- 批次108: 二次元形象 (预热 / 向导 / 登录), 背景层装饰, 不参与交互 -->
+  <div id="mascot" aria-hidden="true"><img id="mascotImg" src="assets/mascot/idle.png" alt=""></div>
+
   <div class="logo">ADR <em>Studio</em></div>
   <div class="sub">正在热引擎喵，醒过来就自动带你进启动器喵</div>
 
@@ -477,6 +507,25 @@ const acts = document.getElementById("acts");
 // 引擎阶段 → 步骤下标 (queued/importing 同属"加载框架")
 const MAP = { starting: 0, queued: 1, importing: 1, downloading: 2, loading: 2, kernel: 3 };
 
+// 批次108: 二次元形象 — 五张同画布差分, 按阶段/页换图
+const MASCOT = {
+  idle: "assets/mascot/idle.png",
+  wake: "assets/mascot/wake.png",
+  work: "assets/mascot/work.png",
+  load: "assets/mascot/load.png",
+  sing: "assets/mascot/sing.png",
+};
+const MASCOT_BY_STEP = ["wake", "work", "load", "sing"];   // 预热 4 步
+const MASCOT_BY_PAGE = ["wake", "work", "load"];           // 向导 3 页
+const mascotImg = document.getElementById("mascotImg");
+let mascotCur = "idle";
+for (const src of Object.values(MASCOT)) { const im = new Image(); im.src = src; }  // 预取, 切图不闪
+function setMascot(name) {
+  if (!MASCOT[name] || name === mascotCur) return;
+  mascotCur = name;
+  mascotImg.src = MASCOT[name];
+}
+
 function setTip(text, cls) {
   tip.textContent = text;
   tip.className = cls || "";
@@ -507,6 +556,7 @@ window.__adrPrewarm = function (stage, text) {
   if (stage === "ready") {
     steps.forEach(s => (s.className = "step done"));
     setTip(text || "预热完成喵, 正在带你进启动器…", "ok");
+    setMascot("sing");
     acts.style.display = "none";
     hideErr();
     return;
@@ -517,6 +567,7 @@ window.__adrPrewarm = function (stage, text) {
     if (cur >= 0) steps[cur].className = "step failed";
     steps[cur >= 0 ? cur : 3].querySelector("p").textContent = text || "预热失败";
     setTip("预热失败, 可重试; 引擎就绪前启动器不开放 (也可点「仍要进入」强制进入)", "warn");
+    setMascot("idle");
     acts.style.display = "flex";
     return;
   }
@@ -524,6 +575,7 @@ window.__adrPrewarm = function (stage, text) {
   lastErr = "";
   const idx = MAP[stage] ?? 0;
   setStep(idx, "active");
+  setMascot(MASCOT_BY_STEP[idx]);
   setTip(text || "预热中喵…");
 };
 
@@ -598,6 +650,7 @@ function showPage(i) {
   $su("o-desc").textContent = O_PAGES[oIdx][1];
   $su("oBack").disabled = oIdx === 0;
   $su("oNext").textContent = oIdx === oPages.length - 1 ? "完成并启动喵" : "下一步喵";
+  setMascot(MASCOT_BY_PAGE[oIdx]);
   suMsg("");
   setupEl.querySelector(".obody").scrollTop = 0;
 }
@@ -741,6 +794,7 @@ $su("su-openmodels").addEventListener("click", async () => {
 const $pw = id => document.getElementById(id);
 function setLoginMode(on) {
   document.body.classList.toggle("login-mode", on);
+  if (on) setMascot("idle");
 }
 function pwMsg(text) {
   $pw("pw-msg").textContent = text || "";
