@@ -79,6 +79,9 @@ docker run -d --name adr-server -p 127.0.0.1:9881:9881 -v adr-data:/data \
 
 - 权重引导幂等: 中断后 `docker compose restart` 续传, named volume 保留已下载部分
 - 清理权重: `docker compose down -v` (业务数据在 `docker/data/`, 不受影响)
+- 容器以非 root (`10001:10001`) 运行。named volume 首次挂载继承镜像属主, 无需
+  处理; **bind mount** (compose 的 `./data`) 需宿主机侧先赋权:
+  `sudo chown -R 10001:10001 docker/data` (Windows Docker Desktop 无需操作)
 
 ## 环境变量
 
@@ -88,7 +91,7 @@ docker run -d --name adr-server -p 127.0.0.1:9881:9881 -v adr-data:/data \
 | `ADR_CORS_ORIGINS` | 空 | 未设 key 时额外允许的浏览器来源 (逗号分隔); `*` = 全开 |
 | `ADR_ALLOWED_HOSTS` | 空 | 未设 key 时额外允许的 Host 域名 (如 `tts.lan.example`); `*` = 不检查 |
 | `ADR_TTS_DEVICE` | auto | 引擎自检: 有 GPU 用 cuda, 否则 cpu (镜像内不写死) |
-| `ADR_PORT` | 9881 | HEALTHCHECK 依据; 自定义容器内端口时需同步设置 |
+| `ADR_PORT` | 9881 | 服务监听端口, 同时是 HEALTHCHECK 依据 (两者读同一个变量, 改一处即可) |
 
 ## 端口与鉴权
 

@@ -102,15 +102,29 @@ RUN if [ -n "$APT_MIRROR" ]; then \
         git ffmpeg libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
+# 批次118 (审计 R5-DOCK-01): 非 root 运行 —— 数值 UID/GID 便于挂载目录 chown
+# 与 OpenShift 类随机 UID 环境; 应用代码与数据目录都归该用户, venv 仍 root
+# 只读 (运行时改不了解释器与依赖)。
+RUN groupadd --gid 10001 adr \
+    && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin adr
+
 COPY --from=builder /opt/venv /opt/venv
-COPY --from=builder /app /app
+COPY --from=builder --chown=10001:10001 /app /app
 
 WORKDIR /app
 
 # 权重自引导目标目录 (首启下载; 生产环境挂卷持久化, 见 docker-compose.yml)
+# 新建目录随镜像归属 adr —— named volume 首次挂载会继承该属主; bind mount
+# (如 compose 的 ./data) 需宿主机侧 `chown -R 10001:10001`, 见 docker/README.md
 RUN mkdir -p /data \
         /app/third_party/gpt_sovits/pretrained_models \
+        /app/third_party/gpt_sovits/text/G2PWModel \
+    && chown -R 10001:10001 /data /app/third_party/gpt_sovits/pretrained_models \
         /app/third_party/gpt_sovits/text/G2PWModel
+
+# 缓存类目录兜底 (numba/huggingface/matplotlib 等默认写 $HOME)
+ENV HOME=/home/adr
+USER 10001:10001
 
 EXPOSE 9881
 
@@ -122,6 +136,11 @@ EXPOSE 9881
 HEALTHCHECK --interval=30s --timeout=5s --start-period=600s --retries=3 \
     CMD python -c "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('ADR_PORT','9881') + '/api/adr/v1/readyz', timeout=4)" || exit 1
 
+# 批次118 (审计 R5-DOCK-02): 端口唯一事实源 = ADR_PORT —— 服务监听与探针读
+# 同一个变量。原先是探针读 ADR_PORT、CMD 却写死 9881, 改端口只设一个必然
+# 探针恒 unhealthy。`exec` 让 python 直接接管 PID 1, SIGTERM 可正常停机。
+ENV ADR_PORT=9881
+
 # 设备走向由引擎 auto 自检 (ADR_TTS_DEVICE 可覆盖):
 #   cpu 镜像 -> 自动 cpu; cuda 镜像有 GPU -> cuda, 无 GPU 环境回退 cpu
 # 容器内必须监听 0.0.0.0 才能被端口映射访问 (0.0.0.0 是容器自身命名空间,
@@ -131,8 +150,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=600s --retries=3 \
 # 那等于把"无鉴权对外"做成镜像默认值, `docker run -p 9881:9881` 直接裸奔。
 # 现在由 docker-compose.yml 显式传入 (其默认只发布 127.0.0.1); 手写
 # `docker run` 需自行 -e ADR_ALLOW_UNAUTHENTICATED=1 或配置 ADR_TTS_API_KEY。
-ENTRYPOINT ["python", "-m", "adr.server"]
-CMD ["--addr", "0.0.0.0", "--port", "9881"]
+CMD ["sh", "-c", "exec python -m adr.server --addr 0.0.0.0 --port \"${ADR_PORT}\""]
 
 LABEL org.opencontainers.image.title="ADR Server" \
       org.opencontainers.image.description="ADR: low-resource fast voice cloning (GPT-SoVITS compatible TTS)" \

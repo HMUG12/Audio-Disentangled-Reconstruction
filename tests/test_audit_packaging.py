@@ -311,3 +311,22 @@ def test_smoke_ci_reuses_container_pins():
     wf = SMOKE_WF.read_text(encoding="utf-8")
     assert "check_requirements.py" in wf
     assert "-c docker/requirements-linux.txt" in wf
+
+
+# ===== 批次118 (审计 R5-DOCK-01/02): 容器非 root + 端口单一事实源 =====
+def test_dockerfile_runs_as_non_root():
+    """以 root 跑服务会把"容器逃逸/挂载目录写权限"的后果放大。"""
+    src = (REPO / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    assert "USER 10001:10001" in src
+    assert "--chown=10001:10001 /app" in src
+    # USER 之后不得再切回 root
+    assert "USER root" not in src[src.index("USER 10001:10001"):]
+
+
+def test_dockerfile_port_single_source():
+    """探针读 ADR_PORT、CMD 写死 9881 时, 改端口只设一个必然恒 unhealthy。"""
+    src = (REPO / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    assert "ENV ADR_PORT=9881" in src
+    assert 'exec python -m adr.server --addr 0.0.0.0 --port \\"${ADR_PORT}\\"' in src
+    assert '"--port", "9881"' not in src
+    assert "os.environ.get('ADR_PORT'" in src
