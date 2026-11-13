@@ -493,7 +493,7 @@ $("go").onclick = async () => {
     const ttfb = Math.round(performance.now() - t0);
     if (!r.ok) {
       const errJ = await r.json().catch(() => ({}));
-      throw new Error(errJ.message || errJ.error?.message || errJ.detail || `HTTP ${r.status}`);
+      throw new Error(adrErrMsg(errJ, r.status));
     }
     const blob = await r.blob();
     const total = Math.round(performance.now() - t0);

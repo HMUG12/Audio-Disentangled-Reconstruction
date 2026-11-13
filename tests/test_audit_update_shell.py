@@ -193,3 +193,23 @@ def test_console_pages_sanitize_shell_origin():
         src = (static / page).read_text(encoding="utf-8")
         assert 'adrSafeShellOrigin(new URLSearchParams(location.search).get("shell_origin"))' in src, page
         assert '= new URLSearchParams(location.search).get("shell_origin")' not in src, page
+
+
+# ===== 批次110 (审计 R5-FE-02): 后端错误体归一, 不许再显示 [object Object] =====
+def test_console_pages_format_backend_error():
+    """FastAPI 422 的 detail 是 errors() 数组, 旧的 `j.detail || "HTTP x"`
+    会把它直接 String() 成 "[object Object]"; 统一走 adrErrMsg() 取字符串
+    message / detail, 对象才序列化。"""
+    static = REPO / "adr" / "server" / "static"
+    i18n = (static / "i18n.js").read_text(encoding="utf-8")
+    assert "function adrErrMsg" in i18n
+    assert "JSON.stringify(d)" in i18n
+
+    for page in ("pro.html", "easy.html", "call.html"):
+        src = (static / page).read_text(encoding="utf-8")
+        assert '<script src="/i18n.js"></script>' in src, page
+        assert "adrErrMsg(" in src, page
+        # 旧写法: 数组 detail 会被当成字符串直接拼进 Error
+        assert "j.detail ||" not in src, page
+        assert "j.message || j.detail" not in src, page
+        assert "errJ.detail ||" not in src, page

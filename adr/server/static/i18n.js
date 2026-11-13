@@ -122,3 +122,30 @@ function adrSafeShellOrigin(raw) {
   if (host === "localhost" || host === "127.0.0.1" || host === "[::1]") return u.origin;
   return u.origin === location.origin ? u.origin : "";
 }
+
+/* 批次110 (审计 R5-FE-02): 后端错误体归一 — FastAPI 422 的 detail 是
+ * errors() 数组, 直接 String() 会得到 "[object Object]"。优先取字符串型
+ * message (app.py 422 处理器补的), 其次字符串型 detail, 对象/数组才序列化,
+ * 都没有就回落调用方给的兜底串 (默认 "HTTP <status>")。 */
+function adrErrMsg(body, status, fallback) {
+  const fb = fallback || ("HTTP " + (status || 0));
+  const str = (v) => (typeof v === "string" && v.trim() ? v.trim() : "");
+  if (typeof body === "string") return str(body) || fb;
+  if (!body || typeof body !== "object") return fb;
+  const m = str(body.message) || str(body.detail) || str(body.error && body.error.message);
+  if (m) return m;
+  const d = body.detail !== undefined ? body.detail : body.error;
+  // FastAPI 422: detail = [{loc:[...,"text"], msg:"field required"}, ...]
+  if (Array.isArray(d)) {
+    const parts = d.map(e => {
+      if (typeof e === "string") return e.trim();
+      if (!e || typeof e !== "object") return "";
+      const loc = Array.isArray(e.loc) ? e.loc.filter(x => x !== "body" && x !== "query").join(".") : "";
+      const msg = typeof e.msg === "string" ? e.msg : "";
+      return loc && msg ? loc + ": " + msg : msg;
+    }).filter(Boolean);
+    if (parts.length) return parts.join("；");
+  }
+  if (d && typeof d === "object") { try { return JSON.stringify(d); } catch (_) { return fb; } }
+  return fb;
+}

@@ -376,7 +376,7 @@ async function jf(url, opts) {
   const r = await fetch(api(url), opts);
   if (!r.ok) {
     let m = I.t("easy.err_server", {s: r.status});
-    try { const j = await r.json(); if (j.detail || j.message) m = j.detail || j.message; } catch {}
+    try { const j = await r.json(); m = adrErrMsg(j, r.status, m); } catch {}
     throw new Error(m);
   }
   return r.json();
@@ -691,8 +691,8 @@ $("tGo").onclick = async () => {
     });
     clearTimeout(kill);
     if (!r.ok) {
-      let m = r.status;
-      try { const j = await r.json(); if (j.message || j.detail) m = j.message || j.detail; } catch {}
+      let m = "HTTP " + r.status;
+      try { const j = await r.json(); m = adrErrMsg(j, r.status, m); } catch {}
       throw new Error(m);
     }
     const blob = await r.blob();
@@ -734,8 +734,8 @@ $("vExportBtn").onclick = async () => {
                           { signal: ctrl.signal });
     clearTimeout(kill);
     if (!r.ok) {
-      let m = r.status;
-      try { const j = await r.json(); if (j.message || j.detail) m = j.message || j.detail; } catch (_) { /* 非 JSON */ }
+      let m = "HTTP " + r.status;
+      try { const j = await r.json(); m = adrErrMsg(j, r.status, m); } catch (_) { /* 非 JSON */ }
       throw new Error(m);
     }
     // fetch→blob→a[download]: 壳内由 on_download 接手

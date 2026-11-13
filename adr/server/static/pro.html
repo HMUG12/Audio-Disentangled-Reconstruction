@@ -503,7 +503,7 @@ async function jfetch(url, opts) {
   const r = await fetch(api(url), opts);
   if (!r.ok) {
     let msg = "HTTP " + r.status;
-    try { const j = await r.json(); if (j.detail || j.message) msg = j.detail || j.message; } catch {}
+    try { const j = await r.json(); msg = adrErrMsg(j, r.status, msg); } catch {}
     throw new Error(msg);
   }
   return r.json();
@@ -757,7 +757,7 @@ function pickFile(f) {
   fetch(api("/api/adr/v1/train/upload"), { method: "POST", body: fd })
     .then(r => {
       if (!r.ok) return r.json().then(j => {
-        throw new Error(j.detail || "HTTP " + r.status);
+        throw new Error(adrErrMsg(j, r.status));
       });
       return r.json();
     })
@@ -1005,8 +1005,8 @@ $("pExport").onclick = async () => {
                           { signal: ctrl.signal });
     clearTimeout(kill);
     if (!r.ok) {
-      let m = r.status;
-      try { const j = await r.json(); if (j.message || j.detail) m = j.message || j.detail; } catch (_) { /* 非 JSON */ }
+      let m = "HTTP " + r.status;
+      try { const j = await r.json(); m = adrErrMsg(j, r.status, m); } catch (_) { /* 非 JSON */ }
       throw new Error(m);
     }
     // fetch→blob→a[download]: 壳内由 on_download 接手, 并可给出完成反馈
@@ -1092,7 +1092,7 @@ $("sGo").onclick = async () => {
     clearTimeout(kill);
     if (!r.ok) {
       let msg = "HTTP " + r.status;
-      try { const j = await r.json(); if (j.message || j.detail) msg = j.message || j.detail; } catch {}
+      try { const j = await r.json(); msg = adrErrMsg(j, r.status, msg); } catch {}
       throw new Error(msg);
     }
     const blob = await r.blob();
