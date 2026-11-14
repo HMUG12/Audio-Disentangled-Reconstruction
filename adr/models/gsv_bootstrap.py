@@ -12,6 +12,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import os
+import shutil
 import threading
 import time
 import urllib.error
@@ -314,16 +315,61 @@ def _download(url: str, dest: Path, sha256: str = "", no_proxy: bool = False) ->
         os.replace(str(part), str(dest))
 
 
+def _remove_path(path: Path) -> None:
+    """删除文件或目录 (目录递归, 不存在则忽略)。"""
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path, ignore_errors=True)
+    else:
+        path.unlink(missing_ok=True)
+
+
 def _extract(entry: dict) -> None:
-    zip_path = entry["extract_to"] / entry["zip_name"]
+    """解压并原子落位 (批次126): 先解到同卷临时目录, 成功后逐项 rename 进目标。
+
+    旧实现直接 ``extractall`` 进活目录: pretrained 的就绪 marker
+    (``pretrained_models/sv``) 会在解压途中出现, 进程被打断后下次启动
+    误判为完整模型树, 运行时报出难以定位的错误。现改为::
+
+        <extract_to>/.extract-<zip_name>-<pid>/   ← 解压 + 老包改名都在这里
+        成功后逐顶层项 os.replace 进 <extract_to>
+
+    同一卷内 rename 是原子的, 所以 marker 只可能随整份载荷一起出现;
+    解压中途失败/被杀时 finally 清掉临时目录, 目标的旧内容不被触碰。
+
+    不引入 ``.complete`` 哨兵: 既有安装没有该文件, 加了会让老用户重下
+    1.4GB; 原子 rename 本身就是完成信号。
+    """
+    extract_to = Path(entry["extract_to"])
+    zip_path = extract_to / entry["zip_name"]
     _set_state(stage="extracting", file=zip_path.name)
-    with zipfile.ZipFile(zip_path) as zf:
-        zf.extractall(entry["extract_to"])
-    # 老版 G2PW 包解出 G2PWModel_1.1 → 重命名为标准目录名
-    if not entry["marker"].exists():
-        alt = entry["extract_to"] / "G2PWModel_1.1"
-        if alt.is_dir():
-            alt.rename(entry["marker"])
+    extract_to.mkdir(parents=True, exist_ok=True)
+    tmp_dir = extract_to / f".extract-{entry['zip_name']}-{os.getpid()}"
+    _remove_path(tmp_dir)          # 同 pid 残留 (pid 复用) 先清掉
+    try:
+        tmp_dir.mkdir(parents=True)
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall(tmp_dir)
+        # 老版 G2PW 包解出 G2PWModel_1.1 → 临时目录内先改名为标准目录名
+        try:
+            rel = Path(entry["marker"]).relative_to(extract_to)
+        except ValueError:
+            rel = None
+        if rel is not None and not (tmp_dir / rel).exists():
+            alt = tmp_dir / rel.parent / (rel.name + "_1.1")
+            if alt.is_dir():
+                alt.rename(tmp_dir / rel)
+        # 逐顶层项落位: 同名旧目标先挪到 <name>.old-<pid> 备份, 移完再删备份
+        for item in sorted(tmp_dir.iterdir()):
+            dest = extract_to / item.name
+            backup = extract_to / f"{item.name}.old-{os.getpid()}"
+            if dest.exists() or dest.is_symlink():
+                _remove_path(backup)
+                os.replace(str(dest), str(backup))
+            os.replace(str(item), str(dest))
+            if backup.exists():
+                _remove_path(backup)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
     if not entry["marker"].exists():
         raise RuntimeError(
             f"extract ok but marker missing: {entry['marker']}"
