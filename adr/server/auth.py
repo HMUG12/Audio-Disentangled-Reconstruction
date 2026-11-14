@@ -26,6 +26,7 @@ import json
 from urllib.parse import unquote
 
 from adr.core.settings import allow_query_api_key
+from adr.server.exceptions import UNAUTHORIZED
 
 # 监控探活豁免 (无敏感数据, 供 N.E.K.O / 负载均衡 / 容器 HEALTHCHECK 探活)
 # 控制台静态页豁免 (批次26 补 /call): 页面本身无数据, 启用 API key 时页面才能
@@ -117,7 +118,7 @@ class APIKeyMiddleware:
         # 批次84 (#13): 与 HTTPException / v2/v3 统一错误契约 — 三个字段齐全,
         # 客户端按 message 或 detail 取文案都不会拿到空值。
         body = json.dumps({"detail": "unauthorized", "message": "unauthorized",
-                           "code": "unauthorized"}).encode("utf-8")
+                           "code": UNAUTHORIZED}).encode("utf-8")
         await send({
             "type": "http.response.start",
             "status": 401,

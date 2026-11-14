@@ -4,6 +4,7 @@
 nltk.pos_tag 会触发在线下载, 无外网/被墙机器下载失败后英文 G2P 直接抛
 LookupError, 合成 400 "tts failed"。
 """
+import re
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -43,16 +44,17 @@ def test_check_runtime_checks_nltk_data():
 def test_v2_compat_reports_nltk_missing():
     src = V2_COMPAT.read_text(encoding="utf-8")
     assert "is_nltk_missing" in src and "NLTK_MISSING_MESSAGE" in src
-    assert '"code": "nltk_missing"' in src
-    exc = src.index('"code": "nltk_missing"')
-    assert "status_code=503" in src[exc - 300:exc]
+    # M3-a: code 走 WIRE_CODES 常量, 503 状态与外壳由 json_error 单点给
+    assert re.search(r"json_error\(\s*503\s*,\s*NLTK_MISSING_MESSAGE\s*,\s*NLTK_MISSING\s*\)",
+                     src)
 
 
 def test_v3_compat_reports_nltk_missing():
     src = V3_COMPAT.read_text(encoding="utf-8")
     assert "is_nltk_missing" in src and "NLTK_MISSING_MESSAGE" in src
-    # WS 错误帧: (message, code) 双字段都要给, 客户端才能区分
-    assert '"nltk_missing"' in src
+    # WS 错误帧: (message, code) 双字段都要给, 客户端才能区分;
+    # M3-a 起 code 走 WIRE_CODES 常量 (ws_error 外壳)
+    assert re.search(r"NLTK_MISSING_MESSAGE\s*,\s*NLTK_MISSING", src)
 
 
 # ===== 判定助手: 只认 LookupError + 资源名 =====

@@ -28,6 +28,8 @@ from adr.models import voice_library
 
 # wire 白名单 (批次34 从 v2_compat 收口; 顺序即错误消息中的枚举顺序)
 MEDIA_TYPES = ("wav", "mp3", "raw", "ogg", "aac")
+# 响应头映射 (M3-a): 协议层不再自行拼 "audio/" 前缀, 由服务层给 Content-Type
+MEDIA_CONTENT_TYPES = {mt: f"audio/{mt}" for mt in MEDIA_TYPES}
 
 
 def _audit_synthesis(text, ref_audio_path) -> None:
@@ -100,6 +102,11 @@ class SynthesisService:
                 f"unsupported media_type: {mt}, "
                 f"must be one of wav/mp3/raw/ogg/aac")
         return mt
+
+    @staticmethod
+    def content_type(media_type: str) -> str:
+        """media_type → 响应 Content-Type (M3-a: 白名单/头的判断只在服务层)。"""
+        return MEDIA_CONTENT_TYPES.get(media_type, "application/octet-stream")
 
     # ── 引擎调用 (split_method 兜底单点: 流式 cut3 / 非流式 cut1) ──
     # 注意: ADR 引擎 yield (chunk, sr) — 与 GSV pipeline 的 (sr, chunk) 相反

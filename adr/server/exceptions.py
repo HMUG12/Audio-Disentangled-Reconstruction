@@ -9,8 +9,61 @@
 from __future__ import annotations
 
 from fastapi import HTTPException
+from fastapi.responses import JSONResponse
 
 from adr.core.exceptions import error_code
+
+
+# ── wire 错误码表 (M3-a) ──────────────────────────────────────────────────
+# 五套 HTTP/WS 面 (v2 / v3 / OpenAI / native / console) 的错误外壳只做字段
+# 形态转换, 码值一律引用本表, 协议文件不再写字面量。
+# 码值是 wire 契约 (调用方按字符串匹配), 不得改名, 只增不改。
+INVALID_PARAMS = "invalid_params"
+# 媒体类型不在白名单: 历史 wire 值就是 invalid_params (调用方已按该值匹配),
+# 语义键单独登记、值复用, 不引入新的 wire 值。
+UNSUPPORTED_MEDIA = INVALID_PARAMS
+PROFILE_NOT_FOUND = "profile_not_found"
+PAYLOAD_TOO_LARGE = "payload_too_large"
+BUSY = "busy"
+# 以下为各面已在用的增量码, 一并收表 (同样只增不改)
+CUDA_OOM = "cuda_oom"
+NLTK_MISSING = "nltk_missing"
+INVALID_NAME = "invalid_name"
+ROLLBACK_FAILED = "rollback_failed"
+EXPORT_FAILED = "export_failed"
+IMPORT_FAILED = "import_failed"
+NOT_INITIALIZED = "not_initialized"
+UNKNOWN_CMD = "unknown_cmd"
+SESSION_TIMEOUT = "session_timeout"
+VALIDATION_ERROR = "validation_error"
+UNAUTHORIZED = "unauthorized"
+
+# 门禁测试断言: 协议文件里出现的 code 字面量必须在本集合内
+WIRE_CODES = frozenset({
+    INVALID_PARAMS, PROFILE_NOT_FOUND, PAYLOAD_TOO_LARGE, BUSY,
+    CUDA_OOM, NLTK_MISSING, INVALID_NAME, ROLLBACK_FAILED, EXPORT_FAILED,
+    IMPORT_FAILED, NOT_INITIALIZED, UNKNOWN_CMD, SESSION_TIMEOUT,
+    VALIDATION_ERROR, UNAUTHORIZED,
+})
+
+
+def error_body(message: str, code: str) -> dict:
+    """协议无关的错误核心 body: 各面在此之外只加自己的增量字段。"""
+    return {"message": message, "code": code}
+
+
+def json_error(status_code: int, message: str, code: str, *,
+               extra: dict | None = None, headers=None) -> JSONResponse:
+    """HTTP 错误外壳 (v2 / native / 中间件共用): ``{"message", "code"}``。"""
+    body = error_body(message, code)
+    if extra:
+        body.update(extra)
+    return JSONResponse(status_code=status_code, content=body, headers=headers)
+
+
+def ws_error(message: str, code: str) -> dict:
+    """v3 WebSocket error 帧外壳: ``{"type": "error", "message", "code"}``。"""
+    return {"type": "error", "message": message, "code": code}
 
 
 class ProfileNameInvalid(HTTPException):

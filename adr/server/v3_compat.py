@@ -39,6 +39,18 @@ from adr.models.gsv_engine import (
     is_cuda_oom,
     is_nltk_missing,
 )
+from adr.server.exceptions import (
+    BUSY,
+    CUDA_OOM,
+    INVALID_PARAMS,
+    NLTK_MISSING,
+    NOT_INITIALIZED,
+    PAYLOAD_TOO_LARGE,
+    PROFILE_NOT_FOUND,
+    SESSION_TIMEOUT,
+    UNKNOWN_CMD,
+    ws_error,
+)
 from adr.server.param_norm import normalize_params
 from adr.server.v2_compat import engine_busy, max_text_chars
 from adr.services import SynthesisService
@@ -215,8 +227,7 @@ async def tts_ws_stream_input(websocket: WebSocket):
         eng = getattr(app.state, "engine", None)
         if eng is not None and engine_busy(eng):
             await _safe_send_json(
-                {"type": "error", "message": "busy: synthesis queue full",
-                 "code": "busy"})
+                ws_error("busy: synthesis queue full", BUSY))
             return
         task_id = next(task_ids)
         await _safe_send_json({"type": "sentence", "text": text, "task_id": task_id})
@@ -270,12 +281,12 @@ async def tts_ws_stream_input(websocket: WebSocket):
                     logger.exception("v3 stream synth failed")
                     if is_cuda_oom(e):
                         loop.call_soon_threadsafe(
-                            _put, ("__err__", handle_cuda_oom(e), "cuda_oom"))
+                            _put, ("__err__", handle_cuda_oom(e), CUDA_OOM))
                     elif is_nltk_missing(e):
                         # 批次74: 英文依赖缺失 — 错误帧给稳定 code
                         logger.warning("v3 stream synth: nltk data missing (%s)", e)
                         loop.call_soon_threadsafe(
-                            _put, ("__err__", NLTK_MISSING_MESSAGE, "nltk_missing"))
+                            _put, ("__err__", NLTK_MISSING_MESSAGE, NLTK_MISSING))
                     else:
                         loop.call_soon_threadsafe(
                             _put, ("__err__", str(e), error_code(e)))
@@ -293,8 +304,7 @@ async def tts_ws_stream_input(websocket: WebSocket):
                 if chan_full.is_set():
                     # 队列曾满: 立即报 busy, 不阻塞不堆积 (生产者随后自行停止)
                     await _safe_send_json(
-                        {"type": "error", "message": "busy: synthesis queue full",
-                         "code": "busy"})
+                        ws_error("busy: synthesis queue full", BUSY))
                     return
                 item = await chan.get()
                 if item is None:
@@ -306,7 +316,7 @@ async def tts_ws_stream_input(websocket: WebSocket):
                 n += 1
             logger.debug("v3 task#%s done frames=%s err=%s", task_id, n, err)
             if err:
-                await _safe_send_json({"type": "error", "message": err, "code": code})
+                await _safe_send_json(ws_error(err, code))
             else:
                 await _safe_send_json({"type": "sentence_done", "task_id": task_id,
                                        "chunks_sent": n})
@@ -318,18 +328,17 @@ async def tts_ws_stream_input(websocket: WebSocket):
             try:
                 data = await asyncio.wait_for(websocket.receive_json(), timeout=300.0)
             except asyncio.TimeoutError:
-                await _safe_send_json({"type": "error", "message": "session timeout",
-                                       "code": "session_timeout"})
+                await _safe_send_json(ws_error("session timeout", SESSION_TIMEOUT))
                 break
             except (ValueError, KeyError, TypeError):
                 # 批次66: 非 JSON 文本帧 / 二进制帧 = 客户端协议错误, 回 invalid_params 不断会话
-                await _safe_send_json({"type": "error", "message": "invalid frame: expected JSON object",
-                                       "code": "invalid_params"})
+                await _safe_send_json(
+                    ws_error("invalid frame: expected JSON object", INVALID_PARAMS))
                 continue
             if not isinstance(data, dict):
                 # 批次66: JSON 数组/标量同属客户端错误
-                await _safe_send_json({"type": "error", "message": "invalid frame: expected JSON object",
-                                       "code": "invalid_params"})
+                await _safe_send_json(
+                    ws_error("invalid frame: expected JSON object", INVALID_PARAMS))
                 continue
 
             cmd = data.get("cmd", "")
@@ -341,25 +350,20 @@ async def tts_ws_stream_input(websocket: WebSocket):
                 try:
                     v = _resolve_voice(vid, app)
                 except ProfileInvalidError as e:
-                    await _safe_send_json(
-                        {"type": "error", "message": str(e),
-                         "code": error_code(e)})
+                    await _safe_send_json(ws_error(str(e), error_code(e)))
                     break
                 except ProfileNotFoundError:
                     await _safe_send_json(
-                        {"type": "error", "message": f"voice_id '{vid}' not found",
-                         "code": "profile_not_found"})
+                        ws_error(f"voice_id '{vid}' not found", PROFILE_NOT_FOUND))
                     break
                 if v is None:
                     await _safe_send_json(
-                        {"type": "error", "message": f"voice_id '{vid}' not found",
-                         "code": "profile_not_found"})
+                        ws_error(f"voice_id '{vid}' not found", PROFILE_NOT_FOUND))
                     break
                 # 批次69 (Q6): overrides 归一 + 校验 — 非法值回错误帧, 不静默忽略
                 ov, ov_err = _normalize_overrides(data)
                 if ov_err:
-                    await _safe_send_json({"type": "error", "message": ov_err,
-                                           "code": "invalid_params"})
+                    await _safe_send_json(ws_error(ov_err, INVALID_PARAMS))
                     continue
                 voice = v
                 overrides = ov
@@ -368,15 +372,13 @@ async def tts_ws_stream_input(websocket: WebSocket):
             elif cmd == "text":
                 if voice is None:
                     await _safe_send_json(
-                        {"type": "error", "message": "not initialized, send init first",
-                         "code": "not_initialized"})
+                        ws_error("not initialized, send init first", NOT_INITIALIZED))
                     continue
                 text_data = (data.get("data") or "").strip()
                 if len(text_data) > max_text_chars():
                     # 批次66: 文本长度上限与 HTTP 面同源 (ADR_TTS_MAX_TEXT_CHARS)
                     await _safe_send_json(
-                        {"type": "error", "message": "text too long",
-                         "code": "payload_too_large"})
+                        ws_error("text too long", PAYLOAD_TOO_LARGE))
                     continue
                 if text_data:
                     await _push_task(text_data)
@@ -384,15 +386,13 @@ async def tts_ws_stream_input(websocket: WebSocket):
             elif cmd == "append":
                 if voice is None:
                     await _safe_send_json(
-                        {"type": "error", "message": "not initialized, send init first",
-                         "code": "not_initialized"})
+                        ws_error("not initialized, send init first", NOT_INITIALIZED))
                     continue
                 piece = data.get("data") or ""
                 if len(text_buffer.content) + len(piece) > max_text_chars():
                     # 批次66: 无标点累积上限 — 拒收本片, 缓冲不再无界增长
                     await _safe_send_json(
-                        {"type": "error", "message": "text buffer too long",
-                         "code": "payload_too_large"})
+                        ws_error("text buffer too long", PAYLOAD_TOO_LARGE))
                     continue
                 text_buffer.append(piece)
                 for sentence in text_buffer.extract_sentences():
@@ -414,22 +414,21 @@ async def tts_ws_stream_input(websocket: WebSocket):
                 break
 
             else:
-                await _safe_send_json({"type": "error", "message": f"unknown cmd: {cmd}",
-                                       "code": "unknown_cmd"})
+                await _safe_send_json(ws_error(f"unknown cmd: {cmd}", UNKNOWN_CMD))
 
     except WebSocketDisconnect:
         pass
     except Exception as e:
         logger.exception("v3 stream-input error")
         if is_cuda_oom(e):
-            msg, code = handle_cuda_oom(e), "cuda_oom"
+            msg, code = handle_cuda_oom(e), CUDA_OOM
         elif is_nltk_missing(e):
             logger.warning("v3 stream-input: nltk data missing (%s)", e)
-            msg, code = NLTK_MISSING_MESSAGE, "nltk_missing"
+            msg, code = NLTK_MISSING_MESSAGE, NLTK_MISSING
         else:
             msg, code = str(e), error_code(e)
         try:
-            await _safe_send_json({"type": "error", "message": msg, "code": code})
+            await _safe_send_json(ws_error(msg, code))
         except Exception:
             pass
     finally:

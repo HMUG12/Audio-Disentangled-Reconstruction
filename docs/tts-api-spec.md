@@ -112,13 +112,22 @@ with open("out.wav", "wb") as f:
 | 状态码 | 场景 | 示例 |
 |---|---|---|
 | 400 | 参数/请求数据错误 | `{"message": "text is required", "code": "invalid_params"}` |
+| 400 | 媒体类型不在白名单 | `{"message": "unsupported media_type: ...", "code": "invalid_params"}` |
 | 401 | API Key 缺失或错误 | `{"detail": "unauthorized", "message": "unauthorized", "code": "unauthorized"}` |
+| 404 | 音色档案不存在 | `{"message": "profile not found: xxx", "code": "profile_not_found"}` |
+| 413 | 文本/请求体超上限 | `{"message": "text too long: ...", "code": "payload_too_large"}` |
 | 422 | 请求体字段校验失败 | `{"detail": [...], "message": "text: Field required", "code": "validation_error"}` |
 | 500 | 服务端内部故障 | `{"message": "tts failed", "Exception": "...", "code": "internal_error"}` |
 | 503 | 依赖缺失/设备/模型不可用 | `{"message": "tts failed", "Exception": "...", "code": "dependency_missing"}` |
+| 503 | 合成队列已满 | `{"message": "busy: synthesis queue full", "code": "busy"}` |
 
 `Exception` 字段仅在 v2 合成失败时出现 (GSV wire 兼容, 逐字保留)。客户端应按
 `code` 决定是否重试 —— 500/503 是服务端问题, 不要当成 400 参数错误反复重试。
+
+码值单点：v2 / v3 WS / OpenAI 三套外壳的 `code` 全部取自
+`adr/server/exceptions.py` 的 `WIRE_CODES`（M3-a 收口），协议文件不再写字面量。
+媒体类型错误沿用历史值 `invalid_params`（语义键 `unsupported_media` 只登记不换值），
+调用方按字符串匹配的既有逻辑零改动。
 
 ### 2.5 权重切换端点 (全局语义)
 
@@ -143,6 +152,19 @@ POST /api/v2/set_sovits_weights?weights_path=SoVITS_weights_v2/demo-e8.pth
 `403`。`<img>` / 顶层导航 / no-cors fetch 这类不带 Origin 的跨站 GET 同样被拒。
 不带 `Sec-Fetch-*` 头的后端客户端 (N.E.K.O / curl / SDK) 不受影响;
 配置了 `ADR_TTS_API_KEY` 时由鉴权兜底, 该防护让位。
+
+### 2.6 缓存版本与失效规则
+
+音频缓存键由 `adr/server/tts_cache.py` 的 `CACHE_VERSION` 参与构造，落盘文件名
+也带该前缀；读到其他版本的文件一律丢弃。因此：
+
+1. **任何会改变音频字节的编码参数变更都必须 bump `CACHE_VERSION`** ——
+   包括采样率/位深、wav 头写法、mp3/ogg/aac 编码器参数、流式分片拼接方式。
+2. 仅改文案、错误消息、日志格式等不影响音频字节的变更 **不要** bump，
+   否则会无谓清空用户缓存。
+3. bump 后的旧缓存文件在下次扫描时被清理，不会继续命中；已有单测
+   （`test_m3_contract.py::test_cache_version_bump_invalidates_old_key`）兜底。
+4. `CACHE_VERSION` 是内部实现细节，不属于 HTTP 契约，不需要同步给调用方。
 
 ## 3. N.E.K.O 对接步骤
 

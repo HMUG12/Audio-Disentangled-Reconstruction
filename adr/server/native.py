@@ -21,11 +21,24 @@ from pydantic import BaseModel
 
 from adr.models import voice_library
 from adr.server import pathsafe
+from adr.server.exceptions import (
+    EXPORT_FAILED,
+    IMPORT_FAILED,
+    INVALID_NAME,
+    PAYLOAD_TOO_LARGE,
+    PROFILE_NOT_FOUND,
+    ROLLBACK_FAILED,
+    json_error,
+)
 from adr.server.origin_guard import require_browser_safe
 from adr.server.v2_compat import tts_handle
 
 logger = logging.getLogger(__name__)
 
+# 路由归属 (M3-b): 本模块只拥有 /api/adr/v1 下"音色档案一等公民"的接口
+# (/health /readyz /profiles* /tts); 同前缀的 /system/* /train/* /models 等
+# 属于 console.py。两个 router 由 app.py 的 assert_unique_routes 在启动期
+# 断言不存在同 method+path 的重复注册。
 router = APIRouter(prefix="/api/adr/v1", tags=["adr-native"])
 
 _API_VERSION = "1.0"
@@ -125,14 +138,11 @@ async def profiles():
 async def profile_history(name: str):
     # 旧→新; 现行绑定不在 history 里 (见 /profiles 的 vits_weights)
     if not pathsafe.is_safe_name(name):
-        return JSONResponse(status_code=400,
-                            content={"message": f"invalid profile name: {name}",
-                                     "code": "invalid_name"})
+        return json_error(400, f"invalid profile name: {name}", INVALID_NAME)
     try:
         hist = voice_library.voice_history(name)
     except ValueError as e:
-        return JSONResponse(status_code=400,
-                            content={"message": str(e), "code": "invalid_name"})
+        return json_error(400, str(e), INVALID_NAME)
     return {"name": name, "history": hist}
 
 
@@ -140,14 +150,11 @@ async def profile_history(name: str):
 async def profile_rollback(name: str):
     # 现行绑定入史, history 末版恢复现行; 连续调用 = 逐版回退
     if not pathsafe.is_safe_name(name):
-        return JSONResponse(status_code=400,
-                            content={"message": f"invalid profile name: {name}",
-                                     "code": "invalid_name"})
+        return json_error(400, f"invalid profile name: {name}", INVALID_NAME)
     try:
         meta = voice_library.rollback_voice(name)
     except ValueError as e:
-        return JSONResponse(status_code=400,
-                            content={"message": str(e), "code": "rollback_failed"})
+        return json_error(400, str(e), ROLLBACK_FAILED)
     return {"name": name, "profile": meta}
 
 
@@ -157,9 +164,7 @@ async def profile_ref(name: str):
     ref = pathsafe.resolve_within(voice_library.VOICES_DIR, Path(name) / "ref.wav")
     if ref is None or not ref.exists():
         # 批次35: code 增量字段 (与错误协议统一)
-        return JSONResponse(status_code=404,
-                            content={"message": f"profile not found: {name}",
-                                     "code": "profile_not_found"})
+        return json_error(404, f"profile not found: {name}", PROFILE_NOT_FOUND)
     return FileResponse(str(ref), media_type="audio/wav", filename="ref.wav")
 
 
@@ -177,22 +182,17 @@ async def profile_export(name: str):
     from starlette.background import BackgroundTask
 
     if not pathsafe.is_safe_name(name):
-        return JSONResponse(status_code=400,
-                            content={"message": f"invalid profile name: {name}",
-                                     "code": "invalid_name"})
+        return json_error(400, f"invalid profile name: {name}", INVALID_NAME)
     # 批次66: 404 由档案存在性直接判定, 不再匹配异常文案 "不存在"
     if name not in voice_library.list_voices():
-        return JSONResponse(status_code=404,
-                            content={"message": f"档案不存在: {name}",
-                                     "code": "export_failed"})
+        return json_error(404, f"档案不存在: {name}", EXPORT_FAILED)
     fd, tmp = tempfile.mkstemp(suffix=".adrvoice")
     os.close(fd)
     try:
         await asyncio.to_thread(voice_package.export_voice, name, tmp)
     except ValueError as e:
         os.unlink(tmp)
-        return JSONResponse(status_code=400,
-                            content={"message": str(e), "code": "export_failed"})
+        return json_error(400, str(e), EXPORT_FAILED)
     except BaseException:
         # 批次65 导出回滚: 非 ValueError (OSError/取消等) 也删掉含声纹权重的临时包
         try:
@@ -215,11 +215,10 @@ def _import_max_bytes() -> int:
 
 
 def _import_too_large(cap: int) -> JSONResponse:
-    return JSONResponse(
-        status_code=413,
-        content={"message": f"档案包超过 {cap // (1 << 20)}MB 上限 "
-                            f"(ADR_PROFILE_IMPORT_MAX_MB)",
-                 "code": "payload_too_large"})
+    return json_error(
+        413,
+        f"档案包超过 {cap // (1 << 20)}MB 上限 (ADR_PROFILE_IMPORT_MAX_MB)",
+        PAYLOAD_TOO_LARGE)
 
 
 class _ImportTooLarge(HTTPException):
@@ -292,8 +291,7 @@ async def profile_import(package: UploadFile = File(...),
         r = await asyncio.to_thread(voice_package.import_voice, tmp,
                                     name, overwrite, None, force)
     except (ValueError, _zipfile.BadZipFile) as e:
-        return JSONResponse(status_code=400,
-                            content={"message": str(e), "code": "import_failed"})
+        return json_error(400, str(e), IMPORT_FAILED)
     finally:
         os.unlink(tmp)
     # v1.3.x: 导入首个档案即补跑本机采样, 新用户不必等下次启动

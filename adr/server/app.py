@@ -30,7 +30,12 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from adr.core import settings
 from adr.server import console, native, openai_compat, v2_compat, v3_compat
 from adr.server.auth import APIKeyMiddleware
-from adr.server.exceptions import http_error_code
+from adr.server.exceptions import (
+    PAYLOAD_TOO_LARGE,
+    VALIDATION_ERROR,
+    http_error_code,
+    json_error,
+)
 from adr.server.origin_guard import LOCAL_ORIGIN_REGEX, OriginGuardMiddleware
 
 
@@ -131,12 +136,11 @@ class BodySizeLimitMiddleware:
                 await self._reject(send)
 
     async def _reject(self, send):
-        resp = JSONResponse(
-            status_code=413,
-            content={"detail": "request body too large",
-                     "message": f"请求体超过 {self.max_bytes // (1 << 20)}MB 上限 "
-                                f"(ADR_MAX_BODY_MB)",
-                     "code": "payload_too_large"})
+        resp = json_error(
+            413,
+            f"请求体超过 {self.max_bytes // (1 << 20)}MB 上限 (ADR_MAX_BODY_MB)",
+            PAYLOAD_TOO_LARGE,
+            extra={"detail": "request body too large"})
         await resp({"type": "http"}, None, send)
 
 
@@ -302,7 +306,7 @@ def create_app(engine=None) -> FastAPI:
             status_code=422,
             content={"detail": jsonable_encoder(errors),
                      "message": _validation_message(errors),
-                     "code": "validation_error"})
+                     "code": VALIDATION_ERROR})
 
     # v2/v3_compat 的请求期引擎缓存 (批次26 注明): 生产模式下初始为 None,
     # 首次合成时由 v2_compat/v3_compat 惰性赋值 get_gsv_engine() 并复用。
@@ -315,4 +319,25 @@ def create_app(engine=None) -> FastAPI:
     app.include_router(native.router)
     app.include_router(console.router)  # 批次14: 控制台 API (状态/训练/模型)
     console.register_pages(app)         # 批次14: 静态控制台页 (/, /pro, /easy)
+    assert_unique_routes(app)           # M3-b: native/console 共用前缀, 冲突即启动失败
     return app
+
+
+def assert_unique_routes(app: FastAPI) -> None:
+    """启动期路由冲突断言 (M3-b)。
+
+    ``native`` 与 ``console`` 共用 ``/api/adr/v1`` 前缀。FastAPI 对同
+    method+path 的重复注册不报错, 而是静默取先注册的那条 — 表现为"新接口
+    莫名不生效"。装配末尾显式扫描, 冲突直接抛 ``RuntimeError`` 让服务起不来。
+    """
+    seen: dict[tuple[str, str], str] = {}
+    for route in app.routes:
+        path = getattr(route, "path", None)
+        methods = getattr(route, "methods", None) or ()
+        for method in methods:
+            key = (method.upper(), path)
+            if key in seen:
+                raise RuntimeError(
+                    "duplicate route registration: "
+                    f"{key[0]} {key[1]} ({seen[key]} vs {route.name})")
+            seen[key] = str(route.name)

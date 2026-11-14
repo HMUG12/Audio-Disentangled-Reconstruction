@@ -4,7 +4,7 @@
 - /tts GET+POST、/set_gpt_weights、/set_sovits_weights
 - streaming_mode 分支语义逐字复制 (含 Python 中 bool True == 1 落分支 1 的行为)
 - 流式 WAV 字节格式: 首块 44B WAV 头 + 后续裸 s16le PCM
-- 错误格式: JSONResponse(400, {"message": ..., "code": ...})
+- 错误格式: {"message": ..., "code": ...} (外壳由 json_error 统一构造)
   (批次35: code 为稳定错误码, 增量字段; 既有 message 逐字保留)
 
 ADR 扩展 (GSV 协议外, 向后兼容):
@@ -42,7 +42,15 @@ from adr.models.gsv_engine import (
 )
 from adr.server import tts_cache
 from adr.server.audio_codec import pack_audio, to_int16
-from adr.server.exceptions import error_status_code
+from adr.server.exceptions import (
+    BUSY,
+    CUDA_OOM,
+    INVALID_PARAMS,
+    NLTK_MISSING,
+    PAYLOAD_TOO_LARGE,
+    error_status_code,
+    json_error,
+)
 from adr.server.origin_guard import require_browser_safe
 from adr.server.param_norm import env_num, normalize_params
 from adr.services import SynthesisService
@@ -104,8 +112,7 @@ def _resolve_profile(request: Request, req: dict):
             meta = SynthesisService.load_profile(profile)
         except (ProfileInvalidError, ProfileNotFoundError) as e:
             # 批次35: code 增量字段 (既有 message 逐字保留, wire 兼容)
-            return JSONResponse(status_code=400,
-                                content={"message": str(e), "code": error_code(e)})
+            return json_error(400, str(e), error_code(e))
         req.update(SynthesisService.profile_fill(
             meta,
             ref_audio_path=req.get("ref_audio_path"),
@@ -184,30 +191,26 @@ def _check_params(req: dict):
         req["media_type"] = SynthesisService.validate_params(
             req.get("text"), req.get("ref_audio_path"), req.get("media_type"))
     except SynthesisParamsError as e:
-        return JSONResponse(status_code=400,
-                            content={"message": str(e), "code": error_code(e)})
+        return json_error(400, str(e), error_code(e))
     cap = max_text_chars()
     if len(req["text"]) > cap:
-        return JSONResponse(
-            status_code=413,
-            content={"message": f"text too long: {len(req['text'])} chars, "
-                                f"limit {cap} (ADR_TTS_MAX_TEXT_CHARS)",
-                     "code": "payload_too_large"})
+        return json_error(
+            413,
+            f"text too long: {len(req['text'])} chars, "
+            f"limit {cap} (ADR_TTS_MAX_TEXT_CHARS)",
+            PAYLOAD_TOO_LARGE)
     norm, msg = normalize_params({
         k: req.get(k) for k in (
             "top_k", "top_p", "temperature", "speed_factor",
             "fragment_interval", "text_lang", "prompt_lang")})
     if msg:
-        return JSONResponse(status_code=400,
-                            content={"message": msg, "code": "invalid_params"})
+        return json_error(400, msg, INVALID_PARAMS)
     req.update(norm)   # 归一结果回写 (语言小写 / 数值类型), 后续分支直接用
     return None
 
 
 def _busy_response() -> JSONResponse:
-    return JSONResponse(status_code=503,
-                        content={"message": "busy: synthesis queue full",
-                                 "code": "busy"})
+    return json_error(503, "busy: synthesis queue full", BUSY)
 
 
 def _encode_and_cache(cache_key: str, audio, sr: int, media_type: str) -> bytes:
@@ -281,17 +284,13 @@ async def tts_handle(req: dict, request: Request) -> Response:
             try:
                 await asyncio.to_thread(_validate_weights_file, _wp)
             except Exception as e:
-                return JSONResponse(
-                    status_code=400,
-                    content={"message": f"invalid {_wk}: {e}",
-                             "code": "invalid_params"})
+                return json_error(400, f"invalid {_wk}: {e}", INVALID_PARAMS)
             # 批次99 (R4-API-01): 回填解析后的绝对路径 — 引擎侧热换/合成复用
             # 同一基准 (GSV_DIR), 否则相对写法在预检通过后加载失败。
             req[_wk] = resolve_weights_path(_wp)
     msg = await asyncio.to_thread(_check_ref_audio, req["ref_audio_path"])
     if msg:
-        return JSONResponse(status_code=400,
-                            content={"message": msg, "code": "invalid_params"})
+        return json_error(400, msg, INVALID_PARAMS)
 
     streaming_mode = req.get("streaming_mode", False)
     media_type = req["media_type"]
@@ -307,11 +306,11 @@ async def tts_handle(req: dict, request: Request) -> Response:
         # 明确定义为 mode 2 的别名 (同按句切块), 文档同步声明。
         streaming, return_fragment = True, False
     else:
-        return JSONResponse(
-            status_code=400,
-            content={"message": "the value of streaming_mode must be 0, 1, 2, 3(int) "
-                                "or true/false(bool)",
-                     "code": "invalid_params"})
+        return json_error(
+            400,
+            "the value of streaming_mode must be 0, 1, 2, 3(int) "
+            "or true/false(bool)",
+            INVALID_PARAMS)
     streaming = streaming or return_fragment
     engine = _get_engine(request)
 
@@ -322,12 +321,13 @@ async def tts_handle(req: dict, request: Request) -> Response:
                 return _busy_response()
             return StreamingResponse(
                 _stream_generator(engine, req, media_type),
-                media_type=f"audio/{media_type}")
+                media_type=SynthesisService.content_type(media_type))
         cache_key = tts_cache.make_key(req)
         # 批次79 (#5): 首次命中的磁盘条目要读盘 (最大 256MB), 走线程池避免堵事件循环
         cached = await asyncio.to_thread(tts_cache.get, cache_key)
         if cached is not None:
-            return Response(cached, media_type=f"audio/{media_type}")
+            return Response(cached,
+                            media_type=SynthesisService.content_type(media_type))
         if engine_busy(engine):   # 批次66: 缓存命中不占引擎, 故放在命中之后
             return _busy_response()
         audio, sr = await asyncio.to_thread(
@@ -348,26 +348,22 @@ async def tts_handle(req: dict, request: Request) -> Response:
         )
         data = await asyncio.to_thread(
             _encode_and_cache, cache_key, audio, sr, media_type)
-        return Response(data, media_type=f"audio/{media_type}")
+        return Response(data,
+                        media_type=SynthesisService.content_type(media_type))
     except Exception as e:
         if is_cuda_oom(e):
             # 批次57: OOM 独立分流 — 释放碎片显存 + 503 友好提示 (此前是裸 400 堆栈原文)
-            return JSONResponse(status_code=503,
-                                content={"message": handle_cuda_oom(e),
-                                         "code": "cuda_oom"})
+            return json_error(503, handle_cuda_oom(e), CUDA_OOM)
         if is_nltk_missing(e):
             # 批次74: 英文依赖缺失 (无外网机器 nltk 补下载失败) — 503 可定位
             logger.warning("tts rejected: nltk data missing (%s)", e)
-            return JSONResponse(status_code=503,
-                                content={"message": NLTK_MISSING_MESSAGE,
-                                         "code": "nltk_missing"})
+            return json_error(503, NLTK_MISSING_MESSAGE, NLTK_MISSING)
         # 批次84 (#12): 不再一律 400 — 依赖缺失/设备/模型类 → 503, 其余内部故障
         # → 500; 引擎深处抛的 ValueError/TypeError (请求数据问题) 仍是 400。
         # 服务端留堆栈, wire 字段 (message / Exception / code) 逐字不变。
         logger.exception("tts failed")
-        return JSONResponse(status_code=error_status_code(e),
-                            content={"message": "tts failed", "Exception": str(e),
-                                     "code": error_code(e)})
+        return json_error(error_status_code(e), "tts failed", error_code(e),
+                          extra={"Exception": str(e)})
 
 
 # ─── TTS 端点 ───
@@ -465,9 +461,7 @@ async def _switch_weights(request: Request, weights_path: str | None,
                           kind: str) -> JSONResponse:
     """换权单点 (批次77: GET/POST 两个别名共用) — kind = "gpt" | "sovits"。"""
     if weights_path in ["", None]:
-        return JSONResponse(status_code=400,
-                            content={"message": f"{kind} weight path is required",
-                                     "code": "invalid_params"})
+        return json_error(400, f"{kind} weight path is required", INVALID_PARAMS)
     loading = False
     try:
         # Track B: 安全预检, 恶意 pickle 在进入引擎加载前即被拒 (400)
@@ -483,17 +477,13 @@ async def _switch_weights(request: Request, weights_path: str | None,
     except Exception as e:
         if is_cuda_oom(e):
             # 批次66: 热换权重 OOM 与 tts_handle 同口径 — 释放碎片显存 + 503
-            return JSONResponse(status_code=503,
-                                content={"message": handle_cuda_oom(e),
-                                         "code": "cuda_oom"})
+            return json_error(503, handle_cuda_oom(e), CUDA_OOM)
         logger.exception("change %s weight failed", kind)  # 批次66
         # 批次84 (#12): 预检失败属请求参数问题 (400); 加载阶段的依赖/设备/权重
         # 损坏等内部故障按 error_status_code 分流 (500/503), 不再一律 400。
         status = error_status_code(e) if loading else 400
-        return JSONResponse(status_code=status,
-                            content={"message": f"change {kind} weight failed",
-                                     "Exception": str(e),
-                                     "code": error_code(e)})
+        return json_error(status, f"change {kind} weight failed",
+                          error_code(e), extra={"Exception": str(e)})
     if kind == "gpt":
         request.app.state.t2s_weights = weights_path
     else:
