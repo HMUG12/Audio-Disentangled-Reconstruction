@@ -330,3 +330,17 @@ def test_dockerfile_port_single_source():
     assert 'exec python -m adr.server --addr 0.0.0.0 --port \\"${ADR_PORT}\\"' in src
     assert '"--port", "9881"' not in src
     assert "os.environ.get('ADR_PORT'" in src
+
+
+# ===== 批次120: nltk 下载段不得被 Stop 误判为构建失败 =====
+def test_nltk_download_loop_does_not_abort_build():
+    """PS 5.1 在 $ErrorActionPreference=Stop 下会把原生命令写 stderr 的一行
+    (pip 的 "WARNING: Retrying"、nltk.downloader 启动的 runpy 警告) 当成终止性
+    NativeCommandError, 整条构建断在 4a/4c。会往 stderr 写字的原生命令必须走
+    Invoke-Native 封装 (局部 Continue + 返回 $LASTEXITCODE)。"""
+    src = (REPO / "scripts" / "build_runtime.ps1").read_text(encoding="utf-8")
+    assert "function Enter-Native" in src
+    seg = src[src.index('Step "4/7'):src.index("nltk data missing")]
+    assert "Enter-Native" in seg
+    assert "nltk.downloader" in seg
+    assert 'Join-Path $env:APPDATA "nltk_data"' in seg

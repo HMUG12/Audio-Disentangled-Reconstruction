@@ -47,6 +47,20 @@ function Step([string]$msg) {
     Write-Host ""
     Write-Host ("================ {0} ================" -f $msg) -ForegroundColor Yellow
 }
+# PS 5.1: $ErrorActionPreference=Stop 会把原生命令往 stderr 写的任何一行
+# (pip 的 "WARNING: Retrying ..."、nltk.downloader 启动的 runpy RuntimeWarning)
+# 升级成终止性 NativeCommandError, 构建当场断掉 —— 这才是 2026-11 起多次构建
+# 中断的真因, 而非依赖取不到。进程成败只该由 $LASTEXITCODE 表达, 所以第 4 步
+# (全是 pip / nltk 原生命令) 整段降级为 Continue, 结束再还原。
+# 注意: 必须在本脚本顶层赋值 —— 在函数里改 $ErrorActionPreference 只影响函数
+# 自身作用域, 对调用处无效 (踩过一次)。
+function Enter-NativeStep {
+    $script:EapSaved = $ErrorActionPreference
+    $script:ErrorActionPreference = "Continue"
+}
+function Exit-NativeStep {
+    $script:ErrorActionPreference = $script:EapSaved
+}
 
 Step "0/7 prepare directories"
 New-Item -ItemType Directory -Force -Path $OutDir, $DlDir, $PipCache | Out-Null
@@ -196,19 +210,28 @@ Step "4/7 pip install (this downloads ~1 GB, progress bars below)"
 # 4a. torch 栈先行: 后续 requirements 中的 pytorch-lightning 等看到已装即满足
 if ($AllowCuda) {
     Log "GPU variant: torch/torchaudio 2.10.0+cu130 from download.pytorch.org (~2.5 GB)"
+    Enter-NativeStep
     & $py -m pip install --prefer-binary --cache-dir $PipCache --no-warn-script-location `
         --index-url https://download.pytorch.org/whl/cu130 `
         torch==2.10.0+cu130 torchaudio==2.10.0+cu130
-    if ($LASTEXITCODE -ne 0) { throw "pip install torch cu130 failed" }
+    $rc = $LASTEXITCODE
+    Exit-NativeStep
+    if ($rc -ne 0) { throw "pip install torch cu130 failed" }
 } else {
     Log "CPU variant: torch/torchaudio 2.10.0 from PyPI (Windows PyPI wheels are CPU builds)"
+    Enter-NativeStep
     & $py -m pip install --prefer-binary --cache-dir $PipCache --no-warn-script-location `
         torch==2.10.0 torchaudio==2.10.0
-    if ($LASTEXITCODE -ne 0) { throw "pip install torch failed" }
+    $rc = $LASTEXITCODE
+    Exit-NativeStep
+    if ($rc -ne 0) { throw "pip install torch failed" }
 }
 # 4b. 其余钉版依赖 (torch 已满足, 不会重复解析)
+Enter-NativeStep
 & $py -m pip install --prefer-binary --cache-dir $PipCache --no-warn-script-location -r $ReqFile
-if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
+$rc = $LASTEXITCODE
+Exit-NativeStep
+if ($rc -ne 0) { throw "pip install failed" }
 
 # 4c. nltk_data 随包 (批次74): g2p-en 首次处理英文文本时 G2p.__init__ 调
 #     cmudict.dict(), nltk.pos_tag 首次调用加载 PerceptronTagger — 两条都会
@@ -225,12 +248,26 @@ $env:NLTK_ALLOW_PROXIED_URLOPEN = "1"
 # 无人应答时 input() 抛 EOFError 直接整条构建失败。这里只认必装包 (cmudict +
 # _eng, 由下方 Test-Path 硬校验), 旧版兼容包 averaged_perceptron_tagger 失败只告警
 # (镜像曾给出尺寸不符的包 — 2026-11-08 实测)。
+# downloader 启动会打一条 runpy RuntimeWarning 到 stderr, 用 Enter/Exit-NativeStep
+# 夹住避免被 Stop 升级成终止性错误, 成败只看退出码。
+Enter-NativeStep
 foreach ($pkg in @("cmudict", "averaged_perceptron_tagger_eng", "averaged_perceptron_tagger")) {
     "" | & $py -m nltk.downloader -d $nltkDir $pkg
     if ($LASTEXITCODE -ne 0) { Log ("WARN nltk package skipped: {0}" -f $pkg) }
 }
+Exit-NativeStep
+# 下载不到的资源回落到构建机已有 nltk_data (同一份官方包; 代理镜像偶发尺寸
+# 不符时 build 仍可出包), 仍由下方硬校验兜底。
+$localNltk = Join-Path $env:APPDATA "nltk_data"
 foreach ($res in @("corpora\cmudict", "taggers\averaged_perceptron_tagger_eng")) {
-    if (-not (Test-Path (Join-Path $nltkDir $res))) { throw "nltk data missing: $res" }
+    $dst = Join-Path $nltkDir $res
+    $src = Join-Path $localNltk $res
+    if (-not (Test-Path $dst) -and (Test-Path $src)) {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dst) | Out-Null
+        Copy-Item $src $dst -Recurse -Force
+        Log ("nltk fallback from local: {0}" -f $res)
+    }
+    if (-not (Test-Path $dst)) { throw "nltk data missing: $res" }
 }
 Log ("nltk_data bundled: {0}" -f $nltkDir)
 
@@ -278,26 +315,38 @@ $VcUrl    = "https://download.visualstudio.microsoft.com/download/pr/990c720a-46
 $VcSha256 = "CC0FF0EB1DC3F5188AE6300FAEF32BF5BEEBA4BDD6E8E445A9184072096B713B"
 
 function Get-VerifiedFile([string]$Url, [string]$OutFile, [string]$Sha256) {
-    # 缓存命中即校验哈希, 损坏/换文件重下 (与 Step1 PBS 逻辑同口径)
-    $need = $true
+    # 缓存命中即校验哈希; 哈希不符时保留文件让下面的 curl 续传 (弱网下几十 MB
+    # 白扔太贵), 完整但损坏的极端情况由下载后的哈希失败整文件重下兜底。
     if (Test-Path $OutFile) {
         if ((Get-FileHash $OutFile -Algorithm SHA256).Hash -eq $Sha256) {
             Log ("cached+verified: {0} — skip download" -f (Split-Path -Leaf $OutFile))
-            $need = $false
+            return
+        }
+        Log ("cache SHA256 mismatch ({0}) — resume/refetch" -f (Split-Path -Leaf $OutFile))
+    }
+    # 断点续传 + 重试: gyan.dev 这类源在弱网/高负载下会中途被对端 RST
+    # (2026-11-14 实测在 86 MB 处 "connection forcibly closed"), 用
+    # Invoke-WebRequest 只能从 0 重来。curl.exe 是 Win10+ 自带; 缺失时退回
+    # Invoke-WebRequest (不可续传, 但至少能跑)。
+    $curl = Join-Path $env:SystemRoot "System32\curl.exe"
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        if (Test-Path $curl) {
+            Log ("downloading {0} (curl, resume, attempt {1}) ..." -f (Split-Path -Leaf $OutFile), $attempt)
+            Enter-NativeStep
+            & $curl -L --fail --retry 5 --retry-all-errors --retry-delay 3 -C - -o $OutFile $Url
+            $rc = $LASTEXITCODE
+            Exit-NativeStep
+            if ($rc -ne 0) { throw "curl failed for $(Split-Path -Leaf $OutFile) (exit $rc)" }
         } else {
-            Log ("cache SHA256 mismatch ({0}) — re-download" -f (Split-Path -Leaf $OutFile))
-            Remove-Item -Force $OutFile
+            Log ("downloading {0} ..." -f (Split-Path -Leaf $OutFile))
+            Invoke-WebRequest -Uri $Url -OutFile $OutFile
         }
-    }
-    if ($need) {
-        Log ("downloading {0} ..." -f (Split-Path -Leaf $OutFile))
-        Invoke-WebRequest -Uri $Url -OutFile $OutFile
         $h = (Get-FileHash $OutFile -Algorithm SHA256).Hash
-        if ($h -ne $Sha256) {
-            throw "SHA256 mismatch for $(Split-Path -Leaf $OutFile): $h (expected $Sha256)"
-        }
-        Log "download verified (SHA256 ok)"
+        if ($h -eq $Sha256) { Log "download verified (SHA256 ok)"; return }
+        Log ("SHA256 mismatch ({0}) — full re-download" -f $h)
+        Remove-Item -Force $OutFile
     }
+    throw "SHA256 mismatch for $(Split-Path -Leaf $OutFile) (expected $Sha256)"
 }
 $FfZipPath = Join-Path $DlDir $FfZip
 $VcPath    = Join-Path $DlDir "vc_redist.x64.exe"
@@ -326,6 +375,10 @@ Log "redist staged: redist\vc_redist.x64.exe"
 
 Step "7/7 smoke test"
 Push-Location $OutDir
+# 冒烟是"跑 python 看能不能 import", python 往 stderr 打的 SyntaxWarning
+# (GSV 的 GPT_SoVITS/utils.py 有 '\d' 转义) 不该判构建失败 —— 整段降级,
+# 成败仍由各步 $LASTEXITCODE 判定。
+Enter-NativeStep
 try {
     $env:PYTHONPATH = $OutDir
     & $py -c "import sys; print('python', sys.version.split()[0]); import torch, torchaudio; print('torch', torch.__version__, 'cuda_available', torch.cuda.is_available())"
@@ -344,8 +397,10 @@ try {
     & $py -c "import sys, os; g = r'$gsvPath'.replace('/', '\\'); os.chdir(g); sys.path.insert(0, g); sys.path.insert(0, g + '/GPT_SoVITS'); from GPT_SoVITS.TTS_infer_pack.TTS import TTS_Config; print('GSV imports OK')"
     if ($LASTEXITCODE -ne 0) { throw "GSV import smoke failed" }
     & $py -m pip check
-    if ($LASTEXITCODE -ne 0) { Log "pip check reported issues (see above)" }
+    $rc = $LASTEXITCODE
+    if ($rc -ne 0) { Log "pip check reported issues (see above)" }
 } finally {
+    Exit-NativeStep
     Pop-Location
 }
 
