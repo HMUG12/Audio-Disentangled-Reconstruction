@@ -635,3 +635,31 @@ def test_bootstrap_ensure_serializes_workers(tmp_path, monkeypatch):
     assert not errors
     assert state["max"] == 1, "并发 ensure() 未被锁串行化"
     assert len(calls) == 1, "marker 就位后不应重复解压"
+
+
+# ---- 批次122: 强制 cuda 但 CUDA 不可用时必须回落 cpu ----
+# CPU 包 + 设置里选 "CUDA" 时, GSV 以 map_location=cfg.device 反序列化权重,
+# torch 直接抛 "Attempting to deserialize object on a CUDA device"。
+
+def test_resolve_runtime_device_falls_back_when_cuda_unavailable(monkeypatch):
+    import torch
+    from adr.models.gsv_engine import resolve_runtime_device
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    assert resolve_runtime_device("cuda") == "cpu"
+
+
+def test_resolve_runtime_device_keeps_cuda_when_available(monkeypatch):
+    import torch
+    from adr.models.gsv_engine import resolve_runtime_device
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    assert resolve_runtime_device("cuda") == "cuda"
+
+
+def test_resolve_runtime_device_never_upgrades_cpu(monkeypatch):
+    import torch
+    from adr.models.gsv_engine import resolve_runtime_device
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    assert resolve_runtime_device("cpu") == "cpu"

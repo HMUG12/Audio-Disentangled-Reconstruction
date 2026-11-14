@@ -109,6 +109,28 @@ def is_cuda_oom(e: BaseException) -> bool:
             and getattr(type(e), "__module__", "").startswith("torch"))
 
 
+def resolve_runtime_device(device: str) -> str:
+    """设备可用性优先于用户选择 (批次122): 要求 cuda 但 CUDA 不可用时回落 cpu。
+
+    CPU 包 + 设置中心里选了 "CUDA" 是必崩组合: GSV 的 ``init_t2s_weights`` 用
+    ``torch.load(..., map_location=self.configs.device)`` 反序列化权重, CUDA
+    不可用时 torch 直接抛 "Attempting to deserialize object on a CUDA device"
+    (2026-11-14 实机首启报错)。这里只降不升: cpu 设置永不被改成 cuda。
+    """
+    if device != "cuda":
+        return device
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+        logging.getLogger("adr").warning(
+            "[gpu] 配置要求 CUDA, 但本轮子 (torch %s) 的 CUDA 不可用 — 已回落 CPU"
+            " (CPU 包或驱动缺失时不要在设置里选 CUDA)", torch.__version__)
+    except Exception:
+        logging.getLogger("adr").warning("[gpu] torch 不可用 — 已回落 CPU")
+    return "cpu"
+
+
 def handle_cuda_oom(e: BaseException) -> str:
     """CUDA OOM 统一善后 (单点): 立即 empty_cache 释放碎片显存 — 否则显存
     碎片化后后续请求持续 OOM; 落警告日志; 返回用户可读提示 (API 层包 503/cuda_oom)。"""
@@ -853,6 +875,10 @@ class GSVEngine:
                     _forced = True       # env 强制 CPU 同理
                 else:
                     device = "cuda" if torch.cuda.is_available() else "cpu"
+            # 批次122: 强制 cuda 但 CUDA 不可用 (CPU 包 / 驱动缺失) 必须回落 ——
+            # 否则 GSV 用 map_location=cfg.device 反序列化权重时直接抛
+            # "Attempting to deserialize object on a CUDA device"。
+            device = resolve_runtime_device(device)
             # 批次57: GPU 档案落日志 (排障关键: N 卡型号/算力/显存/驱动代际一目了然)
             if device == "cuda":
                 # 批次102 首启向导 ⑤⑥: 单进程显存上限 (占总显存比例)。
