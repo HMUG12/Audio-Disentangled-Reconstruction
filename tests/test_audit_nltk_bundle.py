@@ -23,10 +23,12 @@ def test_build_runtime_bundles_nltk_data():
     for res in ("cmudict", "averaged_perceptron_tagger_eng",
                 "averaged_perceptron_tagger"):
         assert res in src
-    # 下载失败即构建失败 (不能静默交付缺英文能力的包)
-    idx = src.index("nltk.downloader")
-    assert "throw" in src[idx:idx + 600]
-    assert "Test-Path" in src[idx:idx + 600]
+    # 下载失败即构建失败 (不能静默交付缺英文能力的包); 批次120 起该段还包含
+    # 本地 nltk_data 回落逻辑, 窗口放宽到 1500 字符。锚点取**最后一次**出现:
+    # 文件头部注释里也提到 nltk.downloader
+    idx = src.rindex("nltk.downloader")
+    assert "throw" in src[idx:idx + 1500]
+    assert "Test-Path" in src[idx:idx + 1500]
 
 
 # ===== 体检: 缺失即 FAIL =====
