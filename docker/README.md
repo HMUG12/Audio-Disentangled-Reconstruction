@@ -7,6 +7,10 @@
 - 镜像入口: `python -m adr.server --addr 0.0.0.0 --port 9881`, 暴露五套 API 面
   (ADR native `/api/adr/v1`、v2 兼容、v3 兼容、OpenAI 兼容、console)
 - **无 Gradio WebUI** (与 GSV 官方 WebUI 无关); 纯服务形态, 面向集成方
+- **服务端控制台** `http://127.0.0.1:9881/server`: 容器/服务形态专用面板
+  (连通状态、引擎阶段、遥测、档案试听), 与桌面版 studio 三页 (`/pro` `/easy`
+  `/call`) 视觉独立; 设了 `ADR_TTS_API_KEY` 时在页面顶部填密钥, 只存
+  sessionStorage 并走 `X-API-Key` 头 (`?api_key=` 查询通道默认关闭)
 - GPT-SoVITS 钉版: 构建时容器内 clone commit
   `d523079fc05d9a8028d6085bffe4a2757c32abb6`, 并自动应用 24 处兼容补丁
   (`scripts/apply_compat_patches.py`)

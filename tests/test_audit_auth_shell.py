@@ -66,27 +66,39 @@ def test_shell_prewarm_polls_health():
 def test_call_html_reads_and_forwards_key():
     src = CALL_HTML.read_text(encoding="utf-8")
     assert 'new URLSearchParams(location.search).get("api_key")' in src
-    # 所有 API fetch 都经 api() 包装 (无裸路径 / 裸变量)
+    # 所有 API fetch 都经 api()/hdr() 包装 (无裸路径 / 裸变量)
     assert not re.findall(r'fetch\("/api/', src)
     assert "fetch(url" not in src
-    assert 'fetch(api("/api/adr/v1/profiles"))' in src
+    # 批次127: 凭据改走 X-API-Key 头 (api() 仅保留路径语义)
+    assert 'fetch(api("/api/adr/v1/profiles"), { headers: hdr() })' in src
     assert "fetch(api(url)" in src
 
 
 def test_call_page_api_calls_pass_with_query_key(monkeypatch, tmp_path):
-    """call.html 用 ?api_key= 透传 — 服务端须接受该形态 (与 pro/easy 同口径)。"""
+    """批次127: ``?api_key=`` 默认关闭 (查询串会泄漏进历史/Referer/反代日志);
+    仅在 ADR_ALLOW_QUERY_API_KEY=1 时作为兜底放行 — 控制台页面已改为
+    首屏读一次 URL 上的 key 后转存 sessionStorage, 后续请求走 X-API-Key 头。
+    """
     from fastapi.testclient import TestClient
     from adr.server.app import create_app
 
     monkeypatch.setenv("ADR_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("ADR_TTS_CACHE", "0")
     monkeypatch.setenv("ADR_TTS_API_KEY", "k1, k2")
+    monkeypatch.delenv("ADR_ALLOW_QUERY_API_KEY", raising=False)
 
     class _Engine:
         sr = 32000
 
     c = TestClient(create_app(engine=_Engine()))
     assert c.get("/api/adr/v1/profiles").status_code == 401
+    # 默认拒绝查询参数通道
+    assert c.get("/api/adr/v1/profiles?api_key=k1").status_code == 401
+    # 头部通道始终可用 (控制台页面改造后的口径)
+    assert c.get("/api/adr/v1/profiles",
+                 headers={"X-API-Key": "k1"}).status_code == 200
+    # 显式开启后查询参数兜底恢复 (兼容无法设自定义头的调用方)
+    monkeypatch.setenv("ADR_ALLOW_QUERY_API_KEY", "1")
     assert c.get("/api/adr/v1/profiles?api_key=k1").status_code == 200
 
 

@@ -606,16 +606,33 @@ def test_auth_wrong_key_401(auth_client):
     assert r.status_code == 401
 
 
-def test_auth_three_credential_channels(auth_client, engine):
-    """Bearer 头 / X-API-Key 头 / 查询参数 三通道等价。"""
+def test_auth_three_credential_channels(auth_client, engine, monkeypatch):
+    """Bearer 头 / X-API-Key 头 / 查询参数 三通道。
+
+    批次127: ``?api_key=`` 默认关闭 (防凭据进历史/Referer/反代日志);
+    头部两通道恒可用, 查询参数通道需 ADR_ALLOW_QUERY_API_KEY=1 才放行。
+    """
     for kwargs in (
         {"headers": {"Authorization": "Bearer k1"}},
         {"headers": {"X-API-Key": "k2"}},
-        {"params": {"api_key": "k1"}},
     ):
         r = auth_client.post("/api/v2/tts",
                              json={"text": "hi", "ref_audio_path": "a.wav"}, **kwargs)
         assert r.status_code == 200, kwargs
+    assert len(engine.synth_calls) == 2
+
+    monkeypatch.delenv("ADR_ALLOW_QUERY_API_KEY", raising=False)
+    r = auth_client.post("/api/v2/tts",
+                         json={"text": "hi", "ref_audio_path": "a.wav"},
+                         params={"api_key": "k1"})
+    assert r.status_code == 401
+    assert len(engine.synth_calls) == 2
+
+    monkeypatch.setenv("ADR_ALLOW_QUERY_API_KEY", "1")
+    r = auth_client.post("/api/v2/tts",
+                         json={"text": "hi", "ref_audio_path": "a.wav"},
+                         params={"api_key": "k1"})
+    assert r.status_code == 200
     assert len(engine.synth_calls) == 3
 
 
