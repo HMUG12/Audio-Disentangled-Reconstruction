@@ -29,11 +29,16 @@
   *{box-sizing:border-box;}
   html{scroll-behavior:smooth;}
   body{
-    margin:0;min-height:100vh;
+    margin:0;height:100vh;overflow:hidden;
     background:
       radial-gradient(1100px 640px at 50% -12%, #0a1826 0%, #05090f 56%, #030508 100%);
     color:var(--text);font-family:var(--mono);font-size:13px;
     -webkit-font-smoothing:antialiased;
+  }
+  /* 容器版: 顶栏 / 三栏 / 命令行脚注 三行固定, 面板内部各自滚动 */
+  .app{
+    display:grid;grid-template-rows:46px minmax(0,1fr) 50px;gap:10px;
+    height:100vh;padding:10px 12px;
   }
   a{color:var(--blue-dim);text-decoration:none;}
   a:hover{color:var(--blue);}
@@ -42,22 +47,49 @@
 
   /* ── 顶栏 ── */
   .topbar{
-    position:sticky;top:0;z-index:20;
-    display:flex;align-items:center;gap:18px;flex-wrap:wrap;
-    padding:11px 18px;
-    border-bottom:1px solid var(--line);
-    background:linear-gradient(180deg,#0a1622f2,#070f18f2);
-    backdrop-filter:blur(6px);
+    display:flex;align-items:center;gap:16px;min-width:0;
+    padding:0 14px;
+    border:1px solid var(--line);border-radius:3px;
+    background:linear-gradient(180deg,#0b1822,#070f16);
+    box-shadow:inset 0 1px 0 rgba(79,195,255,.08);
   }
-  .brand{display:flex;align-items:baseline;gap:10px;white-space:nowrap;}
-  .brand strong{font-size:13px;font-weight:700;letter-spacing:.28em;color:var(--blue);}
-  .brand span{font-size:9px;letter-spacing:.22em;color:var(--hint);text-transform:uppercase;}
-  .brand .ver{font-size:9px;letter-spacing:.1em;color:var(--blue-dim);border:1px solid var(--line);padding:2px 6px;}
+  .brand{display:flex;align-items:center;gap:10px;white-space:nowrap;min-width:0;}
+  .brand .logo{
+    color:var(--blue);font-size:11px;line-height:1;
+    text-shadow:0 0 12px rgba(79,195,255,.9);
+    animation:spinGlow 5s ease-in-out infinite;
+  }
+  @keyframes spinGlow{0%,100%{opacity:1;transform:rotate(0);}50%{opacity:.6;transform:rotate(180deg);}}
+  .brand strong{
+    font-size:12px;font-weight:700;letter-spacing:.3em;color:var(--blue);
+    text-shadow:0 0 16px rgba(79,195,255,.5);
+  }
+  .brand .ver{
+    font-size:9px;letter-spacing:.1em;color:#2f4b5d;
+    border:1px solid var(--line);padding:2px 6px;border-radius:2px;
+  }
+  .status-strip{
+    display:flex;align-items:center;gap:8px;min-width:0;overflow:hidden;
+    font-size:10px;letter-spacing:.14em;color:var(--muted);
+    text-transform:uppercase;white-space:nowrap;
+  }
+  .status-strip .sep{color:#1e3444;}
+  .status-strip b{color:var(--blue-dim);font-weight:400;}
+  .status-strip .dot{width:6px;height:6px;border-radius:50%;background:#3a5364;flex:none;}
+  .status-strip .dot.ok{background:var(--ok);box-shadow:0 0 10px var(--ok);animation:pulse 2.4s ease-in-out infinite;}
+  .status-strip .dot.warn{background:var(--warn);box-shadow:0 0 10px var(--warn);}
+  .status-strip .dot.bad{background:var(--crit);box-shadow:0 0 10px var(--crit);}
+  .clock{
+    margin-left:auto;flex:none;
+    font-size:13px;letter-spacing:.16em;color:var(--blue);
+    text-shadow:0 0 14px rgba(79,195,255,.45);
+    font-variant-numeric:tabular-nums;white-space:nowrap;
+  }
 
-  .connect{display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;}
-  .connect label{font-size:9px;letter-spacing:.2em;color:var(--hint);text-transform:uppercase;}
+  .connect{display:flex;align-items:center;gap:8px;flex:1;min-width:0;}
+  .connect label{font-size:9px;letter-spacing:.2em;color:var(--hint);text-transform:uppercase;flex:none;}
   .connect input{
-    width:210px;max-width:52vw;padding:7px 10px;
+    flex:1;min-width:120px;max-width:460px;padding:7px 10px;
     background:#050c12;border:1px solid var(--line);border-radius:2px;
     color:var(--blue-hi);font-size:12px;letter-spacing:.08em;outline:0;
     transition:border-color .2s,box-shadow .2s;
@@ -95,10 +127,23 @@
   /* ── 三栏布局 ── */
   .shell{
     display:grid;grid-template-columns:212px minmax(0,1fr) 292px;
-    gap:12px;align-items:start;
-    max-width:1600px;margin:0 auto;padding:14px 16px 28px;
+    gap:10px;min-height:0;
   }
-  .side,.main,.tele{display:flex;flex-direction:column;gap:12px;min-width:0;}
+  .side,.main,.tele{display:flex;flex-direction:column;gap:10px;min-width:0;min-height:0;}
+  .side .panel,.tele .panel{display:flex;flex-direction:column;min-height:0;}
+  .side .panel:first-child{flex:none;}
+  .side .panel:last-child{flex:1;}
+  .side .nav{overflow-y:auto;min-height:0;}
+  .tele .panel{flex:none;}
+  .tele{overflow-y:auto;}
+  .main .panel{display:flex;flex-direction:column;min-height:0;}
+  .main .panel#status{flex:none;}
+  .main .panel#synth{flex:1;}
+  .main .panel#synth .panel-body{flex:1;display:flex;flex-direction:column;overflow-y:auto;min-height:0;}
+  .main .panel#synth form{flex:1;display:flex;flex-direction:column;min-height:0;}
+  .main .panel#synth .field:nth-of-type(2){flex:1;min-height:0;}
+  .main .panel#synth #synthText{flex:1;min-height:118px;}
+  .sidetitle{font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--hint);}
 
   .panel{
     position:relative;min-width:0;
@@ -130,6 +175,12 @@
   }
   .panel-head .meta{font-size:9px;letter-spacing:.12em;color:var(--hint);white-space:nowrap;}
   .panel-body{padding:13px;}
+  /* 导航点击后的一次性高亮: 目标面板始终可见时, 用闪动确认"已定位到这里" */
+  .panel.flash,.tele.flash{animation:focusFlash .75s ease-out 1;}
+  @keyframes focusFlash{
+    0%{box-shadow:inset 0 0 0 1px var(--blue),0 0 0 0 rgba(79,195,255,.5);}
+    100%{box-shadow:inset 0 0 0 1px var(--blue),0 0 0 12px rgba(79,195,255,0);}
+  }
 
   /* ── 侧栏 ── */
   .nav{display:flex;flex-direction:column;padding:6px 0;}
@@ -139,12 +190,14 @@
     border-left:2px solid transparent;transition:.16s;
   }
   .nav a:hover{color:var(--blue-hi);background:rgba(79,195,255,.05);border-left-color:var(--blue-dim);}
+  .nav a.active{color:var(--blue-hi);background:rgba(79,195,255,.08);border-left-color:var(--blue);}
   .nav a .k{font-size:9px;color:#24394a;border:1px solid #14232e;padding:1px 4px;border-radius:2px;}
   .side-list{display:flex;flex-direction:column;gap:9px;font-size:11px;line-height:1.5;}
   .side-list .row{display:flex;flex-direction:column;gap:3px;}
   .side-list .k{font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--hint);}
   .side-list .v{color:var(--blue-dim);word-break:break-all;}
-  .side-foot{padding:10px 13px;border-top:1px solid var(--line-soft);font-size:9px;line-height:1.9;letter-spacing:.1em;color:var(--hint);}
+  .side-foot{padding:10px 13px;margin-top:auto;border-top:1px solid var(--line-soft);font-size:9px;line-height:1.9;letter-spacing:.1em;color:var(--hint);}
+  .side-foot b{color:var(--blue-dim);font-weight:400;}
 
   /* ── 状态卡 ── */
   .state-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}
@@ -203,33 +256,74 @@
   }
   .bar.warn i{background:repeating-linear-gradient(90deg,var(--warn) 0 3px,rgba(255,181,71,.26) 3px 5px);}
 
+  /* ── 底部命令行 ── */
+  .cmdbar{
+    display:flex;align-items:center;gap:12px;min-width:0;
+    padding:0 13px;
+    border:1px solid var(--line);border-radius:3px;
+    background:linear-gradient(180deg,#0a1620,#060d13);
+    box-shadow:inset 0 1px 0 rgba(79,195,255,.07);
+  }
+  .cmdbar .prompt{
+    color:var(--blue);font-size:14px;line-height:1;text-shadow:0 0 12px rgba(79,195,255,.8);
+    animation:pulse 2.6s ease-in-out infinite;flex:none;
+  }
+  .cmdbar .conn{flex:none;}
+  .cmdbar .hint{
+    flex:none;font-size:9px;letter-spacing:.16em;color:#2f4b5d;
+    text-transform:uppercase;white-space:nowrap;
+  }
+  /* 扫描线 + 暗角: 纯装饰, 不拦事件 */
+  .fx{position:fixed;inset:0;pointer-events:none;z-index:70;}
+  .fx-scan{
+    background:repeating-linear-gradient(180deg,rgba(79,195,255,.03) 0 1px,transparent 1px 3px);
+    opacity:.55;
+  }
+  .fx-vignette{background:radial-gradient(120% 90% at 50% 42%,transparent 58%,rgba(0,0,0,.5));}
+  @media (prefers-reduced-motion:reduce){
+    .fx-scan{display:none;}
+    .brand .logo,.cmdbar .prompt{animation:none;}
+  }
+
   @media (max-width:1000px){
+    body{height:auto;overflow:auto;}
+    .app{height:auto;grid-template-rows:auto auto auto;padding:8px;}
+    .topbar{min-height:46px;flex-wrap:wrap;padding:8px 12px;row-gap:6px;}
+    .brand .ver{display:none;}
+    .clock{font-size:11px;}
+    .status-strip{order:3;width:100%;}
     .shell{grid-template-columns:minmax(0,1fr);}
     .main{order:1;}
-    .tele{order:2;}
-    .side{order:3;}
-    .connect{margin-left:0;width:100%;}
+    .side{order:2;}
+    .tele{order:3;overflow:visible;}
+    .side .panel:last-child{display:none;}
+    .main .panel#synth .panel-body,.side .nav,.tele{overflow:visible;}
+    .connect{width:100%;}
     .connect input{flex:1 1 180px;max-width:none;}
+    .cmdbar{position:sticky;bottom:0;min-height:50px;flex-wrap:wrap;padding:6px 12px;row-gap:6px;}
+    .cmdbar .prompt,.cmdbar .hint{display:none;}
   }
 </style>
 </head>
 <body>
 
+<div class="app">
+
 <header class="topbar">
   <div class="brand">
+    <span class="logo" aria-hidden="true">◆</span>
     <strong>ADR // SERVER</strong>
-    <span>容器控制台</span>
     <span class="ver">CONTAINER</span>
   </div>
 
-  <form class="connect" id="connectForm" autocomplete="off">
-    <label for="apiKey">API Key</label>
-    <input id="apiKey" type="password" placeholder="未设置 ADR_TTS_API_KEY 时可留空" spellcheck="false">
-    <button class="btn primary" id="connectBtn" type="submit">连接</button>
-    <span class="conn" id="connState" role="status" aria-live="polite">
-      <i class="dot" aria-hidden="true"></i><span id="connText">未连接</span>
-    </span>
-  </form>
+  <div class="status-strip" aria-hidden="true">
+    <span class="dot" id="topDot"></span><span id="topAlive">CONNECTING</span>
+    <span class="sep">/</span><span>PORT <b id="topPort">—</b></span>
+    <span class="sep">/</span><span>Q <b id="topQueue">0</b></span>
+    <span class="sep">/</span><span>ENGINE <b id="topEngine">—</b></span>
+  </div>
+
+  <div class="clock" id="clock" aria-hidden="true">--:--:--</div>
 </header>
 
 <div class="shell">
@@ -237,12 +331,17 @@
   <!-- ══ 左侧: 导航 / 服务信息 ══ -->
   <aside class="side">
     <nav class="panel" aria-label="控制台导航">
-      <div class="panel-head"><h2>导航</h2></div>
+      <div class="panel-head"><h2>控制台</h2><span class="meta">CONSOLE</span></div>
       <div class="nav">
         <a href="#status"><span class="k">01</span>服务状态</a>
         <a href="#synth"><span class="k">02</span>合成试听</a>
         <a href="#telemetry"><span class="k">03</span>运行遥测</a>
-        <a href="/">返回索引</a>
+        <a href="/"><span class="k">04</span>返回索引</a>
+      </div>
+      <div class="side-foot">
+        ENGINE <b>adr-tts</b><br>
+        UPTIME <b id="sfUptime">—</b><br>
+        AUTH <b>X-API-Key</b>
       </div>
     </nav>
 
@@ -361,6 +460,24 @@
 
 </div>
 
+<footer class="cmdbar">
+  <span class="prompt" aria-hidden="true">❯</span>
+  <form class="connect" id="connectForm" autocomplete="off">
+    <label for="apiKey">API Key</label>
+    <input id="apiKey" type="password" placeholder="未设置 ADR_TTS_API_KEY 时可留空" spellcheck="false">
+    <button class="btn primary" id="connectBtn" type="submit">连接</button>
+  </form>
+  <span class="conn" id="connState" role="status" aria-live="polite">
+    <i class="dot" aria-hidden="true"></i><span id="connText">未连接</span>
+  </span>
+  <span class="hint">X-API-Key · 仅当前标签页</span>
+</footer>
+
+</div>
+
+<div class="fx fx-scan" aria-hidden="true"></div>
+<div class="fx fx-vignette" aria-hidden="true"></div>
+
 <script>
 "use strict";
 
@@ -400,9 +517,14 @@ function localErrMsg(body, status) {
   return fb;
 }
 function errMsg(body, status) {
-  return typeof window.adrErrMsg === "function"
+  const raw = typeof window.adrErrMsg === "function"
     ? window.adrErrMsg(body, status)
     : localErrMsg(body, status);
+  const s = String(raw || "");
+  // 网关 502/404 常回整段 HTML, 原样塞进错误条会撑爆布局
+  return /^\s*</.test(s)
+    ? "HTTP " + (status || "?") + "：服务返回 HTML 错误页（可能为网关 502/404）"
+    : s;
 }
 
 /* ── 请求封装: key 只走 X-API-Key, 绝不拼进 URL ── */
@@ -530,6 +652,10 @@ async function refreshHealth() {
     const q = Number(d.queue_depth || 0);
     const b = Number(d.synth_busy || 0);
     setText("sQueue", q + " / " + b, b > 0 ? "warn" : (q > 0 ? "warn" : "ok"));
+    $("topAlive").textContent = "ONLINE";
+    $("topDot").className = "dot ok";
+    $("topQueue").textContent = q + "/" + b;
+    $("topEngine").textContent = stageLabel;
 
     if (d.weights) {
       setText("tT2s", d.weights.t2s || "—", "dim");
@@ -541,6 +667,10 @@ async function refreshHealth() {
     setText("sStage", "—", "");
     $("sStageSub").textContent = "—";
     setText("sQueue", "—", "");
+    $("topAlive").textContent = "OFFLINE";
+    $("topDot").className = "dot bad";
+    $("topQueue").textContent = "—";
+    $("topEngine").textContent = "—";
   }
 }
 
@@ -609,7 +739,9 @@ async function refreshStats() {
     }
     setText("tProfiles", (d.profiles === undefined ? "—" : d.profiles + " 个"), "");
     if (d.models) setText("tModels", d.models.cached + " / " + d.models.total, "");
-    setText("tUptime", fmtUptime(d.uptime_sec), "");
+    const up = fmtUptime(d.uptime_sec);
+    setText("tUptime", up, "");
+    $("sfUptime").textContent = up;
 
     note.textContent = "遥测正常 · 数据来自 GET /api/adr/v1/system/stats。";
     note.className = "msg note";
@@ -713,6 +845,32 @@ async function synthesize(ev) {
 
 /* ── 事件绑定与启动 ── */
 $("svcOrigin").textContent = location.origin;
+$("topPort").textContent = location.port || (location.protocol === "https:" ? "443" : "80");
+
+function tickClock() {
+  $("clock").textContent = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+}
+tickClock();
+setInterval(tickClock, 1000);
+
+
+/* ── 侧栏导航: 固定三栏布局下锚点无滚动目标, 这里显式定位 + 闪动确认 ── */
+document.querySelectorAll(".nav a[href^='#']").forEach((a) => {
+  a.addEventListener("click", (ev) => {
+    const id = (a.getAttribute("href") || "").slice(1);
+    const target = id && $(id);
+    if (!target) return;
+    ev.preventDefault();
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+    document.querySelectorAll(".nav a").forEach((x) => x.classList.remove("active"));
+    a.classList.add("active");
+    target.classList.remove("flash");
+    void target.offsetWidth; /* 重启动画 */
+    target.classList.add("flash");
+    setTimeout(() => target.classList.remove("flash"), 800);
+    try { history.replaceState(null, "", "#" + id); } catch (e) { /* file:// 下忽略 */ }
+  });
+});
 
 $("connectForm").addEventListener("submit", (ev) => {
   ev.preventDefault();

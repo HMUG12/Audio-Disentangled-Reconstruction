@@ -255,8 +255,9 @@
   #st-save.busy { opacity: .6; pointer-events: none; }
   .st-links { font-size: 12.5px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
 </style>
+<link rel="stylesheet" href="app-shell.css">
 </head>
-<body>
+<body data-adr-page="launcher">
   <div id="bn-upd" class="bn">
     <span class="bn-tx"></span>
     <a class="bn-act">查看更新</a>
@@ -267,7 +268,7 @@
     <a class="bn-act">去下载另一包</a>
     <button class="bn-x" title="关闭">✕</button>
   </div>
-  <div class="logo">ADR <em>Studio</em></div>
+  <div class="logo"><span class="adr-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v-4M8 17V7M12 20V4M16 17V7M20 14v-4"/></svg></span>ADR <em>Studio</em></div>
   <div class="sub">本地低资源语音克隆 · 选择一个控制台进入</div>
   <div id="eng">● 检测引擎状态…</div>
 

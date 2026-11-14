@@ -123,8 +123,9 @@
   td { color: var(--muted); padding: 4px 6px; border-bottom: 1px solid var(--row-line); }
   td.ok { color: var(--brand); } td.err { color: var(--err); }
 </style>
+<link rel="stylesheet" href="/app-shell.css">
 </head>
-<body>
+<body data-adr-page="call">
 <header>
   <div class="brand">ADR <em data-i18n="call.brand_em">调用控制台</em></div>
   <div class="engstat" id="engStat" data-i18n="call.eng_checking">引擎状态检查中…</div>
@@ -612,5 +613,6 @@ renderCode();
 pollEngine();
 setInterval(pollEngine, 4000);
 </script>
+<script src="/app-shell.js"></script>
 </body>
 </html>

@@ -953,3 +953,12 @@ def register_pages(app) -> None:
     @app.get("/theme.js", include_in_schema=False)
     async def _theme_js():
         return FileResponse(STATIC_DIR / "theme.js", media_type="application/javascript")
+
+    # 统一外壳层: 顶栏 / 全局导航 / 文档抽屉 (各页 </head> 前引用, 覆盖页面排版)
+    @app.get("/app-shell.css", include_in_schema=False)
+    async def _app_shell_css():
+        return FileResponse(STATIC_DIR / "app-shell.css", media_type="text/css")
+
+    @app.get("/app-shell.js", include_in_schema=False)
+    async def _app_shell_js():
+        return FileResponse(STATIC_DIR / "app-shell.js", media_type="application/javascript")

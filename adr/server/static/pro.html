@@ -216,8 +216,9 @@
   .legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px;
     vertical-align: middle; margin-right: 5px; }
 </style>
+<link rel="stylesheet" href="/app-shell.css">
 </head>
-<body>
+<body data-adr-page="pro">
 
 <header>
   <div class="brand"><b>ADR STUDIO</b><span data-i18n="pro.brand_sub">专业控制台</span></div>
@@ -1222,5 +1223,6 @@ I.init("pro", { onSwitch: () => {
 /* 主题切换后 canvas 重绘 (颜色取自 CSS 变量) */
 if (window.adrTheme) window.adrTheme.onChange(() => { loadStats(); drawCurve(); drawSpark(); });
 </script>
+<script src="/app-shell.js"></script>
 </body>
 </html>

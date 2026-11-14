@@ -57,6 +57,10 @@ def _is_exempt(path) -> bool:
         return True
     if path == "/theme.js":
         return True
+    # 统一外壳层的 CSS/JS (app-shell.css|js): 以 <link>/<script> 子请求加载,
+    # 浏览器不带 key; 纯静态无业务数据, 与 theme.js 同档豁免。
+    if path in ("/app-shell.css", "/app-shell.js"):
+        return True
     return False
 
 

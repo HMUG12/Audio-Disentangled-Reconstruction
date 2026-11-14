@@ -216,8 +216,9 @@
   .mini { font-size: 12.5px; color: var(--dim); text-align: center; margin-top: 18px; }
   .mini a { color: var(--blue); cursor: pointer; text-decoration: none; font-weight: 600; }
 </style>
+<link rel="stylesheet" href="/app-shell.css">
 </head>
-<body>
+<body data-adr-page="easy">
 
 <header>
   <div class="logo" data-i18n-html="easy.logo">🎙 ADR 语音小助手<small>三步就能让文字开口说话</small></div>
@@ -821,5 +822,6 @@ $("vImportFile").onchange = async () => {
 /* 启动 */
 showStep(1);
 </script>
+<script src="/app-shell.js"></script>
 </body>
 </html>

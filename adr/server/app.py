@@ -28,7 +28,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from adr.core import settings
-from adr.server import console, native, openai_compat, v2_compat, v3_compat
+from adr.server import console, docs_api, native, openai_compat, v2_compat, v3_compat
 from adr.server.auth import APIKeyMiddleware
 from adr.server.exceptions import (
     PAYLOAD_TOO_LARGE,
@@ -318,6 +318,7 @@ def create_app(engine=None) -> FastAPI:
     app.include_router(openai_compat.router)  # 批次21: OpenAI 兼容面 (/v1/audio/speech)
     app.include_router(native.router)
     app.include_router(console.router)  # 批次14: 控制台 API (状态/训练/模型)
+    app.include_router(docs_api.router)  # 内置文档中心 (本地全量 + 官方仓库增量)
     console.register_pages(app)         # 批次14: 静态控制台页 (/, /pro, /easy)
     assert_unique_routes(app)           # M3-b: native/console 共用前缀, 冲突即启动失败
     return app

@@ -12,75 +12,106 @@
   /* classic: 原暗色配色 (变量取原值) */
   :root {
     color-scheme: dark;
-    --bg: #0a0d14; --txt: #e8ecf4; --brand: #2dd4bf; --sub: #7c8aa5;
+    --bg: #0a0d14; --txt: #e8ecf4; --brand: #2dd4bf; --brand-d: #14b8a6; --sub: #7c8aa5;
     --card: #121724; --line: #1f2740; --hover-line: #2dd4bf66; --hover-shadow: 0 8px 28px #0008;
     --ic-bg: #1a2337; --dsc: #8391ab; --arrow: #475a7d; --card-shadow: none;
+    --dim: #64748b; --tint: #16283a; --tint2: #1a3347; --field: #0f1521;
   }
   /* default: 浅蓝手绘风 */
   [data-theme="default"] {
     color-scheme: light;
-    --bg: #F0F7FF; --txt: #1A202C; --brand: #2B6CB0; --sub: #718096;
+    --bg: #F4F8FE; --txt: #1A202C; --brand: #2B6CB0; --brand-d: #1E4F86; --sub: #5B6B82;
     --card: #FFFFFF; --line: #DCEBFB; --hover-line: #5EAAF7;
-    --hover-shadow: 0 4px 12px rgba(94, 170, 247, 0.3);
-    --ic-bg: #F0F7FF; --dsc: #718096; --arrow: #5EAAF7;
-    --card-shadow: 0 8px 24px rgba(94, 170, 247, 0.15);
+    --hover-shadow: 0 12px 30px rgba(43, 108, 176, 0.16);
+    --ic-bg: #EAF4FF; --dsc: #5B6B82; --arrow: #5EAAF7;
+    --card-shadow: 0 8px 24px rgba(94, 170, 247, 0.13);
+    --dim: #8495AB; --tint: #EAF4FF; --tint2: #E2EFFE; --field: #FAFCFF;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
     font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
-    background: var(--bg); color: var(--txt); min-height: 100vh;
-    display: grid; place-items: center; user-select: none;
+    background:
+      radial-gradient(760px 420px at 88% -8%, rgba(94, 170, 247, .14), transparent 62%),
+      radial-gradient(620px 380px at -6% 104%, rgba(43, 108, 176, .08), transparent 60%),
+      var(--bg);
+    color: var(--txt); min-height: 100vh; user-select: none;
   }
-  .wrap { width: min(680px, 92vw); text-align: center; padding: 48px 0; }
-  .logo { font-size: 30px; font-weight: 700; letter-spacing: 1px; }
-  .logo em { font-style: normal; color: var(--brand); }
-  .sub { color: var(--sub); font-size: 14px; margin: 10px 0 36px; }
-  .grid { display: grid; gap: 14px; }
-  a.card {
-    display: flex; align-items: center; gap: 16px; text-decoration: none;
-    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
-    padding: 20px 24px; color: var(--txt); transition: .18s; box-shadow: var(--card-shadow);
+  body[data-adr-page="index"] .hub { text-align: left; }
+  .hub-hero { margin-bottom: 34px; }
+  .hub-foot code {
+    background: var(--field); border: 1px solid var(--line); border-radius: 5px;
+    padding: 1px 6px; font-family: "Cascadia Mono", Consolas, monospace; font-size: 11px;
   }
-  a.card:hover { border-color: var(--hover-line); transform: translateY(-2px);
-    box-shadow: var(--hover-shadow); }
-  .ic { width: 40px; height: 40px; flex: none; display: grid; place-items: center;
-    background: var(--ic-bg); border-radius: 10px; }
-  .ttl { font-size: 16px; font-weight: 600; }
-  .dsc { font-size: 12.5px; color: var(--dsc); margin-top: 3px; }
-  .arrow { margin-left: auto; color: var(--arrow); font-size: 18px; }
 </style>
+<link rel="stylesheet" href="/app-shell.css">
 </head>
-<body>
-  <div class="wrap">
-    <div class="logo">ADR <em>Studio</em></div>
-    <div class="sub" data-i18n="index.sub">本地低资源语音克隆 · 控制台索引（浏览器直达）</div>
-    <div class="grid">
-      <a class="card" href="/easy">
-        <div class="ic">🎙️</div>
-        <div>
-          <div class="ttl" data-i18n="index.easy_title">新手控制台</div>
-          <div class="dsc" data-i18n="index.easy_desc">3 步出声 · 零参数 · 纯小白友好</div>
-        </div>
-        <div class="arrow">→</div>
+<body data-adr-page="index">
+  <div class="hub">
+    <div class="hub-top">
+      <div class="hub-brand">
+        <span class="adr-mark" aria-hidden="true"></span>
+        <span>ADR Studio</span><small>本地语音克隆</small>
+      </div>
+      <nav class="adr-topnav" aria-label="控制台导航"></nav>
+    </div>
+
+    <section class="hub-hero">
+      <h1 data-i18n-html="index.hero_title">本地语音克隆，<em>三步出声</em></h1>
+      <p data-i18n="index.hero_desc">全程本地运行，无需上传云端。选一个适合你的控制台，从一段录音开始。</p>
+    </section>
+
+    <div class="hub-cards">
+      <a class="hub-card" href="/easy">
+        <span class="hub-ic" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3v3M12 18v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M3 12h3M18 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>
+            <circle cx="12" cy="12" r="3.5"/>
+          </svg>
+        </span>
+        <h2 data-i18n="index.easy_title">新手控制台</h2>
+        <p data-i18n="index.easy_desc">3 步出声 · 零参数 · 纯小白友好</p>
+        <span class="hub-go" data-i18n="index.enter">进入</span>
       </a>
-      <a class="card" href="/pro">
-        <div class="ic">📊</div>
-        <div>
-          <div class="ttl" data-i18n="index.pro_title">专业控制台</div>
-          <div class="dsc" data-i18n="index.pro_desc">数据可视化 · 训练曲线 · 模型库全参数</div>
-        </div>
-        <div class="arrow">→</div>
+
+      <a class="hub-card" href="/pro">
+        <span class="hub-ic" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 19V9M10 19V5M16 19v-6M22 19H2"/>
+          </svg>
+        </span>
+        <h2 data-i18n="index.pro_title">专业控制台</h2>
+        <p data-i18n="index.pro_desc">数据可视化 · 训练曲线 · 模型库全参数</p>
+        <span class="hub-go" data-i18n="index.enter">进入</span>
       </a>
-      <a class="card" href="/call">
-        <div class="ic">🔗</div>
-        <div>
-          <div class="ttl" data-i18n="index.call_title">调用控制台</div>
-          <div class="dsc" data-i18n="index.call_desc">API 参数调优 · 生成 cURL/Python/JS 对接代码 · 合成试听</div>
-        </div>
-        <div class="arrow">→</div>
+
+      <a class="hub-card" href="/call">
+        <span class="hub-ic" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M8 12h8M12 8v8"/><rect x="3" y="3" width="18" height="18" rx="4"/>
+          </svg>
+        </span>
+        <h2 data-i18n="index.call_title">调用控制台</h2>
+        <p data-i18n="index.call_desc">API 参数调优 · 生成 cURL/Python/JS 对接代码 · 合成试听</p>
+        <span class="hub-go" data-i18n="index.enter">进入</span>
       </a>
     </div>
-    <div class="sub" style="margin-top:32px" data-i18n-html="index.gradio_note">
+
+    <div class="hub-docs">
+      <a class="hub-card" href="#" data-adr-docs-open>
+        <span class="hub-ic" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M8 7h8M8 11h5"/>
+          </svg>
+        </span>
+        <div>
+          <h2 data-i18n="index.docs_title">文档中心</h2>
+          <p data-i18n="index.docs_desc">离线内置全部用户文档 · 联网可拉取官方最新版</p>
+        </div>
+        <span class="hub-go" data-i18n="index.docs_open">打开</span>
+      </a>
+    </div>
+
+    <div class="hub-foot" data-i18n-html="index.gradio_note">
       经典 Gradio 控制台请通过桌面壳启动器进入，或运行 <code>python -m adr.cli webui</code>
     </div>
   </div>
@@ -88,5 +119,6 @@
 "use strict";
 I.init("index", {});
 </script>
+<script src="/app-shell.js"></script>
 </body>
 </html>

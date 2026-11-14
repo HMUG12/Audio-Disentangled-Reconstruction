@@ -125,12 +125,17 @@ def test_static_scripts_exempt_with_key_set(monkeypatch, tmp_path):
     # 纯静态脚本放行 (不是 401)
     assert c.get("/theme.js").status_code == 200
     assert c.get("/i18n.js").status_code == 200
+    # 统一外壳层 (link/script 子请求, 同样不带 key)
+    assert c.get("/app-shell.css").status_code == 200
+    assert c.get("/app-shell.js").status_code == 200
 
 
 def test_theme_js_is_exempt_unit():
     from adr.server.auth import _is_exempt
 
     assert _is_exempt("/theme.js") is True
+    assert _is_exempt("/app-shell.css") is True
+    assert _is_exempt("/app-shell.js") is True
     assert _is_exempt("/api/adr/v1/profiles") is False
 
 

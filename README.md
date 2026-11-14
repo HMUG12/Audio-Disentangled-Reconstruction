@@ -1,5 +1,5 @@
 # ADR Studio — 本地语音克隆与合成工作台
-
+![alt text](ADR图标-1.png)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 
 **ADR**（Audio Disentangled Reconstruction）是一个运行在**你自己电脑上**的语音克隆 / TTS 工作台：用几分钟参考音频完成声音克隆训练，并提供 GPT-SoVITS 兼容的流式合成服务。所有推理与训练均在本地完成，**你的语音与文本数据不会上传到任何服务器**。
@@ -31,7 +31,7 @@ ADR 具备克隆任意人声的技术能力，使用前请务必确认以下边�
 
 ### 方式一：Windows 安装包（推荐）
 
-1. 下载安装包（二选一；也可从 [123 云盘分享](https://1860775428.share.123pan.com/123pan/5KDqvd-oPPsv)（提取码 `ADRS`）下载）：
+1. 下载安装包（二选一；
    - **CPU 版**：[ADR-Studio-1.3.1-x64-setup.exe](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/download/v1.3.1/ADR-Studio-1.3.1-x64-setup.exe)（约 460MB，无独立显卡设备）
    - **GPU 版**：[ADR-Studio-1.3.1-x64-gpu-setup.exe](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/download/v1.3.1/ADR-Studio-1.3.1-x64-gpu-setup.exe)（约 1.9GB，NVIDIA CUDA 加速）
 

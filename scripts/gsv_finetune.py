@@ -250,8 +250,16 @@ def main():
         tmp_cfg.parent.mkdir(exist_ok=True)
         tmp_cfg.write_text(json.dumps(cfg), encoding="utf-8")
         # O3: Ampere+ 显卡 (A2000/30/40 系) 走 bf16 混合精度 — 显存降 30~40%,
-        # 免 loss scale 更稳; 老卡 (Turing-) 自动回落 fp16 现状
-        s2_env = {"ADR_S2_BF16": "1"} if torch.cuda.is_bf16_supported() else None
+        # 免 loss scale 更稳; 老卡 (Turing-) 自动回落 fp16 现状。
+        # 注意: 部分 CUDA/cuFFT 组合不支持 bf16 FFT (s2 训练内 STFT 会直接抛
+        # "cuFFT doesn't support tensor of type: BFloat16"), 故先实测一次再决定。
+        s2_env = None
+        if torch.cuda.is_bf16_supported():
+            try:
+                torch.fft.rfft(torch.zeros(64, dtype=torch.bfloat16, device="cuda"))
+                s2_env = {"ADR_S2_BF16": "1"}
+            except Exception as e:
+                print(f"[O3] cuFFT 不支持 bf16 FFT ({e.__class__.__name__}), 回落 fp16 混合精度")
         run([PY, "-s", "GPT_SoVITS/s2_train.py", "--config", str(tmp_cfg)],
             env=s2_env, desc=f"6/7 SoVITS 微调 ({args.s2_epochs} epochs)")
 
