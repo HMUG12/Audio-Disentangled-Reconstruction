@@ -9,6 +9,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 UPDATE_RS = REPO / "desktop" / "src-tauri" / "src" / "update.rs"
 LIB_RS = REPO / "desktop" / "src-tauri" / "src" / "lib.rs"
+# M2 壳层模块化: Tauri 命令实现已拆到 commands.rs (lib.rs 只留装配)
+COMMANDS_RS = REPO / "desktop" / "src-tauri" / "src" / "commands.rs"
 LAUNCHER = REPO / "desktop" / "src" / "launcher.html"
 PREWARM = REPO / "desktop" / "src" / "prewarm.html"
 BUILD_RUNTIME = REPO / "scripts" / "build_runtime.ps1"
@@ -279,7 +281,7 @@ def test_open_path_rejects_files_and_plain_http():
     """open::that 对 .exe 是直接运行: 前端一旦被注入, 旧实现（放行 http/https
     任意 URL + 任意存在文件）等于任意本地程序执行。现在只放行 https 链接与
     已存在的目录。"""
-    src = LIB_RS.read_text(encoding="utf-8")
+    src = COMMANDS_RS.read_text(encoding="utf-8")
     fn = src[src.index("fn open_path(path: String)"):]
     fn = fn[: fn.index("/// CPU 自动兼容检测结果")]
     assert 'starts_with("https://")' in fn

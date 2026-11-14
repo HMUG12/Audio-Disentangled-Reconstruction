@@ -6,7 +6,7 @@
   2. README 含源码获取途径（AGPL-3.0 §6 源码随包提供）
   3. README 含风险披露与禁止性条款
   4. THIRD_PARTY_LICENSES.md 存在且含核心组件条目
-  5. 首启条款流存在：prewarm.html 条款视图 + lib.rs 三命令 + .terms_agreed_v1 标记
+  5. 首启条款流存在：prewarm.html 条款视图 + 壳 src 三命令 + .terms_agreed_v1 标记
   6. CI smoke 已接入本脚本（防门禁被静默移除）
   7. 声音安全三层（批次 62）：审计设施 / 无 UI 条款 gate / WAV 元数据注入 / 声纹单独同意 / 壳侧开关
 
@@ -80,12 +80,14 @@ def main() -> int:
         if invoke not in prewarm:
             problems.append(f"prewarm.html: 缺少条款流调用 {invoke}")
 
-    librs = _read("desktop/src-tauri/src/lib.rs")
+    # M2 壳层模块化: 条款命令在 commands.rs, 标记路径在 system.rs — 不再只看 lib.rs
+    shell_src = "".join(p.read_text(encoding="utf-8")
+                        for p in sorted((ROOT / "desktop/src-tauri/src").glob("*.rs")))
     for cmd in ("fn terms_agreed", "fn agree_terms", "fn reject_terms", "fn terms_agreed_flag"):
-        if cmd not in librs:
-            problems.append(f"lib.rs: 缺少条款命令/辅助函数 {cmd}")
-    if ".terms_agreed_v1" not in librs:
-        problems.append("lib.rs: 缺少 .terms_agreed_v1 标记路径")
+        if cmd not in shell_src:
+            problems.append(f"壳 src: 缺少条款命令/辅助函数 {cmd}")
+    if ".terms_agreed_v1" not in shell_src:
+        problems.append("壳 src: 缺少 .terms_agreed_v1 标记路径")
 
     # 6. CI smoke 已接入本脚本 (防门禁被静默移除)
     if "check_compliance.py" not in _read(".github/workflows/smoke.yml"):
@@ -114,8 +116,8 @@ def main() -> int:
             problems.append(f"adr/server/console.py: 缺少上传侧要素 {sym}")
     if "ADR_AGREE_TERMS" not in _read("docker/docker-compose.yml"):
         problems.append("docker/docker-compose.yml: 缺少 ADR_AGREE_TERMS 条款说明")
-    if "ADR_SAFETY_AUDIT" not in _read("desktop/src-tauri/src/lib.rs"):
-        problems.append("desktop/src-tauri/src/lib.rs: 缺少 ADR_SAFETY_AUDIT 壳侧开关")
+    if "ADR_SAFETY_AUDIT" not in shell_src:
+        problems.append("壳 src: 缺少 ADR_SAFETY_AUDIT 壳侧开关")
 
     if problems:
         for p in problems:

@@ -117,6 +117,24 @@
 
 **风险与回退**：中等。错误外壳变动会打破调用方字符串匹配。回退：保留旧 `detail` 字段（当前已保留），只增不改。
 
+**进度（批次 132 / 133）**
+
+- 批次 132（M3-a 错误码与媒体类型收口）：
+  - `adr/server/exceptions.py` 新增 `WIRE_CODES` 单点表与 `error_body` / `json_error` / `ws_error` 三个外壳构造器；
+  - v2 / v3 WS / native / 中间件（413/422）/ 鉴权 401 全部改引常量，协议文件不再写 `code` 字面量；
+  - 媒体类型沿用历史 wire 值 `invalid_params`（语义键 `unsupported_media` 只登记、不换值，调用方字符串匹配零改动）；
+  - `SynthesisService.content_type()` 成为 `Content-Type` 唯一出口，`MEDIA_TYPES` 白名单同源；
+  - `tts-api-spec.md` §2.4 错误表补齐 + 新增 §2.6 缓存版本与失效规则。
+- 批次 133（M3-b 路由断言 + 流式参数门禁）：
+  - `native.py` 写明 `/api/adr/v1` 归属（音色档案一等公民接口），`app.create_app()` 末尾调用
+    `assert_unique_routes()`：同 `method + path` 重复注册直接 `RuntimeError`；
+  - 复核流式切片三参数：`gsv_engine` 只经 `settings.stream_head_chars()` /
+    `split_max_chars()` / `fragment_interval_default()` 读取，无协议层裸读 env；新增 AST 门禁锁死该约束；
+  - `contracts.md` 新增第 10 节（协议面前缀归属表 + `WIRE_CODES` 单点说明）。
+- 门禁：`tests/test_m3_contract.py`（9 条）；顺带修正 M2 模块化后仍指向 `lib.rs` 的 3 条壳层测试与
+  `check_compliance.py` 的壳侧扫描路径。
+- **未执行**：安装包构建与安装后冒烟（用户明确「先不打包」），留待发布前补跑。
+
 ---
 
 ## M4 Runtime Profile 与模块化安装（较高风险）

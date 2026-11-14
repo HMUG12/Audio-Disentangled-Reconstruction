@@ -117,6 +117,26 @@
 
 1. 新增环境变量 → 登记 `ENV_REGISTRY` + 本文第 4 节 + `shell.json` 映射（若由壳设置）。
 2. 新增 Tauri 命令 → `generate_handler!` + 本文第 1 节形态表（若涉及启动）。
-3. 新增 HTTP 路由 → 确认前缀归属（`/api/v2`、`/api/v3`、`/v1`、`/api/adr/v1`），并注意 `native` 与 `console` 共用前缀。
+3. 新增 HTTP 路由 → 确认前缀归属（`/api/v2`、`/api/v3`、`/v1`、`/api/adr/v1`，见第 10 节），并注意 `native` 与 `console` 共用前缀；同 `method + path` 重复注册会被 `assert_unique_routes()` 在启动期拦下。
 4. 改端口/数据目录/凭据逻辑 → 必须同时核对第 2、6、7 节与两侧实现。
 5. 本文与 `ENV_REGISTRY` 不一致时，以代码 + 门禁测试为准，并当批修文档。
+
+## 10. 协议面与错误码（M3）
+
+| 协议面 | 前缀 | 所属模块 |
+| --- | --- | --- |
+| GSV api_v2 兼容 | `/api/v2` | `adr/server/v2_compat.py` |
+| ADR v3 WebSocket | `/api/v3` | `adr/server/v3_compat.py` |
+| OpenAI 兼容 | `/v1` | `adr/server/openai_compat.py` |
+| ADR 原生 + 控制台 | `/api/adr/v1` | `native.py`（health/readyz/profiles/tts）+ `console.py`（system/train/models/控制台页） |
+
+`/api/adr/v1` 由两个 router 共同承载。`create_app()` 末尾调用
+`assert_unique_routes()`：同一 `method + path` 被注册两次直接 `RuntimeError`，
+不会静默覆盖成后注册者。新增路由前按第 9 节第 3 条确认归属。
+
+wire 错误码单点是 `adr/server/exceptions.py` 的 `WIRE_CODES`。v2 / v3 WS /
+OpenAI / native / 中间件 / 鉴权 401 只引用常量与 `json_error` / `ws_error`
+外壳构造器，协议文件不再写 `code` 字面量。媒体类型错误沿用历史 wire 值
+`invalid_params`（语义键 `unsupported_media` 仅登记、不换值），调用方现有的
+字符串匹配零改动；`Content-Type` 的唯一出口是
+`SynthesisService.content_type()`。门禁：`tests/test_m3_contract.py`。

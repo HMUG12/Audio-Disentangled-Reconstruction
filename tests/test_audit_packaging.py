@@ -166,16 +166,18 @@ def test_runtime_bins_path_injection(tmp_path, monkeypatch):
 
 INSTALLER_ISS = REPO / "scripts" / "installer" / "installer.iss"
 SHELL_MAIN = REPO / "adr" / "server" / "__main__.py"
-SHELL_RS = REPO / "desktop" / "src-tauri" / "src" / "lib.rs"
+SHELL_SRC = REPO / "desktop" / "src-tauri" / "src"
 
 APP_MUTEX = "ADR-Studio-Running"
 
 
 def test_app_mutex_name_consistent_across_three_sides():
-    """防漂移: 壳 (lib.rs) / 服务 (__main__.py) / 安装器 ([Setup] AppMutex)
+    """防漂移: 壳 (src-tauri/src/*.rs) / 服务 (__main__.py) / 安装器 ([Setup] AppMutex)
     三端名字必须逐字一致 — 跨语言无法编译期共享, 只能靠本断言锁死。
     名字不一致 = 卸载器检测不到运行中的程序, "先关程序再卸载"直接失效。"""
-    assert APP_MUTEX in SHELL_RS.read_text(encoding="utf-8")
+    shell_src = "".join(p.read_text(encoding="utf-8")
+                        for p in sorted(SHELL_SRC.glob("*.rs")))
+    assert APP_MUTEX in shell_src
     assert APP_MUTEX in SHELL_MAIN.read_text(encoding="utf-8")
     iss = INSTALLER_ISS.read_text(encoding="utf-8")
     assert f"AppMutex={APP_MUTEX}" in iss

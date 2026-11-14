@@ -10,6 +10,10 @@ from adr.server import __main__ as server_main
 REPO = Path(__file__).resolve().parents[1]
 CALL_HTML = REPO / "adr" / "server" / "static" / "call.html"
 LIB_RS = REPO / "desktop" / "src-tauri" / "src" / "lib.rs"
+# M2 壳层模块化: 预热轮询 / 导航 key 透传已拆出 lib.rs
+LIFECYCLE_RS = REPO / "desktop" / "src-tauri" / "src" / "lifecycle.rs"
+SIDECAR_RS = REPO / "desktop" / "src-tauri" / "src" / "sidecar.rs"
+COMMANDS_RS = REPO / "desktop" / "src-tauri" / "src" / "commands.rs"
 LAUNCHER = REPO / "desktop" / "src" / "launcher.html"
 
 
@@ -56,7 +60,7 @@ def test_warn_silent_with_real_key(monkeypatch, capsys):
 
 # ===== P23: 壳预热轮询走免鉴权的 /health =====
 def test_shell_prewarm_polls_health():
-    src = LIB_RS.read_text(encoding="utf-8")
+    src = LIFECYCLE_RS.read_text(encoding="utf-8")
     fn = src[src.index("fn fetch_engine_stage_info"):]
     fn = fn[: fn.index("\n}\n")]
     assert '"{base}/api/adr/v1/health"' in fn
@@ -132,10 +136,13 @@ def test_theme_js_is_exempt_unit():
 
 # ===== P24: 壳导航控制台页带 api_key; launcher 拉档案带 key =====
 def test_shell_navigation_appends_key():
-    src = LIB_RS.read_text(encoding="utf-8")
-    assert "fn console_key_query()" in src and "fn key_query(raw: &str)" in src
-    assert "console_key_query()" in src[src.index("async fn enter_console"):src.index("fn start_server(")]
-    assert '"&api_key=' in src or "&api_key={enc}" in src
+    sidecar = SIDECAR_RS.read_text(encoding="utf-8")
+    assert "fn console_key_query()" in sidecar and "fn key_query(raw: &str)" in sidecar
+    assert "&api_key={enc}" in sidecar
+    cmds = COMMANDS_RS.read_text(encoding="utf-8")
+    fn = cmds[cmds.index("async fn enter_console"):]
+    fn = fn[: fn.index("\n}\n")]
+    assert "console_key_query()" in fn
 
 
 def test_launcher_profiles_fetch_forwards_key():
