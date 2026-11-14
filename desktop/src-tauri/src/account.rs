@@ -37,7 +37,7 @@ struct AccountFile {
 
 /// 账号文件落点: `<数据目录>\.local_account` (与条款标记同目录, 覆盖安装保留)。
 fn account_path() -> Option<PathBuf> {
-    crate::adr_data_dir().map(|d| d.join(".local_account"))
+    crate::config::adr_data_dir().map(|d| d.join(".local_account"))
 }
 
 /// 读取账号文件 (坏 JSON / 读不到 → None = 走默认账号)。
@@ -216,7 +216,7 @@ pub fn account_set(username: String, password: String) -> Result<(), String> {
     };
     save_account(&acc)?;
     LOGGED_IN.store(true, Ordering::Relaxed);
-    crate::proc_log("account", &format!("本地账号已更新: {}", acc.username));
+    crate::lifecycle::proc_log("account", &format!("本地账号已更新: {}", acc.username));
     Ok(())
 }
 

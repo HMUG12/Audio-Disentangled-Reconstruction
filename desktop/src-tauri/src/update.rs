@@ -245,7 +245,7 @@ fn verify_manifest(m: &UpdateManifest) -> Result<(), String> {
 
 /// 清单缓存文件: 与 shell.json 同目录 (%LOCALAPPDATA%\ADR)。
 fn cache_path() -> PathBuf {
-    super::shell_settings_path()
+    crate::config::shell_settings_path()
         .parent()
         .map(|p| p.join("update_cache.json"))
         .unwrap_or_else(|| std::env::temp_dir().join("adr_update_cache.json"))
@@ -279,9 +279,9 @@ pub fn package_variant() -> String {
 /// 是否装了 NVIDIA 显卡: 查内核显示驱动服务 nvlddmkm (注册表, 零外进程开销)。
 #[cfg(windows)]
 fn has_nvidia_gpu() -> bool {
-    let mut cmd = super::Command::new("reg");
+    let mut cmd = std::process::Command::new("reg");
     cmd.args(["query", r"HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm"]);
-    cmd.creation_flags(super::CREATE_NO_WINDOW);
+    cmd.creation_flags(crate::system::CREATE_NO_WINDOW);
     cmd.output().map(|o| o.status.success()).unwrap_or(false)
 }
 
@@ -419,7 +419,7 @@ pub fn check_update(app: tauri::AppHandle, force: Option<bool>) -> Result<serde_
         "cached": from_cache,
         "releases_url": RELEASES_URL,
     });
-    super::proc_log("update", &format!(
+    crate::lifecycle::proc_log("update", &format!(
         "检查更新: 当前 {current} / 清单 {} / 可用 {available}{}",
         m.version, if from_cache { " (缓存)" } else { "" }
     ));
@@ -525,7 +525,7 @@ fn download_one(
 
 /// 安装包落盘目录; 也是 install_update 唯一允许执行的文件前缀。
 fn updates_dir() -> Result<PathBuf, String> {
-    super::adr_data_dir()
+    crate::config::adr_data_dir()
         .map(|d| d.join("updates"))
         .ok_or_else(|| "数据目录不可用, 无法保存安装包".to_string())
 }
@@ -569,11 +569,11 @@ fn download_blocking(
 
     let mut errors: Vec<String> = Vec::new();
     for (i, url) in sources.iter().enumerate() {
-        super::proc_log("update", &format!("下载安装包 [{}/{}]: {url}", i + 1, sources.len()));
+        crate::lifecycle::proc_log("update", &format!("下载安装包 [{}/{}]: {url}", i + 1, sources.len()));
         match download_one(app, url, &dest, pkg.size, i + 1) {
             Ok(got) => match sha256_hex(&dest) {
                 Ok(h) if h == expect => {
-                    super::proc_log("update", &format!("下载完成并校验通过: {got} 字节"));
+                    crate::lifecycle::proc_log("update", &format!("下载完成并校验通过: {got} 字节"));
                     eval_progress(&app.get_webview_window("main"), got, got, i + 1);
                     return Ok(dest);
                 }
@@ -647,10 +647,10 @@ fn spawn_installer(path: &str) -> Result<(), String> {
          del \"%~f0\"\r\n"
     );
     std::fs::write(&bat, script).map_err(|e| format!("写更新助手脚本失败: {e}"))?;
-    super::Command::new("cmd")
+    std::process::Command::new("cmd")
         .arg("/C")
         .arg(&bat)
-        .creation_flags(super::CREATE_NO_WINDOW | DETACHED_PROCESS)
+        .creation_flags(crate::system::CREATE_NO_WINDOW | DETACHED_PROCESS)
         .spawn()
         .map_err(|e| format!("启动安装程序失败: {e}"))?;
     Ok(())
@@ -709,7 +709,7 @@ pub fn install_update(app: tauri::AppHandle) -> Result<(), String> {
     }
     let path = canon.to_string_lossy().to_string();
     spawn_installer(&path)?;
-    super::proc_log("update", &format!("已派发静默安装, 壳即将退出: {path}"));
+    crate::lifecycle::proc_log("update", &format!("已派发静默安装, 壳即将退出: {path}"));
     // 留 800ms 让前端把「安装中」提示刷出来, 再退出
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(800));
