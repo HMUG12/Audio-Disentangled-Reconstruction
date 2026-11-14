@@ -17,6 +17,9 @@
 - ADR_T2S_CUDAGRAPH / ADR_T2S_STATIC_KV / ADR_T2S_CUDAGRAPH_BUCKETS — 是写默认值
   (setdefault) 的引擎启动行为, 留在 gsv_engine。
 
+**这些例外以及全仓所有 ``ADR_*`` 变量统一登记在下方 ENV_REGISTRY**（M1）:
+新增变量必须同时登记, 否则 ``tests/test_env_registry.py`` 失败。
+
 Policy (core/policy.py, v1.3.x) 只会往 env 写 ADR_TORCH_THREADS /
 ADR_TTS_STREAM_HEAD / ADR_TTS_SPLIT_MAX, 且不覆盖显式 env; 本文件读取口径不变。
 
@@ -56,6 +59,96 @@ def ensure_runtime_bins_on_path() -> None:
 # 模块级执行: server / webui / doctor 等所有入口最终都 import 本模块,
 # 收口在这里才能覆盖全部启动路径 (python -m adr.server、server.bat、壳拉起)
 ensure_runtime_bins_on_path()
+
+# ===== 环境变量登记表 (M1, 批次129) =====
+# 全仓 ``ADR_*`` 环境变量的唯一名单。新增 / 删除变量必须同步本表:
+# ``tests/test_env_registry.py`` 双向断言 —— 源码有而表缺、表有而源码无, 均失败。
+#
+# 取值 = 读取方 (用于排查"这个变量归谁管"), 不是默认值:
+#   settings  本文件 (服务/引擎开关单源)
+#   config    数据目录 / 预设推导 (core/config.py)
+#   server    adr/server 就地读取 (启动校验 / 日志 / 参数归一 / 上传上限)
+#   engine    adr/models 引擎与内核补丁
+#   training  训练侧 (DataLoader / 进程数)
+#   console   控制台训练·模型·自检
+#   import    音色包导入上限 (models/voice_package.py)
+#   bootstrap 底模下载与引导
+#   cli       推理管线上限 (inference/pipeline.py)
+#   shell     Tauri 壳读取或注入 (desktop/src-tauri)
+ENV_REGISTRY: dict[str, str] = {
+    # --- 服务面鉴权 / CORS / 请求体 ---
+    "ADR_TTS_API_KEY": "settings",
+    "ADR_ALLOW_QUERY_API_KEY": "settings",
+    "ADR_ALLOW_UNAUTHENTICATED": "server",
+    "ADR_CORS_ORIGINS": "settings",
+    "ADR_ALLOWED_HOSTS": "settings",
+    "ADR_TTS_AUDIO_ROOTS": "settings",
+    "ADR_MAX_BODY_MB": "settings",
+    "ADR_PROFILE_IMPORT_MAX_MB": "server",
+    "ADR_FFMPEG_TIMEOUT_SEC": "server",
+    "ADR_LOG_LEVEL": "server",
+    "ADR_ENGINE_WATCHDOG_SEC": "engine",
+    # --- 合成参数上限 ---
+    "ADR_TTS_MAX_TEXT_CHARS": "server",
+    "ADR_TTS_MAX_QUEUE": "server",
+    "ADR_TTS_REF_MAX_MB": "server",
+    "ADR_TTS_SPEED_MIN": "server",
+    "ADR_TTS_SPEED_MAX": "server",
+    "ADR_TTS_WEIGHTS_MAX_MB": "engine",
+    "ADR_INFER_MAX_TEXT_CHARS": "cli",
+    "ADR_INFER_MAX_TIMESTEPS": "cli",
+    # --- 缓存 ---
+    "ADR_TTS_CACHE": "settings",
+    "ADR_TTS_CACHE_DIR": "settings",
+    "ADR_TTS_CACHE_MAX": "settings",
+    "ADR_TTS_CACHE_MB": "settings",
+    "ADR_SEG_CACHE": "settings",
+    "ADR_SEG_CACHE_MAX": "settings",
+    "ADR_SEG_CACHE_MB": "settings",
+    # --- 引擎 / 设备 / 加速 ---
+    "ADR_TTS_DEVICE": "settings",
+    "ADR_TORCH_THREADS": "settings",
+    "ADR_GPU_MEM_FRACTION": "settings",
+    "ADR_TTS_DEFAULT_PROFILE": "settings",
+    "ADR_TTS_FRAGMENT_INTERVAL": "settings",
+    "ADR_TTS_KEEP_TQDM": "settings",
+    "ADR_TTS_KEEP_EMPTY_CACHE": "settings",
+    "ADR_TTS_BATCH_SIZE": "settings",
+    "ADR_T2S_BATCH_RNG": "settings",
+    "ADR_T2S_COALESCE": "settings",
+    "ADR_T2S_COALESCE_BATCH": "settings",
+    "ADR_T2S_CUDAGRAPH": "engine",
+    "ADR_T2S_CUDAGRAPH_BUCKETS": "engine",
+    "ADR_T2S_STATIC_KV": "engine",
+    "ADR_AR_SYNC_EVERY": "engine",
+    "ADR_AR_SYNC_LEGACY": "engine",
+    "ADR_AR_DEBUG_TOKENS": "engine",
+    # --- 调度 / 流式 / Runtime 闭环 ---
+    "ADR_SCHED_MAX_CONCURRENCY": "settings",
+    "ADR_TTS_STREAM_HEAD": "settings",
+    "ADR_TTS_SPLIT_MAX": "settings",
+    "ADR_RUNTIME_AUTOTUNE": "settings",
+    # --- 训练 ---
+    "ADR_S2_NUM_WORKERS": "training",
+    "ADR_TRAIN_TIMEOUT": "console",
+    # --- 声音安全 / 条款 ---
+    "ADR_SAFETY_AUDIT": "settings",
+    "ADR_WAV_METADATA": "settings",
+    "ADR_AGREE_TERMS": "settings",
+    # --- 数据 / 资产 ---
+    "ADR_DATA_DIR": "config",
+    "ADR_CONFIG": "config",
+    "ADR_PRESET": "config",
+    "ADR_MODEL_SOURCE": "bootstrap",
+    "ADR_DOWNLOAD_RATE_MBPS": "bootstrap",
+    "ADR_IMPORT_MAX_INMEM_MB": "import",
+    "ADR_IMPORT_MAX_TOTAL_MB": "import",
+    # --- 仅桌面壳 ---
+    "ADR_DESKTOP_PYTHON": "shell",
+    "ADR_LOG_DIR": "shell",
+    "ADR_BUILD_VARIANT": "shell",
+}
+
 
 # ===== 默认值 (原散布点的字面常量, 就地收编) =====
 DEFAULT_TTS_CACHE_MAX_ENTRIES = 32

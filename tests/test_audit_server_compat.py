@@ -531,3 +531,40 @@ def test_openai_sdk_error_shell(client, voice_dir):
     with pytest.raises(openai.BadRequestError) as ei:
         _sdk_call(client.app, call)
     assert "speed_factor out of range" in str(ei.value)
+
+
+# ─── M1 (批次129): Q7 回归 — 编码/落盘不得在事件循环线程 ───
+
+def test_encode_and_cache_runs_off_event_loop(client, engine, voice_dir, monkeypatch):
+    """非流式响应的 ffmpeg 编码 + 缓存落盘必须在工作线程执行。
+
+    判据: 在工作线程里 ``asyncio.get_running_loop()`` 必然抛 RuntimeError;
+    若实现退回事件循环内同步调用, 这里会拿到 running loop 而失败。
+    (Q7 原问题: 单请求即可阻塞 /health 与流式首包)
+    """
+    import asyncio
+    import threading
+
+    from adr.server import v2_compat
+
+    real = v2_compat._encode_and_cache
+    seen: dict = {}
+
+    def spy(*args, **kw):
+        try:
+            asyncio.get_running_loop()
+            seen["in_loop"] = True
+        except RuntimeError:
+            seen["in_loop"] = False
+        seen["thread"] = threading.current_thread().name
+        return real(*args, **kw)
+
+    monkeypatch.setattr(v2_compat, "_encode_and_cache", spy)
+
+    r = client.post("/api/v2/tts", json=dict(BODY, media_type="wav"))
+    assert r.status_code == 200
+    assert r.content[:4] == b"RIFF"
+    assert seen.get("in_loop") is False, (
+        f"编码/落盘发生在事件循环线程 ({seen.get('thread')}), Q7 回归"
+    )
+    assert engine.synth_calls == 1
