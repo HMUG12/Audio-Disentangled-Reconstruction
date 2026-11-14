@@ -22,6 +22,18 @@ param(
 )
 $ErrorActionPreference = "Stop"
 
+# PS 5.1: Stop 会把原生命令往 stderr 写的任何一行 (tauri CLI 的 "Info ..."、
+# ISCC 的告警) 升级成终止性 NativeCommandError, 打包当场断掉 (批次120 同源
+# 问题, 见 build_runtime.ps1)。原生命令成败只看 $LASTEXITCODE, 故用这两个
+# 函数夹住; 必须在脚本顶层用 $script: 赋值, 写进函数只影响函数自身作用域。
+function Enter-NativeStep {
+    $script:EapSaved = $ErrorActionPreference
+    $script:ErrorActionPreference = "Continue"
+}
+function Exit-NativeStep {
+    $script:ErrorActionPreference = $script:EapSaved
+}
+
 $root = Split-Path -Parent $PSScriptRoot
 $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 if (-not (Test-Path $iscc)) {
@@ -97,12 +109,15 @@ if ($DryRun) {
 }
 
 Push-Location (Join-Path $root "desktop\src-tauri")
+Enter-NativeStep
 try {
   $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
   & $tauriCli build --no-bundle
-  if ($LASTEXITCODE -ne 0) { throw "tauri build failed" }
+  $rcTauri = $LASTEXITCODE
 }
 finally { Pop-Location }
+Exit-NativeStep
+if ($rcTauri -ne 0) { throw "tauri build failed" }
 
 $isccArgs = @()
 if ($Gpu) {
@@ -112,8 +127,11 @@ if ($Gpu) {
 # 构建根较深时实测 12 个文件超 MAX_PATH 260 (最长 269)。配合上面的预检块。
 $isccArgs += "/DRUNTIME_DIR_ABS=" + (Resolve-Path $rtRoot).Path
 $isccArgs += (Join-Path $PSScriptRoot "installer\installer.iss")
+Enter-NativeStep
 & $iscc @isccArgs
-if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+$rcIscc = $LASTEXITCODE
+Exit-NativeStep
+if ($rcIscc -ne 0) { throw "ISCC failed" }
 
 $out = Join-Path $root "desktop\src-tauri\target\release\bundle\inno"
 Get-ChildItem $out | Select-Object Name, @{n = 'MB'; e = { [math]::Round($_.Length / 1MB, 1) } }
