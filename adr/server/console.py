@@ -5,6 +5,7 @@
 - /pro     pro.html    专业控制台 (深色数据可视化, 全参数)
 - /easy    easy.html   新手控制台 (向导式, 零参数)
 - /call    call.html   调用控制台 (局域网 API 调试, 批次26 补记)
+- /server  server.html 容器/服务端独立控制台 (深蓝控制台, 与桌面页视觉分离)
 
 训练链路与 webui._run_gsv_finetune 完全同构:
     python -u scripts/gsv_finetune.py <audio> --exp <name> --s2-epochs <N>
@@ -927,6 +928,11 @@ def register_pages(app) -> None:
     @app.get("/call", include_in_schema=False)
     async def _call():
         return FileResponse(STATIC_DIR / "call.html", media_type="text/html")
+
+    # 容器/服务端形态的独立 Web 控制台 (视觉与桌面 pro/easy/call 分离)
+    @app.get("/server", include_in_schema=False)
+    async def _server():
+        return FileResponse(STATIC_DIR / "server.html", media_type="text/html")
 
     # 批次54: 控制台中英文切换运行时 (页面统一引用 /i18n.js, 同源不撞 CSP)
     @app.get("/i18n.js", include_in_schema=False)

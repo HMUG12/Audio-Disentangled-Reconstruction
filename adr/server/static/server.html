@@ -1,0 +1,735 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'">
+<title>ADR Server — 深蓝控制台</title>
+<script src="/i18n.js"></script>
+<style>
+  :root{
+    color-scheme: dark;
+    --bg:#05090f;
+    --panel:#0b1220;
+    --panel-hi:#0d1826;
+    --line:#152a38;
+    --line-soft:#0e1e29;
+    --blue:#4fc3ff;
+    --blue-hi:#b6e9ff;
+    --blue-dim:#2f87b0;
+    --blue-dark:#123c54;
+    --text:#b9ccda;
+    --muted:#6b8296;
+    --hint:#476274;
+    --ok:#45f0c0;
+    --warn:#ffb547;
+    --crit:#ff7096;
+    --mono:"Cascadia Mono","JetBrains Mono","IBM Plex Mono",Consolas,"Microsoft YaHei",monospace;
+  }
+  *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  body{
+    margin:0;min-height:100vh;
+    background:
+      radial-gradient(1100px 640px at 50% -12%, #0a1826 0%, #05090f 56%, #030508 100%);
+    color:var(--text);font-family:var(--mono);font-size:13px;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--blue-dim);text-decoration:none;}
+  a:hover{color:var(--blue);}
+  button,input,select,textarea{font:inherit;color:inherit;}
+  :focus-visible{outline:1px solid var(--blue);outline-offset:2px;}
+
+  /* ── 顶栏 ── */
+  .topbar{
+    position:sticky;top:0;z-index:20;
+    display:flex;align-items:center;gap:18px;flex-wrap:wrap;
+    padding:11px 18px;
+    border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg,#0a1622f2,#070f18f2);
+    backdrop-filter:blur(6px);
+  }
+  .brand{display:flex;align-items:baseline;gap:10px;white-space:nowrap;}
+  .brand strong{font-size:13px;font-weight:700;letter-spacing:.28em;color:var(--blue);}
+  .brand span{font-size:9px;letter-spacing:.22em;color:var(--hint);text-transform:uppercase;}
+  .brand .ver{font-size:9px;letter-spacing:.1em;color:var(--blue-dim);border:1px solid var(--line);padding:2px 6px;}
+
+  .connect{display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;}
+  .connect label{font-size:9px;letter-spacing:.2em;color:var(--hint);text-transform:uppercase;}
+  .connect input{
+    width:210px;max-width:52vw;padding:7px 10px;
+    background:#050c12;border:1px solid var(--line);border-radius:2px;
+    color:var(--blue-hi);font-size:12px;letter-spacing:.08em;outline:0;
+    transition:border-color .2s,box-shadow .2s;
+  }
+  .connect input::placeholder{color:#2a4352;letter-spacing:.06em;}
+  .connect input:focus{border-color:var(--blue-dim);box-shadow:0 0 0 1px rgba(79,195,255,.16),0 0 18px -8px rgba(79,195,255,.6);}
+  .btn{
+    padding:7px 14px;border:1px solid var(--line);border-radius:2px;
+    background:linear-gradient(180deg,rgba(79,195,255,.10),rgba(79,195,255,.02));
+    color:var(--blue-hi);font-size:10px;font-weight:600;letter-spacing:.2em;
+    text-transform:uppercase;cursor:pointer;transition:.18s;touch-action:manipulation;
+  }
+  .btn:hover{border-color:var(--blue-dim);box-shadow:0 0 20px -9px rgba(79,195,255,.8);}
+  .btn:active{transform:translateY(1px);}
+  .btn.primary{
+    border-color:var(--blue-dim);
+    background:linear-gradient(180deg,rgba(79,195,255,.2),rgba(79,195,255,.06));
+  }
+  .btn.wide{width:100%;padding:10px;}
+
+  .conn{
+    display:inline-flex;align-items:center;gap:8px;
+    font-size:10px;letter-spacing:.14em;color:var(--muted);
+    border:1px solid var(--line);border-radius:2px;padding:6px 10px;white-space:nowrap;
+  }
+  .conn .dot{width:6px;height:6px;border-radius:50%;background:#3a5364;flex:none;}
+  .conn.ok{color:var(--ok);border-color:rgba(69,240,192,.28);}
+  .conn.ok .dot{background:var(--ok);box-shadow:0 0 9px var(--ok);}
+  .conn.bad{color:var(--crit);border-color:rgba(255,112,150,.3);}
+  .conn.bad .dot{background:var(--crit);box-shadow:0 0 9px var(--crit);}
+  .conn.busy{color:var(--warn);border-color:rgba(255,181,71,.3);}
+  .conn.busy .dot{background:var(--warn);box-shadow:0 0 9px var(--warn);animation:pulse 1.2s ease-in-out infinite;}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.25;}}
+
+  /* ── 三栏布局 ── */
+  .shell{
+    display:grid;grid-template-columns:212px minmax(0,1fr) 292px;
+    gap:12px;align-items:start;
+    max-width:1600px;margin:0 auto;padding:14px 16px 28px;
+  }
+  .side,.main,.tele{display:flex;flex-direction:column;gap:12px;min-width:0;}
+
+  .panel{
+    position:relative;min-width:0;
+    background:linear-gradient(180deg,var(--panel-hi),var(--panel));
+    border:1px solid var(--line);border-radius:3px;
+    box-shadow:inset 0 1px 0 rgba(79,195,255,.06),0 14px 34px -24px #000;
+    overflow:hidden;
+  }
+  .panel::after{
+    content:"";position:absolute;inset:5px;pointer-events:none;opacity:.5;
+    background:
+      linear-gradient(var(--blue-dim),var(--blue-dim)) left top/10px 1px no-repeat,
+      linear-gradient(var(--blue-dim),var(--blue-dim)) left top/1px 10px no-repeat,
+      linear-gradient(var(--blue-dim),var(--blue-dim)) right top/10px 1px no-repeat,
+      linear-gradient(var(--blue-dim),var(--blue-dim)) right top/1px 10px no-repeat,
+      linear-gradient(var(--blue-dim),var(--blue-dim)) left bottom/10px 1px no-repeat,
+      linear-gradient(var(--blue-dim),var(--blue-dim)) left bottom/1px 10px no-repeat,
+      linear-gradient(var(--blue-dim),var(--blue-dim)) right bottom/10px 1px no-repeat,
+      linear-gradient(var(--blue-dim),var(--blue-dim)) right bottom/1px 10px no-repeat;
+  }
+  .panel-head{
+    display:flex;align-items:center;justify-content:space-between;gap:10px;
+    padding:9px 13px;border-bottom:1px solid var(--line-soft);
+    background:linear-gradient(180deg,rgba(79,195,255,.05),transparent);
+  }
+  .panel-head h2{
+    margin:0;font-size:10px;font-weight:600;letter-spacing:.22em;
+    text-transform:uppercase;color:var(--blue-dim);
+  }
+  .panel-head .meta{font-size:9px;letter-spacing:.12em;color:var(--hint);white-space:nowrap;}
+  .panel-body{padding:13px;}
+
+  /* ── 侧栏 ── */
+  .nav{display:flex;flex-direction:column;padding:6px 0;}
+  .nav a{
+    display:flex;align-items:center;gap:9px;padding:9px 13px;
+    font-size:11px;letter-spacing:.12em;color:var(--muted);
+    border-left:2px solid transparent;transition:.16s;
+  }
+  .nav a:hover{color:var(--blue-hi);background:rgba(79,195,255,.05);border-left-color:var(--blue-dim);}
+  .nav a .k{font-size:9px;color:#24394a;border:1px solid #14232e;padding:1px 4px;border-radius:2px;}
+  .side-list{display:flex;flex-direction:column;gap:9px;font-size:11px;line-height:1.5;}
+  .side-list .row{display:flex;flex-direction:column;gap:3px;}
+  .side-list .k{font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--hint);}
+  .side-list .v{color:var(--blue-dim);word-break:break-all;}
+  .side-foot{padding:10px 13px;border-top:1px solid var(--line-soft);font-size:9px;line-height:1.9;letter-spacing:.1em;color:var(--hint);}
+
+  /* ── 状态卡 ── */
+  .state-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}
+  .state{
+    border:1px solid var(--line-soft);border-radius:2px;padding:10px 11px;
+    background:#060d15;
+  }
+  .state .k{font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:var(--hint);}
+  .state .v{margin-top:6px;font-size:16px;font-weight:600;letter-spacing:.04em;color:var(--text);font-variant-numeric:tabular-nums;}
+  .state .v.ok{color:var(--ok);text-shadow:0 0 14px rgba(69,240,192,.35);}
+  .state .v.warn{color:var(--warn);text-shadow:0 0 14px rgba(255,181,71,.35);}
+  .state .v.err{color:var(--crit);text-shadow:0 0 14px rgba(255,112,150,.35);}
+  .state .sub{margin-top:4px;font-size:10px;line-height:1.5;color:var(--muted);word-break:break-word;}
+
+  /* ── 表单 ── */
+  .field{display:flex;flex-direction:column;gap:6px;margin-bottom:12px;}
+  .field:last-child{margin-bottom:0;}
+  .field label{font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:var(--hint);}
+  .field textarea,.field select{
+    width:100%;background:#050c12;border:1px solid var(--line);border-radius:2px;
+    color:var(--blue-hi);font-size:12.5px;padding:9px 10px;outline:0;
+    transition:border-color .2s,box-shadow .2s;
+  }
+  .field textarea{resize:vertical;min-height:118px;line-height:1.65;letter-spacing:.02em;}
+  .field textarea:focus,.field select:focus{border-color:var(--blue-dim);box-shadow:0 0 0 1px rgba(79,195,255,.14),0 0 18px -8px rgba(79,195,255,.6);}
+  .field .hint{font-size:10px;line-height:1.6;color:var(--hint);}
+
+  .msg{
+    margin:10px 0 0;padding:8px 10px;border:1px solid transparent;border-radius:2px;
+    font-size:11px;line-height:1.65;min-height:0;
+  }
+  /* 空状态仍留在可访问树中, 保证 aria-live 首次写入能被朗读 */
+  .msg:empty{padding:0;border:0;background:none;margin:0;}
+  .msg.ok{color:var(--ok);border-color:rgba(69,240,192,.28);background:rgba(69,240,192,.05);}
+  .msg.err{color:var(--crit);border-color:rgba(255,112,150,.3);background:rgba(255,112,150,.05);}
+  .msg.note{color:var(--muted);border-color:var(--line-soft);background:#060d15;}
+
+  audio{width:100%;margin-top:11px;filter:invert(.92) hue-rotate(168deg);}
+  audio[hidden]{display:none;}
+
+  /* ── 遥测 ── */
+  .kv{display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px solid var(--line-soft);}
+  .kv:last-child{border-bottom:0;}
+  .kv .k{font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--hint);white-space:nowrap;}
+  .kv .v{font-size:11px;text-align:right;color:var(--text);word-break:break-word;font-variant-numeric:tabular-nums;}
+  .kv .v.ok{color:var(--ok);}
+  .kv .v.warn{color:var(--warn);}
+  .kv .v.err{color:var(--crit);}
+  .kv .v.dim{color:var(--muted);}
+
+  .bar{height:4px;background:#0b1a24;border-radius:1px;overflow:hidden;margin:3px 0 7px;}
+  .bar i{
+    display:block;height:100%;width:0;
+    background:repeating-linear-gradient(90deg,var(--blue) 0 3px,rgba(79,195,255,.26) 3px 5px);
+    box-shadow:0 0 8px rgba(79,195,255,.45);transition:width .6s ease;
+  }
+  .bar.warn i{background:repeating-linear-gradient(90deg,var(--warn) 0 3px,rgba(255,181,71,.26) 3px 5px);}
+
+  @media (max-width:1000px){
+    .shell{grid-template-columns:minmax(0,1fr);}
+    .main{order:1;}
+    .tele{order:2;}
+    .side{order:3;}
+    .connect{margin-left:0;width:100%;}
+    .connect input{flex:1 1 180px;max-width:none;}
+  }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <strong>ADR // SERVER</strong>
+    <span>容器控制台</span>
+    <span class="ver">CONTAINER</span>
+  </div>
+
+  <form class="connect" id="connectForm" autocomplete="off">
+    <label for="apiKey">API Key</label>
+    <input id="apiKey" type="password" placeholder="未设置 ADR_TTS_API_KEY 时可留空" spellcheck="false">
+    <button class="btn primary" id="connectBtn" type="submit">连接</button>
+    <span class="conn" id="connState" role="status" aria-live="polite">
+      <i class="dot" aria-hidden="true"></i><span id="connText">未连接</span>
+    </span>
+  </form>
+</header>
+
+<div class="shell">
+
+  <!-- ══ 左侧: 导航 / 服务信息 ══ -->
+  <aside class="side">
+    <nav class="panel" aria-label="控制台导航">
+      <div class="panel-head"><h2>导航</h2></div>
+      <div class="nav">
+        <a href="#status"><span class="k">01</span>服务状态</a>
+        <a href="#synth"><span class="k">02</span>合成试听</a>
+        <a href="#telemetry"><span class="k">03</span>运行遥测</a>
+        <a href="/">返回索引</a>
+      </div>
+    </nav>
+
+    <section class="panel" aria-labelledby="svcTitle">
+      <div class="panel-head"><h2 id="svcTitle">服务信息</h2></div>
+      <div class="panel-body side-list">
+        <div class="row"><span class="k">地址</span><span class="v" id="svcOrigin">—</span></div>
+        <div class="row"><span class="k">API 前缀</span><span class="v">/api/adr/v1</span></div>
+        <div class="row"><span class="k">鉴权</span><span class="v">X-API-Key 请求头</span></div>
+      </div>
+    </section>
+  </aside>
+
+  <!-- ══ 中间: 状态 + 合成 ══ -->
+  <main class="main">
+
+    <section class="panel" id="status" aria-labelledby="statusTitle">
+      <div class="panel-head">
+        <h2 id="statusTitle">服务状态</h2>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="meta" id="lastUpdate">尚未刷新</span>
+          <button class="btn" id="refreshBtn" type="button">刷新</button>
+        </div>
+      </div>
+      <div class="panel-body">
+        <div class="state-grid">
+          <div class="state">
+            <div class="k">存活 · /health</div>
+            <div class="v" id="sAlive">检测中</div>
+            <div class="sub" id="sAliveSub">—</div>
+          </div>
+          <div class="state">
+            <div class="k">就绪 · /readyz</div>
+            <div class="v" id="sReady">检测中</div>
+            <div class="sub" id="sReadySub">—</div>
+          </div>
+          <div class="state">
+            <div class="k">引擎阶段</div>
+            <div class="v" id="sStage">—</div>
+            <div class="sub" id="sStageSub">—</div>
+          </div>
+          <div class="state">
+            <div class="k">队列 / 合成中</div>
+            <div class="v" id="sQueue">—</div>
+            <div class="sub">queue_depth / synth_busy</div>
+          </div>
+        </div>
+        <p class="msg" id="statusMsg" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+
+    <section class="panel" id="synth" aria-labelledby="synthTitle">
+      <div class="panel-head">
+        <h2 id="synthTitle">合成试听</h2>
+        <span class="meta">POST /api/adr/v1/tts</span>
+      </div>
+      <div class="panel-body">
+        <form id="synthForm" autocomplete="off">
+          <div class="field">
+            <label for="profileSel">音色档案</label>
+            <select id="profileSel">
+              <option value="">连接后加载档案</option>
+            </select>
+            <span class="hint" id="profileHint">档案清单来自 GET /api/adr/v1/profiles。</span>
+          </div>
+
+          <div class="field">
+            <label for="synthText">合成文本</label>
+            <textarea id="synthText" placeholder="输入要合成的中文文本" spellcheck="false">你好，这里是 ADR 服务端合成测试。</textarea>
+          </div>
+
+          <button class="btn primary wide" id="synthBtn" type="submit">合成试听</button>
+        </form>
+
+        <p class="msg" id="synthMsg" role="status" aria-live="polite"></p>
+        <audio id="player" controls hidden aria-label="合成结果试听"></audio>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ══ 右侧: 遥测 ══ -->
+  <aside class="tele" id="telemetry">
+    <section class="panel" aria-labelledby="teleTitle">
+      <div class="panel-head">
+        <h2 id="teleTitle">运行遥测</h2>
+        <span class="meta">自动刷新 · 5s</span>
+      </div>
+      <div class="panel-body">
+        <div class="kv"><span class="k">GPU</span><span class="v dim" id="tGpu">—</span></div>
+        <div class="kv"><span class="k">显存</span><span class="v dim" id="tVram">—</span></div>
+        <div class="bar" id="vramBar"><i id="vramFill"></i></div>
+        <div class="kv"><span class="k">内存</span><span class="v dim" id="tRam">—</span></div>
+        <div class="bar" id="ramBar"><i id="ramFill"></i></div>
+        <div class="kv"><span class="k">磁盘</span><span class="v dim" id="tDisk">—</span></div>
+        <div class="kv"><span class="k">音色档案</span><span class="v" id="tProfiles">—</span></div>
+        <div class="kv"><span class="k">预训练模型</span><span class="v" id="tModels">—</span></div>
+        <div class="kv"><span class="k">运行时长</span><span class="v" id="tUptime">—</span></div>
+        <div class="kv"><span class="k">GPT 权重</span><span class="v dim" id="tT2s">—</span></div>
+        <div class="kv"><span class="k">SoVITS 权重</span><span class="v dim" id="tVits">—</span></div>
+        <p class="msg note" id="teleNote" role="status" aria-live="polite">遥测数据来自 GET /api/adr/v1/system/stats（需鉴权）。</p>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="authTitle">
+      <div class="panel-head"><h2 id="authTitle">鉴权说明</h2></div>
+      <div class="panel-body">
+        <p class="msg note" style="margin:0">
+          API Key 仅保存在当前标签页的 sessionStorage（键名 adr_api_key），
+          所有请求经 X-API-Key 头发送，不写入 URL。
+          未配置 ADR_TTS_API_KEY 的服务端可留空连接。
+        </p>
+      </div>
+    </section>
+  </aside>
+
+</div>
+
+<script>
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+const KEY_STORE = "adr_api_key";
+
+let apiKey = "";
+try { apiKey = sessionStorage.getItem(KEY_STORE) || ""; } catch (e) { apiKey = ""; }
+
+let profiles = [];
+let audioUrl = "";
+let synthCtrl = null;
+let refreshing = false;
+
+/* ── 错误文案: 优先复用 /i18n.js 的 adrErrMsg, 缺失时本地兜底 ── */
+function localErrMsg(body, status) {
+  const fb = "HTTP " + (status || 0);
+  const str = (v) => (typeof v === "string" && v.trim() ? v.trim() : "");
+  if (typeof body === "string") return str(body) || fb;
+  if (!body || typeof body !== "object") return fb;
+  const m = str(body.message) || str(body.detail) || str(body.error && body.error.message);
+  if (m) return m;
+  const d = body.detail !== undefined ? body.detail : body.error;
+  if (Array.isArray(d)) {
+    const parts = d.map((e) => {
+      if (typeof e === "string") return e.trim();
+      if (!e || typeof e !== "object") return "";
+      const loc = Array.isArray(e.loc) ? e.loc.filter((x) => x !== "body" && x !== "query").join(".") : "";
+      const msg = typeof e.msg === "string" ? e.msg : "";
+      return loc && msg ? loc + ": " + msg : msg;
+    }).filter(Boolean);
+    if (parts.length) return parts.join("；");
+  }
+  if (d && typeof d === "object") {
+    try { return JSON.stringify(d); } catch (_) { return fb; }
+  }
+  return fb;
+}
+function errMsg(body, status) {
+  return typeof window.adrErrMsg === "function"
+    ? window.adrErrMsg(body, status)
+    : localErrMsg(body, status);
+}
+
+/* ── 请求封装: key 只走 X-API-Key, 绝不拼进 URL ── */
+function headers(extra) {
+  const h = Object.assign({}, extra || {});
+  if (apiKey) h["X-API-Key"] = apiKey;
+  return h;
+}
+function apiFetch(path, opts) {
+  const o = Object.assign({}, opts || {});
+  o.headers = headers(o.headers);
+  return fetch(path, o);
+}
+async function readBody(res) {
+  const text = await res.text();
+  if (!text) return {};
+  try { return JSON.parse(text); } catch (_) { return text; }
+}
+
+/* ── 顶部连接状态 ── */
+function setConn(kind, text) {
+  $("connState").className = "conn " + kind;
+  $("connText").textContent = text;
+}
+function setStatusMsg(text, isErr) {
+  const el = $("statusMsg");
+  el.textContent = text || "";
+  el.className = "msg" + (text ? (isErr ? " err" : " ok") : "");
+}
+function setText(id, text, cls) {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = text;
+  if (cls !== undefined) el.className = "v " + cls;
+}
+
+/* ── 档案下拉 ── */
+function fillProfiles() {
+  const sel = $("profileSel");
+  sel.innerHTML = "";
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = profiles.length ? "请选择音色档案" : "暂无音色档案";
+  sel.appendChild(none);
+  for (const p of profiles) {
+    const o = document.createElement("option");
+    o.value = p.name;
+    o.textContent = p.name + (p.style ? " · " + p.style : "");
+    o.dataset.prompt = p.prompt_text || "";
+    o.dataset.lang = p.language || "zh";
+    sel.appendChild(o);
+  }
+  if (profiles.length === 1) sel.value = profiles[0].name;
+  $("profileHint").textContent = profiles.length
+    ? "档案清单来自 GET /api/adr/v1/profiles，共 " + profiles.length + " 个。"
+    : "档案清单来自 GET /api/adr/v1/profiles；当前没有可用档案。";
+}
+
+async function connect() {
+  const entered = $("apiKey").value.trim();
+  const prev = apiKey;
+  apiKey = entered;
+  setConn("busy", "验证中…");
+  try {
+    const res = await apiFetch("/api/adr/v1/profiles", { cache: "no-store" });
+    if (res.status === 401 || res.status === 403) {
+      apiKey = prev;
+      setConn("bad", "鉴权失败");
+      setStatusMsg("API Key 无效或未携带。请填写与服务端 ADR_TTS_API_KEY 一致的密钥。", true);
+      return false;
+    }
+    const data = await readBody(res);
+    if (!res.ok) throw new Error(errMsg(data, res.status));
+    profiles = Array.isArray(data.profiles) ? data.profiles : [];
+    fillProfiles();
+    try { sessionStorage.setItem(KEY_STORE, entered); } catch (e) { /* 隐私模式 */ }
+    setConn("ok", "已连接 · " + profiles.length + " 个档案");
+    setStatusMsg("", false);
+    refreshAll();
+    return true;
+  } catch (e) {
+    apiKey = prev;
+    setConn("bad", "连接失败");
+    setStatusMsg("无法连接服务：" + e.message, true);
+    return false;
+  }
+}
+
+/* ── 状态轮询 ── */
+const STAGE = {
+  "": "未加载",
+  queued: "排队预热",
+  importing: "导入依赖",
+  downloading: "下载权重",
+  loading: "加载模型",
+  kernel: "初始化内核",
+  ready: "就绪",
+  failed: "启动失败"
+};
+
+async function refreshHealth() {
+  try {
+    const res = await apiFetch("/api/adr/v1/health", { cache: "no-store" });
+    const d = await readBody(res);
+    if (!res.ok) throw new Error(errMsg(d, res.status));
+
+    if (d.status === "ok") {
+      setText("sAlive", "正常", "ok");
+      setText("sAliveSub", "api " + (d.api_version || "—") + " · " + (d.service || "adr-tts"));
+    } else {
+      setText("sAlive", String(d.status || "未知"), "warn");
+      setText("sAliveSub", d.service || "—");
+    }
+
+    const stage = d.engine_stage || "";
+    const stageLabel = STAGE[stage] !== undefined ? STAGE[stage] : stage;
+    const stageCls = stage === "failed" ? "err" : d.engine_ready ? "ok" : "warn";
+    setText("sStage", stageLabel, stageCls);
+    let sub = d.engine_stage_text || (stage ? "stage=" + stage : "尚未加载");
+    if (stage === "failed" && d.engine_error) {
+      sub = String(d.engine_error).split("\n").pop().slice(0, 160);
+    }
+    $("sStageSub").textContent = sub;
+
+    const q = Number(d.queue_depth || 0);
+    const b = Number(d.synth_busy || 0);
+    setText("sQueue", q + " / " + b, b > 0 ? "warn" : (q > 0 ? "warn" : "ok"));
+
+    if (d.weights) {
+      setText("tT2s", d.weights.t2s || "—", "dim");
+      setText("tVits", d.weights.vits || "—", "dim");
+    }
+  } catch (e) {
+    setText("sAlive", "无法连接", "err");
+    setText("sAliveSub", e.message);
+    setText("sStage", "—", "");
+    $("sStageSub").textContent = "—";
+    setText("sQueue", "—", "");
+  }
+}
+
+async function refreshReady() {
+  try {
+    const res = await apiFetch("/api/adr/v1/readyz", { cache: "no-store" });
+    const d = await readBody(res);
+    if (res.status === 200 && d.status === "ok") {
+      setText("sReady", "就绪", "ok");
+      setText("sReadySub", "engine_stalled=false");
+    } else {
+      setText("sReady", d.status === "unavailable" ? "不可用" : "HTTP " + res.status, "err");
+      const bits = [];
+      if (d.engine_stalled) bits.push("stalled=true");
+      if (typeof d.degraded_seconds === "number") bits.push("降级 " + d.degraded_seconds + "s");
+      if (d.engine_stage) bits.push("stage=" + d.engine_stage);
+      setText("sReadySub", bits.length ? bits.join(" · ") : "—");
+    }
+  } catch (e) {
+    setText("sReady", "无法连接", "err");
+    setText("sReadySub", e.message);
+  }
+}
+
+function bar(id, fillId, pct, warn) {
+  const box = $(id), fill = $(fillId);
+  const p = Math.max(0, Math.min(100, Number(pct) || 0));
+  fill.style.width = p + "%";
+  box.className = "bar" + (warn ? " warn" : "");
+}
+
+async function refreshStats() {
+  const note = $("teleNote");
+  try {
+    const res = await apiFetch("/api/adr/v1/system/stats", { cache: "no-store" });
+    const d = await readBody(res);
+    if (res.status === 401 || res.status === 403) {
+      note.textContent = "遥测需 API Key：鉴权失败，请在上方连接。";
+      note.className = "msg note";
+      return;
+    }
+    if (!res.ok) throw new Error(errMsg(d, res.status));
+
+    if (d.gpu) {
+      setText("tGpu", d.gpu.name || "GPU", "");
+      const pct = d.gpu.total_gb ? (d.gpu.used_gb / d.gpu.total_gb) * 100 : 0;
+      setText("tVram", d.gpu.used_gb + " / " + d.gpu.total_gb + " GB", pct >= 90 ? "warn" : "");
+      bar("vramBar", "vramFill", pct, pct >= 90);
+    } else {
+      setText("tGpu", "未检测到 CUDA 设备", "dim");
+      setText("tVram", "—", "dim");
+      bar("vramBar", "vramFill", 0, false);
+    }
+    if (d.ram) {
+      setText("tRam", d.ram.used_gb + " / " + d.ram.total_gb + " GB (" + d.ram.percent + "%)",
+        d.ram.percent >= 90 ? "warn" : "");
+      bar("ramBar", "ramFill", d.ram.percent, d.ram.percent >= 90);
+    } else {
+      setText("tRam", "—", "dim");
+      bar("ramBar", "ramFill", 0, false);
+    }
+    if (d.disk) {
+      setText("tDisk", "剩余 " + d.disk.free_gb + " GB / 共 " + d.disk.total_gb + " GB", "");
+    } else {
+      setText("tDisk", "—", "dim");
+    }
+    setText("tProfiles", (d.profiles === undefined ? "—" : d.profiles + " 个"), "");
+    if (d.models) setText("tModels", d.models.cached + " / " + d.models.total, "");
+    setText("tUptime", fmtUptime(d.uptime_sec), "");
+
+    note.textContent = "遥测正常 · 数据来自 GET /api/adr/v1/system/stats。";
+    note.className = "msg note";
+  } catch (e) {
+    note.textContent = "遥测不可用：" + e.message;
+    note.className = "msg note";
+  }
+}
+
+function fmtUptime(s) {
+  if (typeof s !== "number" || !isFinite(s)) return "—";
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60);
+  return h ? h + "h " + m + "m" : (m ? m + "m " + sec + "s" : sec + "s");
+}
+
+async function refreshAll() {
+  if (refreshing) return;
+  refreshing = true;
+  const btn = $("refreshBtn");
+  btn.disabled = true;
+  try {
+    await Promise.all([refreshHealth(), refreshReady(), refreshStats()]);
+    $("lastUpdate").textContent = "最近更新 " +
+      new Date().toLocaleTimeString("zh-CN", { hour12: false });
+  } finally {
+    btn.disabled = false;
+    refreshing = false;
+  }
+}
+
+/* ── 合成 ── */
+function setSynthMsg(text, isErr) {
+  const el = $("synthMsg");
+  el.textContent = text || "";
+  el.className = "msg" + (text ? (isErr ? " err" : " ok") : "");
+}
+
+async function synthesize(ev) {
+  ev.preventDefault();
+  if (synthCtrl) { synthCtrl.abort(); return; }
+
+  const text = $("synthText").value.trim();
+  const profile = $("profileSel").value;
+  if (!profile) { setSynthMsg("请先选择音色档案。", true); return; }
+  if (!text) { setSynthMsg("请输入要合成的文本。", true); return; }
+
+  const opt = $("profileSel").selectedOptions[0];
+  const body = {
+    text: text,
+    profile: profile,
+    media_type: "wav",
+    streaming_mode: false
+  };
+  if (opt && opt.dataset.prompt) body.prompt_text = opt.dataset.prompt;
+  const lang = (opt && opt.dataset.lang) || "zh";
+  body.text_lang = lang;
+  body.prompt_lang = lang;
+
+  const btn = $("synthBtn");
+  const ctrl = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, 600000);
+  synthCtrl = ctrl;
+  btn.textContent = "取消合成";
+  setSynthMsg("合成中… 引擎首次加载时可能需要数分钟。", false);
+
+  const t0 = performance.now();
+  try {
+    const res = await apiFetch("/api/adr/v1/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: ctrl.signal
+    });
+    const ttfb = Math.round(performance.now() - t0);
+    if (!res.ok) {
+      const eb = await readBody(res);
+      throw new Error(errMsg(eb, res.status));
+    }
+    const blob = await res.blob();
+    const total = Math.round(performance.now() - t0);
+    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    audioUrl = URL.createObjectURL(blob);
+    $("player").src = audioUrl;
+    $("player").hidden = false;
+    const size = blob.size >= 1048576
+      ? (blob.size / 1048576).toFixed(2) + " MB"
+      : Math.round(blob.size / 1024) + " KB";
+    setSynthMsg("合成完成 · 首字节 " + ttfb + " ms · 总耗时 " + total + " ms · " + size, false);
+  } catch (e) {
+    const msg = timedOut ? "合成超时（600 秒），已中止。"
+      : e.name === "AbortError" ? "合成已取消。"
+      : "合成失败：" + e.message;
+    setSynthMsg(msg, true);
+  } finally {
+    clearTimeout(timer);
+    synthCtrl = null;
+    btn.textContent = "合成试听";
+  }
+}
+
+/* ── 事件绑定与启动 ── */
+$("svcOrigin").textContent = location.origin;
+
+$("connectForm").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  connect();
+});
+
+$("synthForm").addEventListener("submit", synthesize);
+
+$("refreshBtn").addEventListener("click", refreshAll);
+
+$("apiKey").value = apiKey;
+connect();
+setInterval(refreshAll, 5000);
+
+window.addEventListener("beforeunload", () => {
+  if (audioUrl) URL.revokeObjectURL(audioUrl);
+});
+</script>
+</body>
+</html>
