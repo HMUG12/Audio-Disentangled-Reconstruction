@@ -686,3 +686,120 @@ def test_non_json_response_content_type_untouched(open_client):
     assert r.status_code == 200
     assert r.headers["content-type"].lower().startswith("text/html")
     assert r.headers["content-type"].lower().count("charset") == 1
+
+
+# ─── HTTP ?api_key= 查询参数鉴权默认关闭 (控制台改走 X-API-Key 头) ───
+
+@pytest.fixture
+def auth_client_query_off(engine, monkeypatch):
+    """有 key, 且查询参数通道关闭 (默认)。"""
+    monkeypatch.setenv("ADR_TTS_API_KEY", "k1, k2")
+    monkeypatch.delenv("ADR_ALLOW_QUERY_API_KEY", raising=False)
+    return TestClient(create_app(engine=engine))
+
+
+@pytest.fixture
+def auth_client_query_on(engine, monkeypatch):
+    """有 key, 且显式开启 ADR_ALLOW_QUERY_API_KEY。"""
+    monkeypatch.setenv("ADR_TTS_API_KEY", "k1, k2")
+    monkeypatch.setenv("ADR_ALLOW_QUERY_API_KEY", "1")
+    return TestClient(create_app(engine=engine))
+
+
+@pytest.mark.parametrize("value", [None, "0", "false", ""])
+def test_http_query_key_rejected_by_default(engine, monkeypatch, value):
+    """默认 (或显式关闭) 时 ?api_key= 不再放行普通 API 路径 → 统一 401。"""
+    monkeypatch.setenv("ADR_TTS_API_KEY", "k1, k2")
+    if value is None:
+        monkeypatch.delenv("ADR_ALLOW_QUERY_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("ADR_ALLOW_QUERY_API_KEY", value)
+    c = TestClient(create_app(engine=engine))
+    r = c.get(PROFILES, params={"api_key": "k1"})
+    assert r.status_code == 401
+    assert r.json()["code"] == "unauthorized"
+
+
+@pytest.mark.parametrize("value", ["1", "true", "TRUE"])
+def test_http_query_key_accepted_when_opted_in(engine, monkeypatch, value):
+    """ADR_ALLOW_QUERY_API_KEY=1/true 时恢复旧口径 (?api_key= 放行)。"""
+    monkeypatch.setenv("ADR_TTS_API_KEY", "k1, k2")
+    monkeypatch.setenv("ADR_ALLOW_QUERY_API_KEY", value)
+    c = TestClient(create_app(engine=engine))
+    assert c.get(PROFILES, params={"api_key": "k1"}).status_code == 200
+    assert c.get(PROFILES, params={"api_key": "wrong"}).status_code == 401
+
+
+@pytest.mark.parametrize("fixture_name", ["auth_client_query_off",
+                                          "auth_client_query_on"])
+def test_http_header_key_still_accepted(request, fixture_name):
+    """头凭据在两种模式下都放行 (Bearer 与 X-API-Key 均可)。"""
+    c = request.getfixturevalue(fixture_name)
+    assert c.get(PROFILES, headers={"X-API-Key": "k2"}).status_code == 200
+    assert c.get(PROFILES,
+                 headers={"Authorization": "Bearer k1"}).status_code == 200
+
+
+def test_ws_query_token_still_accepted_with_query_key_disabled(
+        auth_client_query_off):
+    """WS 通道不受该开关影响: ?token= 仍按原样放行 (浏览器无法带头)。"""
+    with auth_client_query_off.websocket_connect(f"{WS_PATH}?token=k1"):
+        pass
+    with auth_client_query_off.websocket_connect(f"{WS_PATH}?api_key=k2"):
+        pass
+
+
+STATIC_DIR = Path(__file__).resolve().parents[1] / "adr" / "server" / "static"
+STUDIO_PAGES = ("pro.html", "easy.html", "call.html")
+
+
+@pytest.mark.parametrize("page", STUDIO_PAGES)
+def test_studio_page_api_helper_no_longer_appends_query_key(page):
+    """回归防护: 页面 api() 不再把 api_key 拼进请求 URL, 改为
+    sessionStorage 存 key + X-API-Key 头 (并在加载后抹掉地址栏参数)。"""
+    text = (STATIC_DIR / page).read_text(encoding="utf-8")
+    api_lines = [ln for ln in text.splitlines()
+                 if ln.strip().startswith("const api =")]
+    assert api_lines, f"{page}: 未找到 const api 定义"
+    for ln in api_lines:
+        assert "api_key=" not in ln, f"{page}: api() 仍在拼接 ?api_key=: {ln.strip()}"
+        assert "encodeURIComponent" not in ln
+    assert "sessionStorage" in text, f"{page}: 缺少 sessionStorage 持久化"
+    assert "X-API-Key" in text, f"{page}: 未改发 X-API-Key 头"
+    assert "history.replaceState" in text, f"{page}: 未清理地址栏 key"
+
+
+# ===== 批次127: ref_audio_path 可选目录白名单 =====
+def test_ref_audio_roots_rejects_outside_path(tmp_path, monkeypatch):
+    """设了 ADR_TTS_AUDIO_ROOTS 后, 越界路径必须被拒 (默认不设 = 不限制)。"""
+    from adr.server import v2_compat
+
+    allowed = tmp_path / "voices"
+    allowed.mkdir()
+    inside = allowed / "a.wav"
+    inside.write_bytes(b"RIFF0000WAVE")
+    outside = tmp_path / "secret.txt"
+    outside.write_text("x", encoding="utf-8")
+
+    monkeypatch.setenv("ADR_TTS_AUDIO_ROOTS", str(allowed))
+    assert v2_compat._check_ref_audio(str(inside)) is None
+    msg = v2_compat._check_ref_audio(str(outside))
+    assert msg and "outside allowed roots" in msg
+
+
+def test_ref_audio_roots_unset_keeps_compat(tmp_path, monkeypatch):
+    """未设白名单时保持原语义 (N.E.K.O 传任意本机绝对路径)。"""
+    from adr.server import v2_compat
+
+    monkeypatch.delenv("ADR_TTS_AUDIO_ROOTS", raising=False)
+    f = tmp_path / "any.wav"
+    f.write_bytes(b"RIFF0000WAVE")
+    assert v2_compat._check_ref_audio(str(f)) is None
+
+
+def test_server_console_page_is_auth_exempt():
+    """容器/服务端独立控制台 /server 必须与 /pro /easy /call 同档豁免。"""
+    from adr.server.auth import EXEMPT_PATHS
+
+    for p in ("/", "/pro", "/easy", "/call", "/server"):
+        assert p in EXEMPT_PATHS

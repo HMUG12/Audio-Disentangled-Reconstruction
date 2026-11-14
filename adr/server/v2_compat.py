@@ -26,6 +26,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
+from adr.core import settings
 from adr.core.exceptions import (
     ProfileInvalidError,
     ProfileNotFoundError,
@@ -151,6 +152,18 @@ def _check_ref_audio(path: str):
             return None
         if not p.is_file():
             return f"ref_audio_path is not a regular file: {path}"
+        # 批次127: 可选目录白名单 (ADR_TTS_AUDIO_ROOTS)。默认不设 = 保持
+        # 批次78 的零改造兼容 (N.E.K.O 传本机绝对路径); 容器/局域网部署
+        # 显式设置后, 越界路径直接 400, 不再能借 ref_audio_path 读任意文件。
+        roots = settings.audio_roots()
+        if roots:
+            try:
+                real = p.resolve()
+            except OSError as e:
+                return f"invalid ref_audio_path: {e}"
+            if not any(real == r or r in real.parents for r in roots):
+                return (f"ref_audio_path outside allowed roots "
+                        f"(ADR_TTS_AUDIO_ROOTS): {path}")
         cap_mb = env_num("ADR_TTS_REF_MAX_MB", 100)
         if p.stat().st_size > cap_mb * 1024 * 1024:
             return f"ref_audio_path exceeds {cap_mb}MB limit: {path}"

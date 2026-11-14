@@ -80,6 +80,43 @@ def has_api_key() -> bool:
     return bool(api_keys())
 
 
+def allow_query_api_key() -> bool:
+    """ADR_ALLOW_QUERY_API_KEY — HTTP 是否接受 ``?api_key=<key>`` 查询参数鉴权。
+
+    默认关闭, 仅 ``1`` / ``true`` (大小写不敏感) 开启。查询串会长期残留在
+    浏览器历史、Referer、反代/容器 access log 与 shell 历史中, 属凭据泄漏面;
+    控制台页面已改为首屏从 URL 读一次 key 后转存 sessionStorage 并抹掉地址栏,
+    后续请求一律走 ``X-API-Key`` 头。开启本开关只为兼容仍用查询参数的外部
+    调用方 (尤其是无法设置自定义头的场景)。
+
+    WS 不受本开关约束: 浏览器无法为 WebSocket 握手设置自定义头, 故
+    ``?token=`` / ``?api_key=`` / 子协议通道在 auth._extract_ws_key 保持原样。
+    """
+    return os.environ.get("ADR_ALLOW_QUERY_API_KEY", "").strip().lower() in (
+        "1", "true")
+
+
+def audio_roots() -> list:
+    """ADR_TTS_AUDIO_ROOTS — 可选: 限制 ref_audio_path 只能落在这些目录内。
+
+    逗号分隔的绝对目录列表; 未设置或 ``*`` = 不限制 (默认, 保持 N.E.K.O
+    传本机绝对路径的零改造兼容)。容器/局域网部署可显式设成数据目录, 把
+    "任意本地文件可读" 收窄到白名单。路径含逗号时不建议使用本开关。
+    """
+    raw = (os.environ.get("ADR_TTS_AUDIO_ROOTS") or "").strip()
+    if not raw or raw == "*":
+        return []
+    out = []
+    for part in raw.split(","):
+        part = part.strip()
+        if part:
+            try:
+                out.append(Path(part).resolve())
+            except OSError:      # 非法路径直接忽略 (宁松不误杀)
+                continue
+    return out
+
+
 # Tauri 壳 webview 来源 (macOS/Linux: tauri://localhost; Windows WebView2:
 # http(s)://tauri.localhost) — launcher.html 跨源 fetch 档案列表要用
 TAURI_ORIGINS = (

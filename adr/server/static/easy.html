@@ -360,9 +360,36 @@
 <script>
 "use strict";
 I.init("easy", { onSwitch: () => renderVoices() });
-/* ---- 基础设施: api_key 透传 / 请求 / toast ---- */
-const KEY = new URLSearchParams(location.search).get("api_key");
-const api = p => p + (KEY ? (p.includes("?") ? "&" : "?") + "api_key=" + encodeURIComponent(KEY) : "");
+/* ---- 基础设施: API key (sessionStorage + X-API-Key 头) / 请求 / toast ---- */
+/* key 只在首屏从 ?api_key= 读一次并转存 sessionStorage, 随即从地址栏抹掉;
+   之后 fetch 一律带 X-API-Key 头, 不再把凭据拼进每个请求 URL (避免残留在
+   浏览器历史 / Referer / 反代日志)。服务端默认关闭查询参数鉴权
+   (ADR_ALLOW_QUERY_API_KEY=1 才开)。
+   注: <audio src> / <a download> 均为 fetch 得到的 blob: URL, 不直接请求
+   受保护接口, 故这些位置无需查询参数回退。 */
+function adrKey() {
+  let k = sessionStorage.getItem("adr_api_key");
+  if (!k) {
+    k = new URLSearchParams(location.search).get("api_key");
+    if (k) sessionStorage.setItem("adr_api_key", k);
+  }
+  return k || "";
+}
+function hdr(extra) {
+  const h = Object.assign({}, extra || {});
+  const k = adrKey();
+  if (k) h["X-API-Key"] = k;
+  return h;
+}
+(function () {  // 先落 sessionStorage, 再把 key 从地址栏/历史里抹掉
+  adrKey();
+  const u = new URL(location.href);
+  if (u.searchParams.has("api_key")) {
+    u.searchParams.delete("api_key");
+    history.replaceState(null, "", u.pathname + u.search + u.hash);
+  }
+})();
+const api = p => p;  // 凭据改走 X-API-Key 头, URL 不再拼接 api_key
 const $ = id => document.getElementById(id);
 let toastT = null;
 function toast(msg) {
@@ -373,7 +400,9 @@ function toast(msg) {
   toastT = setTimeout(() => t.className = "toast", 3400);
 }
 async function jf(url, opts) {
-  const r = await fetch(api(url), opts);
+  const o = Object.assign({}, opts || {});
+  o.headers = hdr(o.headers);
+  const r = await fetch(api(url), o);
   if (!r.ok) {
     let m = I.t("easy.err_server", {s: r.status});
     try { const j = await r.json(); m = adrErrMsg(j, r.status, m); } catch {}
@@ -502,7 +531,7 @@ function pick(f) {
   $("upTxt").textContent = I.t("easy.uploading", {name: f.name});
   const fd = new FormData();
   fd.append("file", f);
-  fetch(api("/api/adr/v1/train/upload"), { method: "POST", body: fd })
+  fetch(api("/api/adr/v1/train/upload"), { method: "POST", body: fd, headers: hdr() })
     .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then(d => {
       audioPath = d.path;
@@ -685,7 +714,7 @@ $("tGo").onclick = async () => {
     const kill = setTimeout(() => ctrl.abort(), 600000);
     const r = await fetch(api("/api/adr/v1/tts"), {
       method: "POST", signal: ctrl.signal,
-      headers: { "Content-Type": "application/json" },
+      headers: hdr({ "Content-Type": "application/json" }),
       body: JSON.stringify({ text, profile: selected, media_type: "wav",
                              text_lang: $("tLang").value })
     });
@@ -731,7 +760,7 @@ $("vExportBtn").onclick = async () => {
     const ctrl = new AbortController();
     const kill = setTimeout(() => ctrl.abort(), 600000);
     const r = await fetch(api("/api/adr/v1/profiles/" + encodeURIComponent(selected) + "/export"),
-                          { signal: ctrl.signal });
+                          { signal: ctrl.signal, headers: hdr() });
     clearTimeout(kill);
     if (!r.ok) {
       let m = "HTTP " + r.status;
@@ -760,7 +789,7 @@ $("vImportFile").onchange = async () => {
     fd.append("package", f);
     if (overwrite) fd.append("overwrite", "true");
     if (force) fd.append("force", "true");
-    const r = await fetch(api("/api/adr/v1/profiles/import"), { method: "POST", body: fd });
+    const r = await fetch(api("/api/adr/v1/profiles/import"), { method: "POST", body: fd, headers: hdr() });
     let j = {};
     try { j = await r.json(); } catch (_) { /* 500 非 JSON */ }
     return { ok: r.ok, j };

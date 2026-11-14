@@ -6,9 +6,11 @@
 规则:
 - api_keys 为空列表 → 完全放行 (默认关闭, N.E.K.O 零改造兼容)
 - 豁免路径: /api/adr/v1/health、/api/adr/v1/readyz (监控探活不带凭据)
-  + /, /pro, /easy (控制台静态页, 页面 JS 会把 URL 上的 api_key 透传给后续请求)
-- HTTP 凭据三选一: ``Authorization: Bearer <key>`` / ``X-API-Key: <key>``
-  / 查询参数 ``?api_key=<key>``
+  + /, /pro, /easy, /call, /server (控制台静态页, 页面 JS 首屏读取 URL 上的
+  api_key 后转存 sessionStorage 并抹掉地址栏, 后续请求改带 X-API-Key 头)
+- HTTP 凭据: ``Authorization: Bearer <key>`` / ``X-API-Key: <key>``;
+  查询参数 ``?api_key=<key>`` **默认关闭**, 仅在 ``ADR_ALLOW_QUERY_API_KEY=1``
+  时作为兜底 (查询串会泄漏进浏览器历史 / Referer / 反代日志)
 - WS 凭据三选一 (Track B 收口): 查询参数 ``?token=<key>`` (NEKO http→ws 转换
   会透传 query, 故兼容 ``?api_key=``) / 查询参数 ``?api_key=<key>``
   / ``Sec-WebSocket-Protocol`` 子协议首元素。首条消息通道不采用 —
@@ -23,12 +25,14 @@ import hmac
 import json
 from urllib.parse import unquote
 
+from adr.core.settings import allow_query_api_key
+
 # 监控探活豁免 (无敏感数据, 供 N.E.K.O / 负载均衡 / 容器 HEALTHCHECK 探活)
 # 控制台静态页豁免 (批次26 补 /call): 页面本身无数据, 启用 API key 时页面才能
 # 加载; 页面 JS 发起的 API 调用仍走鉴权 — 与 /pro /easy 语义一致。
 # 批次90: /readyz 与 /health 同档 — 容器 HEALTHCHECK 不带 key, 只回就绪态。
 EXEMPT_PATHS = {"/api/adr/v1/health", "/api/adr/v1/readyz",
-                "/", "/pro", "/easy", "/call"}
+                "/", "/pro", "/easy", "/call", "/server"}
 
 
 def _is_exempt(path) -> bool:
@@ -123,7 +127,15 @@ class APIKeyMiddleware:
 
     @staticmethod
     def _extract_key(scope):
-        """按 Bearer 头 → X-API-Key 头 → 查询参数的顺序取 key。"""
+        """按 Bearer 头 → X-API-Key 头 → (默认关闭的) 查询参数取 key。
+
+        查询参数通道默认关闭: ``?api_key=`` 会随 Referer、浏览器历史、
+        反代/容器 access log 长期留存 (凭据易被翻出)。控制台页面已改为
+        首屏从 URL 读一次后转存 sessionStorage + ``history.replaceState``
+        抹掉地址栏, 后续请求一律走 ``X-API-Key`` 头。仅当部署方显式设置
+        ``ADR_ALLOW_QUERY_API_KEY=1`` 时才回退到查询参数 (兼容外部调用方)。
+        WS 不走这里 — 见 ``_extract_ws_key`` (浏览器 WS 握手无法带自定义头)。
+        """
         headers = dict(scope.get("headers") or [])  # ASGI 头键为小写字节
         auth = headers.get(b"authorization")
         if auth:
@@ -133,7 +145,9 @@ class APIKeyMiddleware:
         api_key = headers.get(b"x-api-key")
         if api_key:
             return api_key.decode("latin-1").strip()
-        return _query_key(scope, b"api_key")
+        if allow_query_api_key():
+            return _query_key(scope, b"api_key")
+        return None
 
     @staticmethod
     def _extract_ws_key(scope):

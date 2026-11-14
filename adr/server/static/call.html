@@ -273,9 +273,34 @@
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
-/* 批次66: api_key 透传 (与 pro/easy 同款) — 启用 ADR_TTS_API_KEY 后壳/浏览器经 ?api_key= 带入 */
-const KEY = new URLSearchParams(location.search).get("api_key");
-const api = p => p + (KEY ? (p.includes("?") ? "&" : "?") + "api_key=" + encodeURIComponent(KEY) : "");
+/* 批次66 起 key 由 ?api_key= 带入; 现在只首屏读一次 → sessionStorage, 随即
+   从地址栏抹掉, 后续 fetch 统一带 X-API-Key 头 (不再把凭据拼进每个请求 URL,
+   避免残留在浏览器历史 / Referer / 反代日志)。服务端默认关闭查询参数鉴权
+   (ADR_ALLOW_QUERY_API_KEY=1 才开)。
+   注: 试听 <audio src> 是 fetch 得到的 blob: URL, 不直接请求受保护接口。 */
+function adrKey() {
+  let k = sessionStorage.getItem("adr_api_key");
+  if (!k) {
+    k = new URLSearchParams(location.search).get("api_key");
+    if (k) sessionStorage.setItem("adr_api_key", k);
+  }
+  return k || "";
+}
+function hdr(extra) {
+  const h = Object.assign({}, extra || {});
+  const k = adrKey();
+  if (k) h["X-API-Key"] = k;
+  return h;
+}
+(function () {  // 先落 sessionStorage, 再把 key 从地址栏/历史里抹掉
+  adrKey();
+  const u = new URL(location.href);
+  if (u.searchParams.has("api_key")) {
+    u.searchParams.delete("api_key");
+    history.replaceState(null, "", u.pathname + u.search + u.hash);
+  }
+})();
+const api = p => p;  // 凭据改走 X-API-Key 头, URL 不再拼接 api_key
 const LANGS = ["all_zh", "auto", "all_ja", "all_ko", "zh", "en", "ja", "ko", "yue"];
 const STAGE_TXT = () => ({
   ready: I.t("call.stg_ready"), queued: I.t("call.stg_queued"), importing: I.t("call.stg_importing"),
@@ -331,7 +356,7 @@ $("plang").value = "zh";
 /* ---- 档案下拉 → 自动填充 prompt_text / ref_audio_path ---- */
 async function loadProfiles() {
   try {
-    const r = await fetch(api("/api/adr/v1/profiles"));
+    const r = await fetch(api("/api/adr/v1/profiles"), { headers: hdr() });
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));
       // 批次113 (R5-FE-03): 401/403 是「API key 无效或未携带」, 不能显示成
@@ -512,7 +537,7 @@ $("go").onclick = async () => {
   const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, 600000);
   try {
     const r = await fetch(api(url), {
-      method: "POST", headers: { "Content-Type": "application/json" },
+      method: "POST", headers: hdr({ "Content-Type": "application/json" }),
       body: JSON.stringify(body), signal: ctrl.signal,
     });
     const ttfb = Math.round(performance.now() - t0);
@@ -556,7 +581,7 @@ async function pollEngine() {
     // 读 /health 而非 /system/stats: 两者都含 engine_stage/queue_depth/synth_busy,
     // 但启用 API_KEY 后 /health 免鉴权、stats 需鉴权 (保护硬件+模型数据);
     // 此轮询纯读引擎字段, 改读 /health 避免鉴权后全页瘫痪。
-    const d = await fetch(api("/api/adr/v1/health")).then(r => r.json());
+    const d = await fetch(api("/api/adr/v1/health"), { headers: hdr() }).then(r => r.json());
     const stage = d.engine_stage || "";
     if (d.engine_ready) {
       const q = d.queue_depth || 0, b = d.synth_busy || 0;
