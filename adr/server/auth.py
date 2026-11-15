@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import re
 from urllib.parse import unquote
 
 from adr.core.settings import allow_query_api_key
@@ -34,6 +35,10 @@ from adr.server.exceptions import UNAUTHORIZED
 # 批次90: /readyz 与 /health 同档 — 容器 HEALTHCHECK 不带 key, 只回就绪态。
 EXEMPT_PATHS = {"/api/adr/v1/health", "/api/adr/v1/readyz",
                 "/", "/pro", "/easy", "/call", "/server"}
+
+# 各页语言包 /i18n-<page>.js: 严格只放行 console.py 真正提供的白名单形态,
+# 不接受 /i18n-../x.js、/i18n-a/b.js 之类的任意后缀 (深审 A9)。
+_I18N_PAGE_JS = re.compile(r"/i18n-(index|easy|pro|call)\.js")
 
 
 def _is_exempt(path) -> bool:
@@ -53,7 +58,7 @@ def _is_exempt(path) -> bool:
     """
     if path in EXEMPT_PATHS:
         return True
-    if path == "/i18n.js" or (path.startswith("/i18n-") and path.endswith(".js")):
+    if path == "/i18n.js" or _I18N_PAGE_JS.fullmatch(path or ""):
         return True
     if path == "/theme.js":
         return True

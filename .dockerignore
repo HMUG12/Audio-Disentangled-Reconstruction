@@ -39,6 +39,19 @@ tests/
 *.md
 !README.md
 
+# ---- 文档中心白名单 (adr/server/docs_api.py 提供 8 篇, 缺则抽屉为空) ----
+# 只放行这 7 篇; m*-plan / audit / 路线图等内部材料仍裁掉。
+!docs/
+docs/**
+!docs/demos.md
+!docs/gpu-compat.md
+!docs/update-manifest.md
+!docs/tts-api-spec.md
+!docs/architecture-design.md
+!docs/release-notes-v1.2.0.md
+!docs/architecture/
+!docs/architecture/windows-install-acceptance.md
+
 # ---- 脚本与杂项 (scripts/ 只需 .py 与 patches/, PowerShell 脚本不进镜像) ----
 *.ps1
 *.zip

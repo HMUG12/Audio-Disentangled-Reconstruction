@@ -155,21 +155,25 @@ def docs_index():
 def docs_check():
     updates: list[str] = []
     checked = 0
+    local = 0
     for slug, (_t, _g, _d, rel) in DOC_CATALOG.items():
         try:
             _title, local_text, _stamp = _read_local(rel)
         except HTTPException:
             continue
+        local += 1
         try:
             _ot, online_text, _ostamp = _read_online(rel)
         except HTTPException as e:
             if e.status_code == 404:
                 continue  # 官方仓库暂无该篇 (未发布/路径不同), 跳过而不影响整体比对
-            return {"online": False, "updates": [], "error": e.detail, "checked": checked}
+            return {"online": False, "updates": [], "error": e.detail, "checked": checked, "local": local}
         checked += 1
         if _sha(online_text) != _sha(local_text):
             updates.append(slug)
-    return {"online": True, "updates": updates, "checked": checked}
+    # local = 本机随包文档数: 为 0 时 checked 必然 0, 前端据此提示"未随包提供文档",
+    # 不能把它当成"已是最新" (安装包漏拷 docs/ 的静默故障, 2026-11-14 深审 A1)。
+    return {"online": True, "updates": updates, "checked": checked, "local": local}
 
 
 @router.get("/{slug}", summary="读取单篇文档")

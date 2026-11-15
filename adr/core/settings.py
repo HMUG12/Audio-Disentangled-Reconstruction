@@ -88,6 +88,8 @@ ENV_REGISTRY: dict[str, str] = {
     "ADR_FFMPEG_TIMEOUT_SEC": "server",
     "ADR_LOG_LEVEL": "server",
     "ADR_ENGINE_WATCHDOG_SEC": "engine",
+    # 文档中心在线拉取基址 (adr/server/docs_api.py, 默认官方仓库 main 分支)
+    "ADR_DOCS_ONLINE_BASE": "server",
     # --- 合成参数上限 ---
     "ADR_TTS_MAX_TEXT_CHARS": "server",
     "ADR_TTS_MAX_QUEUE": "server",

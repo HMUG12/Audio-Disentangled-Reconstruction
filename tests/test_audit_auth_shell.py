@@ -154,3 +154,52 @@ def test_launcher_profiles_fetch_forwards_key():
     src = LAUNCHER.read_text(encoding="utf-8")
     assert '"?api_key=" + encodeURIComponent(key)' in src
     assert 'fillProfiles(lan?.url || "", cfg.api_key)' in src
+
+
+# ===== 2026-11-14 深审 A6/A9: 豁免边界反向用例 (只测正向会漏掉豁免过宽) =====
+@pytest.mark.parametrize("path,expected", [
+    # 精确豁免: 带尾斜杠 / 大小写变化 / 加后缀 都不能搭便车
+    ("/theme.js", True), ("/theme.js/", False), ("/THEME.JS", False),
+    ("/app-shell.css", True), ("/app-shell.js", True),
+    ("/app-shell.css/", False), ("/app-shell.js/", False),
+    ("/app-shell.css.map", False), ("/APP-SHELL.JS", False),
+    ("/app-shell.js/../api/adr/v1/profiles", False),
+    # 控制台页精确豁免, 子路径不算
+    ("/server", True), ("/server/", False), ("/pro", True), ("/pro/x", False),
+    # i18n 语言包: 只认 console.py 真正提供的四页
+    ("/i18n.js", True), ("/i18n-easy.js", True), ("/i18n-call.js", True),
+    ("/i18n-.js", False), ("/i18n-foo.js", False), ("/i18n.js.map", False),
+    ("/i18n-../x.js", False),
+    # 业务接口一律不放行
+    ("/api/adr/v1/profiles", False), ("/api/adr/v1/docs", False),
+    ("/api/adr/v1/health", True), ("/api/adr/v1/readyz", True),
+])
+def test_is_exempt_boundaries(path, expected):
+    from adr.server.auth import _is_exempt
+
+    assert _is_exempt(path) is expected
+
+
+def test_exempt_never_leaks_business_api_with_key_set(monkeypatch, tmp_path):
+    """反向断言: 开了 key 后, 任何"像静态资源"的变体都拿不到业务数据。"""
+    from fastapi.testclient import TestClient
+    from adr.server.app import create_app
+
+    monkeypatch.setenv("ADR_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("ADR_TTS_CACHE", "0")
+    monkeypatch.setenv("ADR_TTS_API_KEY", "k1")
+    monkeypatch.delenv("ADR_ALLOW_QUERY_API_KEY", raising=False)
+
+    class _Engine:
+        sr = 32000
+
+    c = TestClient(create_app(engine=_Engine()))
+    assert c.get("/app-shell.css/").status_code == 401
+    assert c.get("/app-shell.css.map").status_code == 401
+    assert c.get("/i18n-foo.js").status_code == 401
+    assert c.get("/server/").status_code == 401
+    assert c.get("/api/adr/v1/docs").status_code == 401
+    assert c.get("/api/adr/v1/docs/quickstart").status_code == 401
+    # 正路: 带头部照常
+    assert c.get("/api/adr/v1/docs",
+                 headers={"X-API-Key": "k1"}).status_code == 200

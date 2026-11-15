@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+﻿﻿#Requires -Version 5.1
 # =====================================================================
 # ADR portable runtime builder (batch 44; batch 52 dual-variant)
 #
@@ -284,6 +284,29 @@ if ($LASTEXITCODE -ge 8) { throw "robocopy configs failed ($LASTEXITCODE)" }
 # 构建脚本 (build_*.ps1 等) 一并随包: 体积可忽略, 排障时可用。
 robocopy (Join-Path $RepoRoot "scripts") (Join-Path $OutDir "scripts") /E /NFL /NDL /NJH /NJS /NP /XD __pycache__ /XF *.pyc | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy scripts failed ($LASTEXITCODE)" }
+# 内置文档中心 (/api/adr/v1/docs) 的白名单 8 篇 = README.md + 下列 7 篇。
+# 不随包 = 装完文档中心空、/check 还会误报"已是最新"(2026-11-14 深审 A1)。
+# 只拷白名单, 不整目录拷: docs/ 里还有 m*-plan / audit / 路线图等内部材料,
+# 整目录随包等于把内部计划发到用户磁盘上 (与 docs_api "内部材料不进白名单" 的口径矛盾)。
+$docFiles = @(
+    "demos.md",
+    "gpu-compat.md",
+    "update-manifest.md",
+    "tts-api-spec.md",
+    "architecture-design.md",
+    "release-notes-v1.2.0.md",
+    "architecture\windows-install-acceptance.md"
+)
+foreach ($rel in $docFiles) {
+    $src = Join-Path (Join-Path $RepoRoot "docs") $rel
+    $dst = Join-Path (Join-Path $OutDir "docs") $rel
+    if (-not (Test-Path $src)) { throw "doc missing: docs/$rel" }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dst) | Out-Null
+    Copy-Item $src $dst -Force
+}
+Copy-Item (Join-Path $RepoRoot "README.md") (Join-Path $OutDir "README.md") -Force
+if (-not (Test-Path (Join-Path $OutDir "README.md"))) { throw "README.md copy failed" }
+Log ("docs bundled: {0} files" -f ($docFiles.Count + 1))
 $gsvSrc = Join-Path $RepoRoot "third_party\gpt_sovits"
 $gsvDst = Join-Path $OutDir "third_party\gpt_sovits"
 robocopy $gsvSrc $gsvDst /E /NFL /NDL /NJH /NJS /NP `

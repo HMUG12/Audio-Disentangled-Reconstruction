@@ -81,8 +81,8 @@
     });
   }
 
-  function buildTopnav() {
-    var nav = document.createElement("nav");
+  function buildTopnav(into) {
+    var nav = into || document.createElement("nav");
     nav.className = "adr-topnav";
     nav.setAttribute("aria-label", "控制台导航");
     nav.innerHTML = NAV.map(function (x) {
@@ -101,7 +101,14 @@
       brand.classList.add("adr-brand");
       stripEmoji(brand);
       if (!brand.querySelector(".adr-mark")) {
-        brand.insertAdjacentHTML("afterbegin", '<span class="adr-mark" aria-hidden="true">' + ICON.mark + "</span>");
+        var markHtml = '<span class="adr-mark" aria-hidden="true">' + ICON.mark + "</span>";
+        // 带 data-i18n-html 的品牌节点会在切语言时被整段 innerHTML 重写,
+        // 图标放进去会被擦掉 → 作为兄弟节点插在它前面 (布局仍是 flex 一行)。
+        if (brand.hasAttribute("data-i18n-html")) {
+          brand.insertAdjacentHTML("beforebegin", markHtml);
+        } else {
+          brand.insertAdjacentHTML("afterbegin", markHtml);
+        }
       }
     } else {
       brand = document.createElement("a");
@@ -381,9 +388,14 @@
         var badge = document.getElementById("adrDocsBadge");
         if (badge) badge.textContent = res.online ? "已联网" : "内置";
         if (state) {
-          state.textContent = res.updates && res.updates.length
-            ? "发现 " + res.updates.length + " 篇有更新，可切换「在线版」查看"
-            : "已是最新（官方仓库无变化）";
+          if (res.local === 0) {
+            // 本机一份文档都没有 (安装包漏拷 docs/) — 不能报"已是最新"
+            state.textContent = "本机安装包未包含文档，无法比对（请重新安装完整版本）";
+          } else {
+            state.textContent = res.updates && res.updates.length
+              ? "发现 " + res.updates.length + " 篇有更新，可切换「在线版」查看"
+              : "已是最新（官方仓库无变化）";
+          }
         }
         if (docs.slug) loadDoc(docs.slug);
       })
@@ -397,14 +409,31 @@
       });
   }
 
+  /* 首页没有各页自己的 adrKey(): 带 ?api_key= 打开首页后, 点顶栏/卡片跳到
+     /easy 等新页面时 URL 里没有 key → 业务接口 401。这里统一转存, 并把 key
+     从地址栏摘掉 (避免进入历史记录/截图/粘贴外发)。 */
+  function persistIndexKey() {
+    try {
+      var params = new URLSearchParams(location.search);
+      var k = params.get("api_key") || "";
+      if (k && !sessionStorage.getItem("adr_api_key")) sessionStorage.setItem("adr_api_key", k);
+      if (k) {
+        params.delete("api_key");
+        var qs = params.toString();
+        history.replaceState(null, "", location.pathname + (qs ? "?" + qs : "") + location.hash);
+      }
+    } catch (e) { /* file:// / 隐私模式: 忽略 */ }
+  }
+
   /* ── 启动 ─────────────────────────────────────────────────────────── */
   function boot() {
     if (page === "index") {
+      persistIndexKey();
       var host = document.querySelector(".hub-top");
-      if (host) {
-        var nav = buildTopnav();
-        host.appendChild(nav);
-      }
+      // 页面模板里已有一个空的 .adr-topnav (index.html), 复用它而不是再插一个
+      var existing = (host && host.querySelector(".adr-topnav")) || document.querySelector(".adr-topnav");
+      var nav = buildTopnav(existing);
+      if (!existing && host) host.appendChild(nav);
       var mark = document.querySelector(".hub-brand .adr-mark");
       if (mark) mark.innerHTML = ICON.mark;
     } else if (["easy", "pro", "call"].indexOf(page) >= 0) {

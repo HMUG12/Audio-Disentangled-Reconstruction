@@ -70,6 +70,11 @@ COPY pyproject.toml README.md LICENSE ./
 COPY adr/ ./adr/
 COPY configs/ ./configs/
 COPY scripts/ ./scripts/
+# 文档中心 (/api/adr/v1/docs) 白名单 8 篇 = README.md + 下列 7 篇。
+# 只拷白名单: docs/ 下的 m*-plan / audit / 路线图属内部材料, 不进公开镜像。
+COPY docs/demos.md docs/gpu-compat.md docs/update-manifest.md docs/tts-api-spec.md \
+     docs/architecture-design.md docs/release-notes-v1.2.0.md ./docs/
+COPY docs/architecture/windows-install-acceptance.md ./docs/architecture/
 RUN pip install -e . --no-deps
 
 # GSV 钉版 clone + 兼容补丁 (含批次33 Track E AR 性能补丁 track_e_ar_sync.patch)
