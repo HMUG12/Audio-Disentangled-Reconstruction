@@ -165,7 +165,10 @@ async def voices_list(request: Request):
             meta = voice_library.load_voice(name)
         except Exception:
             # 批次66: 坏档案仍列出 (行为不变), 但留日志便于定位
-            logger.warning("v3 voices: load_voice(%r) failed", name, exc_info=True)
+            # S6: 档案名可能是人名 — 日志只留指纹
+            from adr.core.audit import text_fp
+            logger.warning("v3 voices: load_voice(fp=%s) failed",
+                           text_fp(name), exc_info=True)
             meta = {}
         out.append({
             "id": name,

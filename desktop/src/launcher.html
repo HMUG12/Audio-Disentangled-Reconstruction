@@ -454,7 +454,7 @@
     <button class="dash-cancel" id="dash-cancel" type="button" hidden>取消训练</button>
   </div>
 
-  <div class="foot">三个控制台共用常驻引擎，进出秒级切换 · <a id="set-link">设置</a> · <a id="about-link">关于 ADR Studio</a> · <a id="st-env" data-tip="检查 Python 依赖、FFmpeg 与 GPU 是否就绪">环境自检</a> · <a id="st-engine-restart" data-tip="结束当前引擎进程并重新预热，约 5–10 秒">重启引擎</a> · <a id="st-open-log" data-tip="打开 F:\ADR_data\logs 日志目录">日志目录</a> · <a id="st-update" data-tip="联网查询是否有新版本">检查更新</a><span id="st-ver"></span> · <span id="acct-who"></span><a id="acct-out" style="display:none;margin-left:8px;padding:3px 10px;border:1px solid var(--tag-line);border-radius:999px;color:var(--dim)">退出登录</a></div>
+  <div class="foot">三个控制台共用常驻引擎，进出秒级切换 · <a id="set-link">设置</a> · <a id="about-link">关于 ADR Studio</a> · <a id="st-env" data-tip="检查 Python 依赖、FFmpeg 与 GPU 是否就绪">环境自检</a> · <a id="st-engine-restart" data-tip="结束当前引擎进程并重新预热，约 5–10 秒">重启引擎</a> · <a id="st-open-log" data-tip="打开数据目录下的 logs 日志文件夹">日志目录</a> · <a id="st-update" data-tip="联网查询是否有新版本">检查更新</a><span id="st-ver"></span> · <span id="acct-who"></span><a id="acct-out" style="display:none;margin-left:8px;padding:3px 10px;border:1px solid var(--tag-line);border-radius:999px;color:var(--dim)">退出登录</a></div>
   <div id="tour" hidden>
     <div class="tour-tip" role="dialog" aria-modal="true" aria-labelledby="tour-title">
       <img src="assets/mascot/idle.png" alt="">
@@ -1024,10 +1024,12 @@ async function fillProfiles(base, keys) {
   const dl = $st("st-profiles");
   dl.innerHTML = "";
   if (!base) return;
-  // 批次66: 启用 API Key 后档案列表需鉴权 — 带首个非空 key (与 sidecar 注入同源)
+  // 批次66/131: 启用 API Key 后档案列表需鉴权 — 带首个非空 key (与 sidecar 注入同源)。
+  // 走 X-API-Key 头而不是 ?api_key=: 查询串会留在历史/Referer/反代日志里。
   const key = String(keys || "").split(",").map(k => k.trim()).find(k => k);
   try {
-    const r = await fetch(base + "/api/adr/v1/profiles" + (key ? "?api_key=" + encodeURIComponent(key) : ""));
+    const r = await fetch(base + "/api/adr/v1/profiles",
+      key ? { headers: { "X-API-Key": key } } : undefined);
     const j = await r.json();
     for (const p of (j.profiles || [])) {
       const o = document.createElement("option");

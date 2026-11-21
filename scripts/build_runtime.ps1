@@ -153,6 +153,10 @@ fastapi==0.129.0
 uvicorn[standard]==0.41.0
 python-multipart==0.0.24
 faster-whisper==1.2.1
+# batch76: tools/asr/fasterwhisper_asr.py 顶层 `from tools.asr.funasr_asr import
+# only_asr`, 而 funasr_asr.py 顶层 `from funasr import AutoModel` — 缺 funasr 时
+# 训练 2/7 ASR 直接 ModuleNotFoundError (modelscope 只解决模型下载)。
+funasr==1.4.2
 ctranslate2==4.8.1
 onnxruntime==1.24.4
 pypinyin==0.55.0
@@ -199,7 +203,7 @@ Remove-Item -Force $ReqFile -ErrorAction SilentlyContinue
 Set-Content -Path $ReqFile -Value $requirements -Encoding ASCII
 # Write-back check: v1.3.1 build once ran pip against a stale file missing the G2P pins
 $written = Get-Content -Raw $ReqFile
-foreach ($pin in "pyopenjtalk==", "jamo==", "ToJyutping==", "ko_pron==", "nltk==", "modelscope==") {
+foreach ($pin in "pyopenjtalk==", "jamo==", "ToJyutping==", "ko_pron==", "nltk==", "modelscope==", "funasr==") {
     if ($written -notmatch [regex]::Escape($pin)) { throw "requirements file missing $pin (stale write?)" }
 }
 Log ("requirements written: {0}" -f $ReqFile)

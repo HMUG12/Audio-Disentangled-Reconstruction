@@ -19,10 +19,10 @@ import io
 import logging
 import os
 import pickle
+import re
 import sys
 import threading
 import time
-import traceback
 import zipfile
 from collections import OrderedDict
 from concurrent.futures import TimeoutError as FuturesTimeout
@@ -42,7 +42,7 @@ from adr.models.gsv_runtime import (  # noqa: F401
 )
 from adr.core import settings
 from adr.core.audit import log_event
-from adr.core.exceptions import EngineStalledError
+from adr.core.exceptions import EngineLoadingError, EngineStalledError
 from adr.core.scheduler import SynthesisScheduler
 from adr.models.gsv_coalescer import _Coalescer
 
@@ -763,6 +763,11 @@ class GSVEngine:
         except TimeoutError as e:
             if admitted:
                 raise   # 合成体自己抛的 TimeoutError, 不当作准入超时
+            if _LOADING:
+                log_event("engine_loading_admit", wait_s=_LOCK_WAIT_SEC)
+                raise EngineLoadingError(
+                    f"合成引擎正在预热 (排队等待 {_LOCK_WAIT_SEC:.0f}s), "
+                    f"请稍后重试") from e
             log_event("engine_admit_timeout", wait_s=_LOCK_WAIT_SEC)
             raise EngineStalledError(
                 f"合成引擎忙或已卡死 ({_LOCK_WAIT_SEC:.0f}s 未获得调度准入), "
@@ -779,6 +784,12 @@ class GSVEngine:
         """进入 GSV 代码上下文 (sys.path + cwd, 其代码用相对路径找权重)。"""
         code_dir = str(self.config.gsv_dir)
         inner = str(self.config.gsv_dir / "GPT_SoVITS")
+        # 兼容补丁: NLTK 离线下载默认 72s/次, 收紧到 5s 快速失败走内置回退
+        # 发音。F12: 借 context 的作用域在退出时还原, 不再污染全进程默认值
+        # (预热后 bootstrap/HF 下载曾被 5s 秒杀)。
+        import socket
+        old_timeout = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(5)
         # Track B: 全程持锁覆盖 chdir 窗口, 进出后 cwd 恒等于原值
         with _CHDIR_LOCK:
             old_cwd = os.getcwd()
@@ -790,6 +801,7 @@ class GSVEngine:
                 yield
             finally:
                 os.chdir(old_cwd)
+                socket.setdefaulttimeout(old_timeout)
 
     @contextlib.contextmanager
     def _engine_lock(self):
@@ -800,6 +812,12 @@ class GSVEngine:
         由调用方重试, 不再拖住整个进程。
         """
         if not self._lock.acquire(timeout=_LOCK_WAIT_SEC):
+            # F7: 预热线程持锁是正常状态 (下载/加载/编译可能数分钟),
+            # 不能报"卡死"让客户端/看门狗误判; 给 503 engine_loading 让其重试。
+            if _LOADING:
+                log_event("engine_loading_wait", wait_s=_LOCK_WAIT_SEC)
+                raise EngineLoadingError(
+                    f"合成引擎正在预热 (等待 {_LOCK_WAIT_SEC:.0f}s), 请稍后重试")
             logging.getLogger("adr").error(
                 "[gsv] 等待引擎锁 %.0fs 超时: 可能有流式 worker 卡死",
                 _LOCK_WAIT_SEC)
@@ -882,6 +900,27 @@ class GSVEngine:
             self._lock.release()
 
     def _lazy_init(self):
+        """F7: 加载期计时交给进程看门狗, 卡在 import/ensure_weights 也能重启恢复。"""
+        if self._tts is not None:
+            return
+        _mark_loading_start("lazy")
+        try:
+            self._lazy_init_inner()
+        except BaseException:
+            # F7: 半初始化 (TTS 实例已建、后续补丁/ONNX/soundfile 步骤失败)
+            # 不能留给下次直接复用 — 置空让下次请求完整重建, 并回收显存。
+            self._tts = None
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+            raise
+        finally:
+            _mark_loading_end("lazy")
+
+    def _lazy_init_inner(self):
         if self._drop_stalled_model():
             logging.getLogger("adr").warning(
                 "[gsv] 上次流式合成 worker 超时未退出, 强制重建模型")
@@ -897,10 +936,8 @@ class GSVEngine:
         # 批次63: 分桶 CUDA Graph — 仅在 ADR_T2S_CUDAGRAPH=1 时生效; 非空非 "0"
         # 时桥改用分桶 runner ("1"/"default" = 默认 9 档, 或逗号分隔档位)
         os.environ.setdefault("ADR_T2S_CUDAGRAPH_BUCKETS", "")
-        # 兼容补丁: NLTK (英文 G2P 依赖) 离线环境下载默认超时 72s/次,
-        # 收紧到 5s 快速失败走内置回退发音
-        import socket
-        socket.setdefaulttimeout(5)
+        # 兼容补丁: NLTK (英文 G2P 依赖) 离线环境下载默认超时 72s/次 —
+        # 已在 _gsv_context 内收紧到 5s 并在退出时还原 (F12)。
         # 批次74: 英文 G2P 离线依赖体检 — 缺 cmudict/标注器时英文文本会在
         # g2p_en 抛 LookupError (无外网机器无法自动补下载), 这里提前落日志 +
         # 审计事件, 便于排障; 不影响启动, 中/日/粤合成照常。
@@ -1094,6 +1131,9 @@ class GSVEngine:
                     # 批次38: 安全预检收编到唯一换权点 — 恶意 pickle 在 third_party
                     # torch.load 前拒绝, 覆盖 v2 请求级 / v3 档案 / set_* 全部入口
                     validate_weights_file(vw)
+                    # F10: 先失效再加载 — init 中途抛错时上游可能已卸载旧模型,
+                    # 若保留旧指纹, 下次同权重请求会误判"已加载"直接用它合成。
+                    self._loaded["vits"] = None
                     self._tts.init_vits_weights(vw)
                     self._loaded["vits"] = vstamp
                     changed = True
@@ -1101,6 +1141,7 @@ class GSVEngine:
                 tstamp = weights_stamp(tw)
                 if self._loaded.get("t2s") != tstamp:
                     validate_weights_file(tw)
+                    self._loaded["t2s"] = None
                     self._tts.init_t2s_weights(tw)
                     self._loaded["t2s"] = tstamp
                     changed = True
@@ -1525,6 +1566,32 @@ class GSVEngine:
 _ENGINE: Optional[GSVEngine] = None
 _ENGINE_LOCK = threading.Lock()  # 批次41a: 单例创建锁 (多线程首次并发防多实例)
 _LOADING = False   # 后台预热进行中 (服务启动期, 供控制台显示引擎三态)
+# F7: 模型加载墙钟起点 — lazy_init 卡在 import/权重下载时也纳入看门狗
+_LOADING_SINCE = 0.0
+_LOAD_TOKEN: object | None = None
+_LOAD_STALL_SEC = 3600.0  # 加载/预热持续超过 1h 视为卡死 (正常首启 < 10min)
+
+
+def _mark_loading_start(token: object) -> None:
+    global _LOADING_SINCE, _LOAD_TOKEN
+    if _LOADING_SINCE <= 0:
+        _LOADING_SINCE = time.monotonic()
+        _LOAD_TOKEN = token
+
+
+def _mark_loading_end(token: object) -> None:
+    global _LOADING_SINCE, _LOAD_TOKEN
+    if _LOAD_TOKEN is token:
+        _LOADING_SINCE = 0.0
+        _LOAD_TOKEN = None
+
+
+def loading_seconds() -> float:
+    """F7: 当前模型加载/预热已持续秒数 (0 = 未在加载)。"""
+    return 0.0 if _LOADING_SINCE <= 0 else max(
+        0.0, time.monotonic() - _LOADING_SINCE)
+
+
 _STAGE = ""        # 预热细分阶段: queued/importing/loading/kernel/failed (供前端实时显示)
 # 批次73: 预热失败原因摘要 (traceback 末几行, 最多 1200 字)。原实现 failed 只
 # log.warning, 前端与壳只见"失败"二字, 用户无从判断是缺权重 / 显存不足 / 依赖坏。
@@ -1598,28 +1665,40 @@ def start_watchdog(on_exit=None) -> bool:
     return True
 
 
+def _watchdog_bail(what: str, waited: float, threshold: float, on_exit,
+                   **fields) -> None:
+    """看门狗统一退出路径: critical 日志 + 审计事件 + 清理回调 + 硬退出。"""
+    logging.getLogger("adr").critical(
+        "[watchdog] %s %.0fs (阈值 %.0fs): 无法在进程内回收,"
+        "退出进程交由外部守护重启", what, waited, threshold)
+    log_event("engine_watchdog", action="exit", waited_s=round(waited, 1),
+              threshold_s=threshold, **fields)
+    if on_exit is not None:
+        try:
+            on_exit()
+        except Exception:
+            logging.getLogger("adr").warning(
+                "[watchdog] 退出前清理子进程失败", exc_info=True)
+    try:
+        logging.shutdown()
+    except Exception:
+        pass
+    os._exit(_WATCHDOG_EXIT_CODE)
+
+
 def _watchdog_loop(grace: float, on_exit) -> None:
     while True:
         time.sleep(_WATCHDOG_POLL_SEC)
         waited = degraded_seconds()
-        if waited < grace:
-            continue
-        logging.getLogger("adr").critical(
-            "[watchdog] 引擎已降级 %.0fs (阈值 %.0fs): 卡死 worker 无法在进程内"
-            "回收, 退出进程交由外部守护重启", waited, grace)
-        log_event("engine_watchdog", degraded_s=round(waited, 1),
-                  threshold_s=grace, action="exit")
-        if on_exit is not None:
-            try:
-                on_exit()
-            except Exception:
-                logging.getLogger("adr").warning(
-                    "[watchdog] 退出前清理子进程失败", exc_info=True)
-        try:
-            logging.shutdown()
-        except Exception:
-            pass
-        os._exit(_WATCHDOG_EXIT_CODE)
+        if waited >= grace:
+            _watchdog_bail("引擎已降级", waited, grace, on_exit,
+                           degraded_s=round(waited, 1))
+        # F7: lazy_init / prewarm 卡在 import / 权重下载 / 编译时
+        # ``_degraded_since`` 永不置位, 旧看门狗对此全盲 — 按加载墙钟单独兜住。
+        loading_for = loading_seconds()
+        if loading_for >= _LOAD_STALL_SEC:
+            _watchdog_bail("模型加载卡死", loading_for, _LOAD_STALL_SEC, on_exit,
+                           loading_s=round(loading_for, 1))
 
 
 def stage() -> str:
@@ -1639,11 +1718,18 @@ def stage_error() -> str:
 
 
 def _error_summary(exc: BaseException) -> str:
-    """把异常整理成人读摘要 (纯函数, 单测覆盖)。"""
-    lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
-    # 末 6 行足以覆盖 "xxxError: msg" + 关键两帧, 首行(File 链)也留
-    tail = [ln.rstrip() for ln in lines[-6:] if ln.strip()]
-    txt = "\n".join(tail) if tail else f"{type(exc).__name__}: {exc}"
+    """把异常整理成人读摘要 (纯函数, 单测覆盖)。
+
+    审计 S2/S10: /health 免鉴权, 原实现直接回 traceback 末 6 行 — 其中
+    "File \"C:\\Users\\<用户名>\\...\"" 会泄露本机绝对路径与安装形态。
+    这里只保留 "异常类型: 消息", 再抹掉盘符路径/用户目录, 不返回任何栈帧。
+    """
+    msg = str(exc).strip().replace("\r", " ")
+    txt = f"{type(exc).__name__}: {msg}" if msg else type(exc).__name__
+    # 抹掉 Windows 盘符绝对路径与 POSIX 绝对路径 (保留文件名部分便于定位)
+    txt = re.sub(r"[A-Za-z]:\\[^\s\"']+", lambda m: Path(m.group(0)).name, txt)
+    txt = re.sub(r"(?<![\w.])/(?:[\w.\-]+/)+[\w.\-]+",
+                 lambda m: Path(m.group(0)).name, txt)
     if len(txt) > 1200:
         txt = "…" + txt[-1200:]
     return txt
@@ -1724,6 +1810,7 @@ def prewarm(default_profile: str | None = None) -> None:
     global _LOADING, _STAGE, _STAGE_ERROR
     log = logging.getLogger("adr.models.gsv_engine")
     _LOADING = True
+    _mark_loading_start("prewarm")  # F7: 预热也纳入看门狗加载计时
     _STAGE_ERROR = ""  # 批次73: 重试时清掉上一轮失败原因
     _STAGE = "queued"
     try:
@@ -1741,7 +1828,10 @@ def prewarm(default_profile: str | None = None) -> None:
                 prof = load_voice(prof_name)
                 kw = {"vits_weights": prof.get("vits_weights"),
                       "t2s_weights": prof.get("t2s_weights")}
-                log.info("[prewarm] 用音色档案「%s」的权重预热", prof_name)
+                # S6: 档案名可能是人名 — 日志只留指纹
+                from adr.core.audit import text_fp
+                log.info("[prewarm] 用音色档案 (fp=%s) 的权重预热",
+                         text_fp(prof_name))
             except Exception:
                 prof = None  # 档案损坏 → 退回纯预训练权重
         # 批次44: 预训练资源 bootstrap — 便携包不含底模, 首启按需下载+解压
@@ -1753,7 +1843,19 @@ def prewarm(default_profile: str | None = None) -> None:
             gsv_bootstrap.ensure()
         _STAGE = "loading"    # 权重加载进显存
         eng = get_gsv_engine()
-        eng.warmup(**{k: v for k, v in kw.items() if v})
+        weights = {k: v for k, v in kw.items() if v}
+        try:
+            eng.warmup(**weights)
+        except Exception as e:
+            # F12: 档案权重文件损坏/不兼容时不让整个预热失败 — 退回预训练权重
+            if not weights:
+                raise
+            log.warning("[prewarm] 档案权重加载失败, 退回预训练权重: %s",
+                        _error_summary(e))
+            log_event("prewarm", degraded=True, reason=_error_summary(e))
+            kw = {}
+            eng.reset_engine("prewarm-degraded", 0)
+            eng.warmup()
         log.info("[prewarm] GPT-SoVITS 引擎就绪")
         # kernel JIT 预热: 否则首次合成再付 ~14s CUDA 编译 (只取首块)
         try:
@@ -1779,6 +1881,7 @@ def prewarm(default_profile: str | None = None) -> None:
                     e, _STAGE_ERROR)
     finally:
         _LOADING = False
+        _mark_loading_end("prewarm")
 
 
 _PROFILE_IDLE_DELAY = 10.0  # 秒: 预热 ready 后的空闲期, 之后再启动后台采样

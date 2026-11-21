@@ -39,6 +39,21 @@ _GSV_REQUIRED = [
 ]
 
 
+def _display_path(p: object) -> str:
+    """S10: 体检报告常被复制粘贴报障, 路径里的用户名不出本机。
+
+    只把 home 前缀换成 ``~`` — 保留盘符/目录结构, 用户仍能定位问题。
+    """
+    s = str(p)
+    try:
+        home = str(Path.home())
+        if home and s.startswith(home):
+            return "~" + s[len(home):]
+    except Exception:
+        pass
+    return s
+
+
 def _clip_profile_ref(ref: Path, dur: float) -> str:
     """档案 ref 超长裁剪: 去首尾静音取 8s (与 voice_library 兜底同思路)。
 
@@ -367,10 +382,10 @@ def run_checks(fix: bool = False) -> dict:
         data_dir.mkdir(parents=True, exist_ok=True)
         probe.write_text("ok", encoding="utf-8")
         probe.unlink(missing_ok=True)
-        add("data_write", "数据目录可写", "ok", str(data_dir))
+        add("data_write", "数据目录可写", "ok", _display_path(data_dir))
     except Exception as e:
         add("data_write", "数据目录可写", "fail",
-            f"{data_dir} 写入失败: {e}",
+            f"{_display_path(data_dir)} 写入失败: {e}",
             hint="在设置中心改到有写权限的目录 (或检查杀毒/只读盘), 然后重启服务")
 
     # 9. 默认端口 + 服务探活 (info 级, 壳模式端口动态不影响) -----------
@@ -405,5 +420,5 @@ def run_checks(fix: bool = False) -> dict:
                 "version": _version(),
                 "python": sys.version.split()[0],
                 "platform": platform.platform(),
-                "data_dir": str(data_dir),
+                "data_dir": _display_path(data_dir),
             }}

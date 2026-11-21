@@ -37,13 +37,15 @@ UNKNOWN_CMD = "unknown_cmd"
 SESSION_TIMEOUT = "session_timeout"
 VALIDATION_ERROR = "validation_error"
 UNAUTHORIZED = "unauthorized"
+# F7: 预热未完成 (与 engine_stalled 区分, 客户端应稍后重试而非判定卡死)
+ENGINE_LOADING = "engine_loading"
 
 # 门禁测试断言: 协议文件里出现的 code 字面量必须在本集合内
 WIRE_CODES = frozenset({
     INVALID_PARAMS, PROFILE_NOT_FOUND, PAYLOAD_TOO_LARGE, BUSY,
     CUDA_OOM, NLTK_MISSING, INVALID_NAME, ROLLBACK_FAILED, EXPORT_FAILED,
     IMPORT_FAILED, NOT_INITIALIZED, UNKNOWN_CMD, SESSION_TIMEOUT,
-    VALIDATION_ERROR, UNAUTHORIZED,
+    VALIDATION_ERROR, UNAUTHORIZED, ENGINE_LOADING,
 })
 
 
@@ -108,6 +110,8 @@ _UNAVAILABLE_CODES = {
     "config_error", "model_not_found", "device_error", "dependency_missing",
     # 批次86 (CON-01): 引擎卡死 / 锁等待超时 → 503, 客户端可重试
     "engine_stalled",
+    # F7: 预热未完成 → 503 (Retry-After), 不是故障
+    "engine_loading",
 }
 
 

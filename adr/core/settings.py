@@ -79,6 +79,11 @@ ENV_REGISTRY: dict[str, str] = {
     # --- 服务面鉴权 / CORS / 请求体 ---
     "ADR_TTS_API_KEY": "settings",
     "ADR_ALLOW_QUERY_API_KEY": "settings",
+    # 历史凭据名 / 访问日志开关: 只作为子进程 env 清除名单与入口开关出现
+    "ADR_API_KEY": "console",
+    "ADR_ADMIN_PASSWORD": "console",
+    "ADR_ACCOUNT_PASSWORD": "console",
+    "ADR_ACCESS_LOG": "server",
     "ADR_ALLOW_UNAUTHENTICATED": "server",
     "ADR_CORS_ORIGINS": "settings",
     "ADR_ALLOWED_HOSTS": "settings",
@@ -108,6 +113,7 @@ ENV_REGISTRY: dict[str, str] = {
     "ADR_TTS_CACHE_DIR": "settings",
     "ADR_TTS_CACHE_MAX": "settings",
     "ADR_TTS_CACHE_MB": "settings",
+    "ADR_TTS_CACHE_TTL_DAYS": "settings",
     "ADR_SEG_CACHE": "settings",
     "ADR_SEG_CACHE_MAX": "settings",
     "ADR_SEG_CACHE_MB": "settings",
@@ -288,6 +294,17 @@ def tts_cache_max_bytes() -> int:
             or DEFAULT_TTS_CACHE_MAX_BYTES
     except ValueError:
         return DEFAULT_TTS_CACHE_MAX_BYTES
+
+
+def tts_cache_ttl_days() -> int:
+    """S11: 盘上合成缓存保留天数 (0 = 不过期), 默认 7 天。
+
+    缓存音频含用户文本的语音, 长期留盘属可识别内容; 启动扫描时按 mtime 清旧。
+    """
+    try:
+        return max(0, int(os.environ.get("ADR_TTS_CACHE_TTL_DAYS", 7)))
+    except ValueError:
+        return 7
 
 
 # ===== 流式句级缓存 (models/gsv_runtime.py) =====

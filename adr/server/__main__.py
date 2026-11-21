@@ -220,7 +220,11 @@ def main():
     from adr.models import gsv_engine
     from adr.server import console
     gsv_engine.start_watchdog(on_exit=console.stop_background_procs)
-    uvicorn.run(create_app(), host=args.addr, port=args.port)
+    # 审计 S1: uvicorn access log 会把整条请求行 (含 ?api_key=/token/text/
+    # ref_audio_path 等查询参数) 原样写进 server.log。默认关闭, 需要时用
+    # ADR_ACCESS_LOG=1 显式打开 (仅应在可信内网/排障时使用)。
+    access_log = os.environ.get("ADR_ACCESS_LOG", "").strip().lower() in ("1", "true", "yes", "on")
+    uvicorn.run(create_app(), host=args.addr, port=args.port, access_log=access_log)
 
 
 if __name__ == "__main__":

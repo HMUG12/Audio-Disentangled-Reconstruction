@@ -14,8 +14,10 @@ JSONL 追加写 ``<adr_data_dir()>/logs/audit.log``, 每行一个事件::
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
+import os
 import threading
 from datetime import datetime
 
@@ -36,9 +38,31 @@ def _rotate(log_path) -> None:
     log_path.replace(log_path.with_name(f"{log_path.name}.1"))
 
 
+_FP_SECRET: bytes | None = None
+
+
+def _fp_secret() -> bytes:
+    """S7: 每台机器一份随机盐 — 无盐 sha256 可被字典反推短文本 (如人名/句子)。"""
+    global _FP_SECRET
+    if _FP_SECRET:
+        return _FP_SECRET
+    try:
+        from adr.core.config import adr_data_dir
+        p = adr_data_dir() / ".audit_fp_key"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if not p.exists():
+            p.write_text(os.urandom(32).hex(), encoding="ascii")
+        _FP_SECRET = p.read_text(encoding="ascii").strip().encode("ascii")
+    except Exception:
+        # 数据目录不可写时降级为固定盐, 仍优于无盐 (且保证进程内确定性)
+        _FP_SECRET = b"adr-audit-fp-v1"
+    return _FP_SECRET
+
+
 def text_fp(text: str) -> str:
-    """文本指纹 — sha256 前 16 位。审计日志中代替明文定位同文本。"""
-    return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:16]
+    """文本指纹 — 带本机随机盐的 HMAC-SHA256 前 16 位 (S7)。"""
+    return hmac.new(_fp_secret(), text.encode("utf-8", errors="replace"),
+                    hashlib.sha256).hexdigest()[:16]
 
 
 def log_event(event: str, **fields) -> None:

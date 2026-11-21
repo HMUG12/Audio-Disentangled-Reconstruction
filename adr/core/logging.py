@@ -119,7 +119,7 @@ def setup_logging(
     rich_handler = RichHandler(
         console=get_console(),
         show_path=show_path,
-        markup=True,
+        markup=False,  # S9: 用户文本含 [xxx] 时不被当 markup 吞掉
         rich_tracebacks=True,
         tracebacks_show_locals=False,
     )

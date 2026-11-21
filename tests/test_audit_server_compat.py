@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
+from adr.core.audit import text_fp
 from adr.server import create_app, tts_cache
 
 
@@ -334,7 +335,9 @@ def test_v3_voices_logs_bad_profile(client, voice_dir, caplog):
     with caplog.at_level(logging.WARNING, logger="adr.server.v3_compat"):
         ids = [v["id"] for v in client.get("/api/v3/voices").json()]
     assert "bad" in ids                     # 行为不变: 坏档案仍列出
-    assert any("bad" in rec.getMessage() for rec in caplog.records)
+    # S6: 档案名可能是人名, 日志只留指纹
+    assert any(f"fp={text_fp('bad')}" in rec.getMessage()
+               for rec in caplog.records)
 
 
 # ─── #27 / #37 / #20 / #38 native ───
@@ -343,7 +346,9 @@ def test_native_profiles_logs_bad_profile(client, voice_dir, caplog):
     with caplog.at_level(logging.WARNING, logger="adr.server.native"):
         names = [p["name"] for p in client.get("/api/adr/v1/profiles").json()["profiles"]]
     assert names == ["demo"]
-    assert any("bad" in rec.getMessage() for rec in caplog.records)
+    # S6: 档案名可能是人名, 日志只留指纹
+    assert any(f"fp={text_fp('bad')}" in rec.getMessage()
+               for rec in caplog.records)
 
 
 def test_health_no_absolute_paths(client, tmp_path):

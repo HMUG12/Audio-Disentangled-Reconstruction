@@ -325,13 +325,20 @@ def docs_check():
     local = 0
     targets: list[tuple[str, str, str]] = []
     for slug, entry in DOC_CATALOG.items():
-        rel = entry.paths["zh"]
-        try:
-            _title, local_text, _stamp = _read_local(rel)
-        except HTTPException:
-            continue
-        local += 1
-        targets.append((slug, rel, _sha(local_text)))
+        # P7: 中英两版都参与比对 — 旧实现只看 zh, 英文版单独更新时不会提示
+        seen: set[str] = set()
+        for rel in (entry.paths["zh"], entry.paths.get("en")):
+            if not rel or rel in seen:
+                continue
+            seen.add(rel)
+            try:
+                _title, local_text, _stamp = _read_local(rel)
+            except HTTPException:
+                continue
+            if rel == entry.paths["zh"]:
+                local += 1  # local 仍按"篇"计 (前端据此判断安装包是否漏拷 docs)
+            targets.append((slug, rel, _sha(local_text)))
+    expected = len(targets)
     if targets:
         # 并发拉取 (上限 4): 串行时单篇 6s 超时会把最坏耗时堆到 60s,
         # 长期占用一个线程池工作线程, 挤占同源控制台请求。
@@ -349,13 +356,16 @@ def docs_check():
                     if err.status_code == 404:
                         continue  # 官方仓库暂无该篇 (未发布/路径不同), 跳过而不影响整体比对
                     return {"online": False, "updates": [], "error": err.detail,
-                            "checked": checked, "local": local}
+                            "checked": checked, "local": local,
+                            "expected": expected}
                 checked += 1
-                if online_sha != local_sha:
+                if online_sha != local_sha and slug not in updates:
                     updates.append(slug)
     # local = 本机随包文档数: 为 0 时 checked 必然 0, 前端据此提示"未随包提供文档",
     # 不能把它当成"已是最新" (安装包漏拷 docs/ 的静默故障, 2026-11-14 深审 A1)。
-    return {"online": True, "updates": updates, "checked": checked, "local": local}
+    # expected/checked 不等说明有文件在官方仓库缺失或拉取失败, 同样不能报"已是最新"。
+    return {"online": True, "updates": updates, "checked": checked,
+            "local": local, "expected": expected}
 
 
 @router.get("/{slug}", summary="读取单篇文档")

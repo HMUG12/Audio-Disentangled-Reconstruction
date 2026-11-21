@@ -270,6 +270,8 @@
       esc(tr("文档中心", "Documentation")) + '">' +
       '<div class="adr-docs-head"><b>' + esc(tr("文档中心", "Documentation")) + '</b>' +
       '<span class="adr-docs-badge" id="adrDocsBadge">' + esc(tr("内置", "Built-in")) + "</span>" +
+      '<button type="button" class="adr-docs-back" id="adrDocsBack">' +
+      esc(tr("← 目录", "← List")) + "</button>" +
       '<span class="adr-docs-spacer"></span>' +
       '<button type="button" id="adrDocsCheck">' + esc(tr("检查更新", "Check updates")) + "</button>" +
       '<button type="button" class="adr-docs-x" data-close aria-label="' +
@@ -291,6 +293,13 @@
 
     root.addEventListener("click", function (e) {
       if (e.target.closest("[data-close]")) closeDocs();
+      if (e.target.closest("#adrDocsBack")) {
+        var panel = root.querySelector(".adr-docs-panel");
+        if (panel) panel.classList.remove("reading");
+        var groups = document.getElementById("adrDocsGroups");
+        if (groups) groups.scrollTop = 0;
+        return;
+      }
       var item = e.target.closest("[data-slug]");
       if (item) loadDoc(item.getAttribute("data-slug"));
     });
@@ -440,6 +449,8 @@
 
   function loadDoc(slug, source) {
     docs.slug = slug;
+    // P7: 连点两篇时慢响应可能后到并覆盖新正文 — 只认最后一次请求
+    var seq = (docs.seq = (docs.seq || 0) + 1);
     markActive();
     var main = document.getElementById("adrDocsMain");
     if (!main) return;
@@ -455,6 +466,7 @@
         });
       })
       .then(function (doc) {
+        if (seq !== docs.seq) return;
         var badges = '<span class="tag ' + (doc.source === "online" ? "online" : "") + '">' +
           (doc.source === "online" ? tr("在线最新", "Latest online") : tr("本地内置", "Bundled locally")) + "</span>";
         if (docs.updates[slug]) badges += '<span class="tag update">' + esc(tr("有新版本", "Update available")) + "</span>";
@@ -475,6 +487,7 @@
         if (panel) panel.classList.add("reading");
       })
       .catch(function (err) {
+        if (seq !== docs.seq) return;
         if (source === "online") {
           var state = document.getElementById("adrDocsState");
           if (state) state.textContent = tr("在线版不可用：", "Online version unavailable: ") +
@@ -515,6 +528,11 @@
             // 本机一份文档都没有 (安装包漏拷 docs/) — 不能报"已是最新"
             state.textContent = tr("本机安装包未包含文档，无法比对（请重新安装完整版本）",
               "No bundled docs on this install — cannot compare (reinstall the full package)");
+          } else if (typeof res.expected === "number" && res.checked < res.expected) {
+            // P7: 有文件在官方仓库缺失/拉取失败, checked<expected 时不能报"已是最新"
+            state.textContent = tr(
+              "已比对 " + res.checked + "/" + res.expected + " 篇（部分文档官方仓库暂无）",
+              "Compared " + res.checked + "/" + res.expected + " file(s) (some missing upstream)");
           } else {
             state.textContent = res.updates && res.updates.length
               ? tr("发现 " + res.updates.length + " 篇有更新，可切换「在线版」查看",

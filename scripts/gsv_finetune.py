@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -20,20 +21,51 @@ PRE_GSV = GSV / "GPT_SoVITS" / "pretrained_models" / "gsv-v2final-pretrained"
 PRE = GSV / "GPT_SoVITS" / "pretrained_models"
 
 
-def run(argv: list, env: dict = None, desc: str = ""):
+def run(argv: list, env: dict = None, desc: str = "", timeout: int | None = None):
     """argv 一律传参数列表 (shell=False): 路径含空格/中文/特殊字符不会被二次
-    解析, 也不存在命令注入面 (审计 R5-SCR-01)。"""
-    print(f"\n{'=' * 60}\n>>> {desc}\n{subprocess.list2cmdline(argv)}\n{'=' * 60}",
-          flush=True)
+    解析, 也不存在命令注入面 (审计 R5-SCR-01)。
+
+    F2: 每步显式超时 — 上游 ASR/训练卡死时不能无限挂住; 超时抛 RuntimeError
+    由 console._train_reader 收成 failed (而不是永远 running)。
+    F5: 打印 [[STAGE]] 供服务端解析出当前步骤; PYTHONUNBUFFERED=1 保证
+    上游 print 立即进管道, 否则前端 stage/日志长时间空转。
+    """
+    print(f"\n[[STAGE]] {desc}\n{'=' * 60}\n>>> {desc}\n"
+          f"{subprocess.list2cmdline(argv)}\n{'=' * 60}", flush=True)
     e = os.environ.copy()
     # 官方脚本依赖从仓库根 import (tools./GPT_SoVITS.), 需显式 PYTHONPATH
     e["PYTHONPATH"] = f"{GSV};{GSV / 'GPT_SoVITS'}" + \
         (os.pathsep + e["PYTHONPATH"] if e.get("PYTHONPATH") else "")
+    e["PYTHONUNBUFFERED"] = "1"
     if env:
         e.update({k: str(v) for k, v in env.items()})
-    r = subprocess.run(argv, cwd=str(GSV), env=e)
+    try:
+        r = subprocess.run(argv, cwd=str(GSV), env=e, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f"步骤超时 ({desc}, 上限 {timeout}s) — 已终止, 请检查显存/依赖或换更长超时")
     if r.returncode != 0:
         raise RuntimeError(f"步骤失败 ({desc}): exit={r.returncode}")
+
+
+def _check_asr_list(fp: Path) -> None:
+    """F2: ASR 产物校验 — 空 list / 全是空文本时后续 3/7~5/7 会"成功"产出
+    空特征, 直到训练才报难懂的 shape 错。这里提前中止并给可执行提示。"""
+    if not fp.exists():
+        raise SystemExit(f"[abort] ASR 未产出标注文件: {fp} — 检查 funasr/modelscope "
+                         "是否随包、音频是否有可识别语音")
+    rows = [ln for ln in fp.read_text(encoding="utf-8", errors="replace").splitlines()
+            if ln.count("|") >= 3 and ln.rsplit("|", 1)[-1].strip()]
+    if len(rows) < 3:
+        raise SystemExit(f"[abort] ASR 有效标注仅 {len(rows)} 条 (<3): {fp} — "
+                         "请检查 funasr 模型下载、音频时长/语言与切片结果")
+    print(f"[asr] 标注校验通过: {len(rows)} 条", flush=True)
+
+
+def _weights(exp: str, kind: str) -> list:
+    d = GSV / ("SoVITS_weights_v2" if kind == "s2" else "GPT_weights_v2")
+    pat = f"{exp}_e*.pth" if kind == "s2" else f"{exp}-e*.ckpt"
+    return sorted(d.glob(pat), key=lambda p: p.stat().st_mtime)
 
 
 def _pick_ref(candidates, fallback: str, exp: str) -> str:
@@ -137,6 +169,17 @@ def main():
     steps = ["slice", "asr", "text", "hubert", "semantic", "s2", "s1"]
     start = steps.index(args.skip_to)
 
+    # F3: 同名实验重新完整训练时, 上次的切片/标注/特征/ckpt 若不清, 官方脚本
+    # 会"复用"它们 (merge 还有 `not dst.exists()` 直接跳过), 训出来的模型混着
+    # 旧数据且极难察觉。完整重跑 (start=0) 视为全新实验; 断点续跑不动。
+    if start <= 0:
+        import shutil
+        for d in (sliced, logs):
+            if d.exists():
+                shutil.rmtree(d, ignore_errors=True)
+                print(f"[clean] 清除同名实验的中间产物: {d}", flush=True)
+        list_file.unlink(missing_ok=True)
+
     # 设备能力分级: 数据准备 (slice/asr/特征) CPU 可跑; s2/s1 训练必须 NVIDIA CUDA
     import torch
     has_cuda = torch.cuda.is_available()
@@ -174,14 +217,21 @@ def main():
     if start <= 0:
         run([PY, "-s", "tools/slice_audio.py", str(audio), str(sliced),
              "-34", "4000", "300", "10", "500", "0.9", "0.25", "0", "1"],
-            desc="1/7 静音切片")
+            desc="1/7 静音切片", timeout=3600)
     if start <= 1:
         # ASR: 中文自动转 FunASR (modelscope 下载 paraformer, 一次性的)
+        # 重跑前先删旧 list — 上游若是追加写, 旧标注会混进本次训练
+        list_file.unlink(missing_ok=True)
         run([PY, "-s", "tools/asr/fasterwhisper_asr.py",
              "-i", str(sliced), "-o", str(asr_out),
              "-s", "medium", "-l", "zh", "-p", asr_prec],
-            desc=f"2/7 ASR 转录 (中文走 FunASR, 精度 {asr_prec})")
+            desc=f"2/7 ASR 转录 (中文走 FunASR, 精度 {asr_prec})", timeout=7200)
         list_file = asr_out / f"{sliced.name}.list"
+
+    # F2: 只要还会跑特征步骤, 先校验 ASR 标注 (空产物在这里中止, 而不是
+    # 等训练时报 shape 错)
+    if start <= 2:
+        _check_asr_list(list_file)
 
     common_env = {
         "inp_text": list_file, "inp_wav_dir": sliced, "exp_name": exp,
@@ -192,26 +242,28 @@ def main():
         run([PY, "-s", "GPT_SoVITS/prepare_datasets/1-get-text.py"],
             env={**common_env,
                  "bert_pretrained_dir": PRE / "chinese-roberta-wwm-ext-large"},
-            desc="3/7 文本+BERT 特征")
+            desc="3/7 文本+BERT 特征", timeout=1800)
     if start <= 3:
         run([PY, "-s", "GPT_SoVITS/prepare_datasets/2-get-hubert-wav32k.py"],
             env={**common_env, "cnhubert_base_dir": PRE / "chinese-hubert-base"},
-            desc="4/7 HuBERT 特征")
+            desc="4/7 HuBERT 特征", timeout=1800)
     if start <= 4:
         run([PY, "-s", "GPT_SoVITS/prepare_datasets/3-get-semantic.py"],
             env={**common_env, "pretrained_s2G": PRE_GSV / "s2G2333k.pth",
                  "s2config_path": GSV / "GPT_SoVITS" / "configs" / "s2.json"},
-            desc="5/7 语义 token")
+            desc="5/7 语义 token", timeout=1800)
 
     # 合并单分片产物 (all_parts=1 时官方 webui 也会做这步)
+    # F3: 必须覆盖写 — 旧实现 `and not dst.exists()` 会保留上次同名实验的
+    # 合并文件, 本次新特征虽然生成了却永远进不了训练。
     import shutil
     for src, dst in [
         (logs / "2-name2text-0.txt", logs / "2-name2text.txt"),
         (logs / "6-name2semantic-0.tsv", logs / "6-name2semantic.tsv"),
     ]:
-        if src.exists() and not dst.exists():
+        if src.exists():
             shutil.copy2(src, dst)
-            print(f"[merge] {src.name} -> {dst.name}")
+            print(f"[merge] {src.name} -> {dst.name} (overwrite)", flush=True)
 
     if start <= 5:
         # s2/s1 训练必须 CUDA (torch 原生训练无 AMD/Intel Windows 可靠路径)
@@ -260,13 +312,21 @@ def main():
                 s2_env = {"ADR_S2_BF16": "1"}
             except Exception as e:
                 print(f"[O3] cuFFT 不支持 bf16 FFT ({e.__class__.__name__}), 回落 fp16 混合精度")
+        # F4: 训练进程 exit=0 不等于有产物 (上游可能因数据为空/早停直接返回)。
+        # 记录训练前权重集合, 训完必须看到"新增或更新"的 s2 权重才继续。
+        before_s2 = {p.resolve() for p in _weights(exp, "s2")}
+        t_s2 = time.time()
         run([PY, "-s", "GPT_SoVITS/s2_train.py", "--config", str(tmp_cfg)],
-            env=s2_env, desc=f"6/7 SoVITS 微调 ({args.s2_epochs} epochs)")
+            env=s2_env, desc=f"6/7 SoVITS 微调 ({args.s2_epochs} epochs)",
+            timeout=args.s2_epochs * 1800 + 1800)
+        ws = [p for p in _weights(exp, "s2")
+              if p.resolve() not in before_s2 or p.stat().st_mtime >= t_s2 - 2]
+        if not ws:
+            raise SystemExit(f"[abort] s2 训练已结束但未产出新权重 ({exp}_e*.pth) — "
+                             "检查训练日志/早停信号/数据量; 旧权重不当作本次结果")
 
         # C3: 训完自动把最新 s2 权重绑定到音色档案 (不存在则自动建档, 闭环断点修复)
         if args.bind_voice:
-            ws = list((GSV / "SoVITS_weights_v2").glob(f"{exp}_e*.pth"))
-            ws.sort(key=lambda p: p.stat().st_mtime)  # 按时间取最新 (跨次训练轮次号会回卷)
             if ws:
                 from adr.models.voice_library import VOICES_DIR, save_voice
                 meta_p = VOICES_DIR / args.bind_voice / "meta.json"
@@ -309,8 +369,16 @@ def main():
         tmp_cfg.parent.mkdir(exist_ok=True)
         tmp_cfg.write_text(yaml.dump(cfg, allow_unicode=True), encoding="utf-8")
         env = {"_CUDA_VISIBLE_DEVICES": "0", "hz": "25hz"}
+        before_s1 = {p.resolve() for p in _weights(exp, "s1")}
+        t_s1 = time.time()
         run([PY, "-s", "GPT_SoVITS/s1_train.py", "--config_file", str(tmp_cfg)],
-            env=env, desc=f"7/7 GPT 微调 ({args.s1_epochs} epochs)")
+            env=env, desc=f"7/7 GPT 微调 ({args.s1_epochs} epochs)",
+            timeout=args.s1_epochs * 1800 + 1800)
+        new_s1 = [p for p in _weights(exp, "s1")
+                  if p.resolve() not in before_s1 or p.stat().st_mtime >= t_s1 - 2]
+        if not new_s1:
+            raise SystemExit(f"[abort] s1 训练已结束但未产出新权重 ({exp}-e*.ckpt) — "
+                             "检查训练日志/早停信号/数据量; 旧权重不当作本次结果")
 
     print(f"\n[DONE] 权重: {GSV}/SoVITS_weights_v2 与 GPT_weights_v2 下找 {exp}")
 

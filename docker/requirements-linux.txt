@@ -21,6 +21,10 @@ fastapi==0.129.0
 uvicorn[standard]==0.41.0
 python-multipart==0.0.24
 faster-whisper==1.2.1
+# 批次76: 训练 2/7 ASR 入口链 (fasterwhisper_asr → funasr_asr → funasr/modelscope)
+# 缺任一包都在 ModuleNotFoundError 处直接挂; modelscope 负责 paraformer 权重下载。
+funasr==1.4.2
+modelscope==1.35.3
 ctranslate2==4.8.1
 onnxruntime==1.24.4
 pypinyin==0.55.0

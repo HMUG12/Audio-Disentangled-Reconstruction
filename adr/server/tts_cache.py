@@ -32,6 +32,7 @@ import hashlib
 import json
 import os
 import threading
+import time
 from collections import OrderedDict
 from pathlib import Path
 
@@ -75,6 +76,10 @@ def _max_entries() -> int:
 
 def _max_bytes() -> int:
     return settings.tts_cache_max_bytes()
+
+
+def _max_age_sec() -> float:
+    return settings.tts_cache_ttl_days() * 86400.0
 
 
 def _file_stamp(path) -> list | None:
@@ -158,9 +163,15 @@ def _load_disk_once() -> None:
             statted.append((st.st_mtime, st.st_size, p))
         statted.sort(key=lambda t: t[0], reverse=True)
         max_b, max_n = _max_bytes(), _max_entries()
+        # S11: 合成音频含用户文本语音, 盘上缓存按 TTL 过期 (默认 7 天, 0=不过期)
+        ttl = _max_age_sec()
+        now = time.time()
         doomed: list[Path] = []
         with _lock:
-            for _, size, p in statted:
+            for mtime, size, p in statted:
+                if ttl > 0 and now - mtime > ttl:
+                    doomed.append(p)
+                    continue
                 key = p.stem[len(_PREFIX):]   # 批次69: 去掉版本前缀得到缓存键
                 if key in _cache:  # 批次66: 已在内存的条目先跳过, 不能按超限误删 / 重复记账
                     continue

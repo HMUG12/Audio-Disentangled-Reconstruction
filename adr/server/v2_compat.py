@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from io import BytesIO
 from pathlib import Path
 from typing import Union
@@ -45,6 +46,7 @@ from adr.server.audio_codec import pack_audio, to_int16
 from adr.server.exceptions import (
     BUSY,
     CUDA_OOM,
+    ENGINE_LOADING,
     INVALID_PARAMS,
     NLTK_MISSING,
     PAYLOAD_TOO_LARGE,
@@ -56,6 +58,15 @@ from adr.server.param_norm import env_num, normalize_params
 from adr.services import SynthesisService
 
 logger = logging.getLogger(__name__)
+
+
+def _wire_exc(exc: BaseException) -> str:
+    """S3/S10: 回给客户端的异常原文抹掉本机绝对路径 (保留文件名与原因)。"""
+    txt = str(exc)
+    txt = re.sub(r"[A-Za-z]:\\[^\s\"']+", lambda m: Path(m.group(0)).name, txt)
+    txt = re.sub(r"(?<![\w.])/(?:[\w.\-]+/)+[\w.\-]+",
+                 lambda m: Path(m.group(0)).name, txt)
+    return txt[:600]
 
 router = APIRouter(prefix="/api/v2", tags=["tts"])
 
@@ -258,6 +269,20 @@ def _stream_generator(engine, req: dict, media_type: str):
             logger.exception("streaming tts failed: %s", e)
 
 
+def _loading_response() -> Response | None:
+    """F7: 预热未完成 → 503 engine_loading + Retry-After, 不回 500/误判卡死。"""
+    from adr.models import gsv_engine as _gsv
+    if not (_gsv.is_loading() and not _gsv.is_ready()):
+        return None
+    return json_error(
+        503,
+        "合成引擎正在预热, 请稍后重试",
+        ENGINE_LOADING,
+        extra={"stage": _gsv.stage(), "stage_text": _gsv.stage_text()},
+        headers={"Retry-After": "5"},
+    )
+
+
 async def tts_handle(req: dict, request: Request) -> Response:
     """TTS 核心处理 (GET/POST 共用; native 层也复用)。
 
@@ -265,6 +290,9 @@ async def tts_handle(req: dict, request: Request) -> Response:
       0 → 非流式 | 1 → 分段流 (return_fragment) | 2 → 真流式 | 3 → 真流式+定长块
       其余 → 400。注: bool True == 1, 自然落分支 1。
     """
+    _loading = _loading_response()
+    if _loading is not None:
+        return _loading
     # 批次86 (SEC-01): 先记下"请求级"权重值 — _resolve_profile 会把档案里的
     # 权重回填进 req, 那不是本次请求的输入; 对档案权重做无鉴权预检既无意义
     # (由引擎 _ensure_weights 换权分支收口), 又会把库里的相对路径当用户输入拒。
@@ -284,7 +312,7 @@ async def tts_handle(req: dict, request: Request) -> Response:
             try:
                 await asyncio.to_thread(_validate_weights_file, _wp)
             except Exception as e:
-                return json_error(400, f"invalid {_wk}: {e}", INVALID_PARAMS)
+                return json_error(400, f"invalid {_wk}: {_wire_exc(e)}", INVALID_PARAMS)
             # 批次99 (R4-API-01): 回填解析后的绝对路径 — 引擎侧热换/合成复用
             # 同一基准 (GSV_DIR), 否则相对写法在预检通过后加载失败。
             req[_wk] = resolve_weights_path(_wp)
@@ -363,7 +391,7 @@ async def tts_handle(req: dict, request: Request) -> Response:
         # 服务端留堆栈, wire 字段 (message / Exception / code) 逐字不变。
         logger.exception("tts failed")
         return json_error(error_status_code(e), "tts failed", error_code(e),
-                          extra={"Exception": str(e)})
+                          extra={"Exception": _wire_exc(e)})
 
 
 # ─── TTS 端点 ───

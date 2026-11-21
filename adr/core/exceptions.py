@@ -94,6 +94,16 @@ class EngineStalledError(SynthesisError):
     code = "engine_stalled"
 
 
+class EngineLoadingError(EngineStalledError):
+    """F7: 引擎仍在预热 (下载/加载/编译) — 可重试, 不等于卡死。
+
+    预热线程持锁是正常状态, 若按 engine_stalled 处理会误报"卡死"并可能
+    触发自愈重置; 单独给 503 + engine_loading, 客户端按 Retry-After 重试。
+    """
+
+    code = "engine_loading"
+
+
 def error_code(e: BaseException) -> str:
     """异常 → 稳定错误码 (批次35 四面统一映射的单点)。
 

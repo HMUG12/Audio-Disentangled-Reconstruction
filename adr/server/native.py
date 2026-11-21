@@ -122,7 +122,9 @@ async def engine_restart(request: Request):
     if _gsv.is_loading():
         return json_error(409, "引擎正在加载或预热, 请稍后再试", "engine_busy")
     try:
-        reset = await asyncio.to_thread(_gsv.reset_engine, "manual")
+        # F7: wait_sec=0 — is_loading() 与 reset 之间预热线程可能刚持锁,
+        # 用默认 60s 等待会把线程池占用一分钟; 拿不到锁立即返回, 由客户端重试。
+        reset = await asyncio.to_thread(_gsv.reset_engine, "manual", 0)
     except EngineStalledError as exc:
         return json_error(503, str(exc), "engine_stalled")
     threading.Thread(
@@ -144,8 +146,10 @@ async def profiles():
             meta = voice_library.load_voice(name)
         except Exception:
             # 批次66: 坏档案仍跳过 (行为不变), 但留日志便于定位
-            logger.warning("profiles: load_voice(%r) failed, skipped", name,
-                           exc_info=True)
+            # S6: 档案名可能是人名 — 日志只留指纹
+            from adr.core.audit import text_fp
+            logger.warning("profiles: load_voice(fp=%s) failed, skipped",
+                           text_fp(name), exc_info=True)
             continue
         out.append({
             "name": name,

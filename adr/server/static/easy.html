@@ -85,6 +85,13 @@
   .ln { width: 54px; height: 3px; border-radius: 2px; background: var(--line);
     margin-bottom: 24px; transition: .3s; }
   .ln.ok { background: var(--green); }
+  /* P5: 窄屏步骤条不再固定 120px×3 撑出横向滚动 */
+  @media (max-width: 430px) {
+    .steps { gap: 0; }
+    .stp { width: auto; flex: 1 1 0; min-width: 0; }
+    .stp .lb { font-size: 12px; white-space: nowrap; }
+    .ln { flex: 1 1 20px; min-width: 10px; width: auto; }
+  }
 
   .card {
     background: var(--card); border: 1.5px solid var(--line); border-radius: 22px;
@@ -285,7 +292,11 @@
         <option value="ko" data-i18n="easy.lang_ko">한국어</option>
         <option value="yue" data-i18n="easy.lang_yue">粤语</option>
       </select>
-      <div style="margin-top:26px;display:flex;gap:12px">
+      <label id="vConsentRow" style="display:flex;gap:8px;align-items:flex-start;margin-top:14px;font-size:12.5px;line-height:1.6;color:var(--muted);cursor:pointer">
+        <input type="checkbox" id="vConsent" style="accent-color:var(--green);margin-top:3px;flex:none">
+        <span data-i18n="easy.consent">我确认这段录音是我本人，或已获得声音所有者授权；仅用于生成该声音。</span>
+      </label>
+      <div style="margin-top:20px;display:flex;gap:12px">
         <button class="btn w" id="cBack" data-i18n="easy.prev">← 上一步</button>
         <button class="btn g" id="cGo" style="flex:1" disabled data-i18n="easy.c_go">开始学习这个声音</button>
       </div>
@@ -538,14 +549,17 @@ function pick(f) {
       audioPath = d.path;
       upZone.classList.add("done");
       $("upTxt").textContent = I.t("easy.up_ok");
-      $("cGo").disabled = false;
+      syncImproveMode();
     })
     .catch(() => {
       $("upTxt").textContent = I.t("easy.up_fail");
       toast(I.t("easy.up_fail_toast"));
     });
 }
-$("vName").oninput = e => { $("cGo").disabled = !audioPath || !e.target.value.trim(); };
+$("vName").oninput = e => {
+  $("cGo").disabled = !audioPath || !$("vConsent").checked || !e.target.value.trim();
+};
+$("vConsent").onchange = () => syncImproveMode();
 /* 批次50: 改进模式开关 — 勾上时不用起名 (绑回原档案), 按钮文案切换 */
 function syncImproveMode() {
   const improve = $("wImproveRow").style.display !== "none" && $("wImprove").checked;
@@ -553,7 +567,8 @@ function syncImproveMode() {
   $("vName").style.visibility = improve ? "hidden" : "visible";
   $("vName").disabled = improve;
   $("cGo").textContent = improve ? I.t("easy.c_go_improve", {name: selected}) : I.t("easy.c_go");
-  $("cGo").disabled = !audioPath || (!improve && !$("vName").value.trim());
+  $("cGo").disabled = !audioPath || !$("vConsent").checked ||
+    (!improve && !$("vName").value.trim());
 }
 $("wImprove").onchange = syncImproveMode;
 $("cBack").onclick = () => {
@@ -562,6 +577,7 @@ $("cBack").onclick = () => {
 };
 $("cGo").onclick = async () => {
   try {
+    if (!$("vConsent").checked) { toast(I.t("easy.consent")); return; }
     const improve = $("wImproveRow").style.display !== "none" && $("wImprove").checked;
     if (improve) {
       // 批次50: 续训改进 — 旧权重初始化, 训完自动版本化绑回同一档案 (退化门兜底)
@@ -576,7 +592,9 @@ $("cGo").onclick = async () => {
       await jf("/api/adr/v1/profiles/create", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: $("vName").value.trim(), audio_path: audioPath,
-                               language: $("vLang").value })
+                               language: $("vLang").value,
+                               consent_granted: true,
+                               source_declaration: "easy: 用户上传录音，已勾选授权确认" })
       });
       startWork("profile");
     }
@@ -584,9 +602,10 @@ $("cGo").onclick = async () => {
 };
 
 /* 学习进度 (建档 profile / 训练 train 两种模式共用) */
-let workMode = "", workTimer = null;
+let workMode = "", workTimer = null, workFails = 0;
 function startWork(mode) {
   workMode = mode;
+  workFails = 0;
   $("vCreate").classList.add("hidden");
   $("vWork").classList.remove("hidden");
   $("wNext").classList.add("hidden");
@@ -606,6 +625,7 @@ function pollWork() {
   clearTimeout(workTimer);
   const url = workMode === "profile" ? "/api/adr/v1/profiles/create/status" : "/api/adr/v1/train/status";
   jf(url).then(d => {
+    workFails = 0;
     if (workMode === "profile") {
       const pct = d.state === "done" ? 100 : d.state === "working" ? Math.min(90, 8 + (d.elapsed_sec || 0) / 1.8) : 0;
       $("wBar").style.width = pct + "%";
@@ -631,12 +651,17 @@ function pollWork() {
       $("wBar").style.width = pct + "%";
       $("wPct").textContent = Math.round(pct) + "%";
       $("wMsg").textContent = d.state === "running"
-        ? I.t("easy.train_round", {n: done + 1, total: total})
+        ? I.t("easy.train_round", {n: done + 1, total: total}) + (d.stage ? " · " + d.stage : "")
         : d.state === "done" ? I.t("easy.practice_done") : d.message || "…";
-      if (d.state === "done" || d.state === "stopped") {
+      if (d.state === "done") {
         $("wTitle").textContent = d.early_stop ? I.t("easy.w_early_title") : I.t("easy.practice_done");
         $("wMsg").textContent = d.best_sim ? I.t("easy.sim_score", {score: d.best_sim.toFixed(2)}) : I.t("easy.voice_ready");
         $("wNext").classList.remove("hidden");
+      } else if (d.state === "stopped") {
+        /* F5: 手动停止 ≠ 训练成功, 不能再进"练习完成"分支 */
+        $("wTitle").textContent = I.t("easy.w_interrupt_title");
+        $("wMsg").textContent = I.t("easy.w_interrupt_msg");
+        addRetryBtn();
       } else if (d.state === "failed") {
         $("wTitle").textContent = I.t("easy.w_interrupt_title");
         $("wMsg").textContent = I.t("easy.w_interrupt_msg");
@@ -645,7 +670,17 @@ function pollWork() {
         workTimer = setTimeout(pollWork, 3000);
       }
     }
-  }).catch(() => { workTimer = setTimeout(pollWork, 4000); });
+  }).catch(() => {
+    // P7: 服务端持续不可达时不再无限轮询 (原每 4s 一次永不停止)
+    workFails += 1;
+    if (workFails >= 5) {
+      $("wTitle").textContent = I.t("easy.w_interrupt_title");
+      $("wMsg").textContent = I.t("easy.w_net_lost");
+      addRetryBtn();
+      return;
+    }
+    workTimer = setTimeout(pollWork, 4000);
+  });
 }
 function addRetryBtn() {
   const b = $("wNext");
@@ -659,7 +694,7 @@ function retryWork() {
   b.onclick = workNext;
   $("vWork").classList.add("hidden");
   $("vCreate").classList.remove("hidden");
-  $("cGo").disabled = !audioPath;
+  syncImproveMode();
 }
 function workNext() {
   $("vWork").classList.add("hidden");
@@ -668,11 +703,16 @@ function workNext() {
 }
 $("wNext").onclick = workNext;
 
-/* 可选加练: 显存够用 8gb 配方, 否则 4gb */
+/* 可选加练: 显存"可用量"够 7GB 才用 8gb 配方, 否则 4gb。
+   F6: 只看 total_gb 会在引擎/其他程序已占大半显存时仍选 8gb, 训练直接 OOM。 */
 async function pickRecipe() {
   try {
     const st = await jf("/api/adr/v1/system/stats");
-    if (st.gpu && st.gpu.total_gb >= 7) return "8gb";
+    const g = st.gpu;
+    if (g && typeof g.total_gb === "number") {
+      const free = g.free_gb ?? (g.total_gb - (g.used_gb || 0));
+      if (free >= 7) return "8gb";
+    }
   } catch {}
   return "4gb";
 }

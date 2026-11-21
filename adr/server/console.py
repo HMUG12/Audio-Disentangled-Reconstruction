@@ -48,6 +48,8 @@ REPO = Path(__file__).resolve().parents[2]
 STATIC_DIR = Path(__file__).parent / "static"
 OUTPUT_DIR = REPO / "output"
 UPLOAD_DIR = OUTPUT_DIR / "uploads"
+# F11: 训练进程登记 — sidecar 崩溃后由下一进程据此回收孤儿训练
+TRAIN_PID_FILE = OUTPUT_DIR / "train.pid"
 # 2h 兜底; 批次66: 真正生效 (reader 线程起看门狗定时强杀), 可用环境变量放宽
 def _parse_timeout(raw: str | None, default: float = 7200.0) -> float:
     """批次66: 非法/非正/非有限值回落默认并告警, 不让坏环境变量拖垮导入或秒杀训练。"""
@@ -233,12 +235,106 @@ _train: dict = {
     "started_at": 0.0,
     "exit_code": None,
     "early_stop": False,
+    "stage": "",         # F5: gsv_finetune 的 [[STAGE]] 当前步骤 (前端直显)
     "bind_voice": "",    # 批次50: 绑定目标 (收尾相似度结算用)
     "degraded": None,    # 批次50: 收尾退化门结果 {new_sim, old_sim} | None
     "run_id": 0,         # 批次66: 每轮自增代号, 旧 reader 线程据此不碰新一轮状态
     "reader": None,      # 批次66: 本轮 reader 线程; 存活=仍有后代进程占着管道
     "logs": deque(maxlen=400),
 }
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            k = ctypes.windll.kernel32
+            h = k.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
+            if not h:
+                return False
+            try:
+                code = ctypes.c_ulong()
+                if not k.GetExitCodeProcess(h, ctypes.byref(code)):
+                    return False
+                return code.value == 259  # STILL_ACTIVE
+            finally:
+                k.CloseHandle(h)
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _is_python_pid(pid: int) -> bool:
+    """F11: Windows 上按镜像名过滤 PID 复用 — 只有 python*.exe 才可能是训练进程。"""
+    if sys.platform != "win32":
+        return True
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k = ctypes.windll.kernel32
+        h = k.OpenProcess(0x1000, False, pid)
+        if not h:
+            return False
+        try:
+            buf = ctypes.create_unicode_buffer(1024)
+            size = wintypes.DWORD(1024)
+            if not k.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+                return False
+            return Path(buf.value).name.lower().startswith("python")
+        finally:
+            k.CloseHandle(h)
+    except Exception:
+        return False
+
+
+def _record_train_pid(proc: subprocess.Popen, exp: str) -> None:
+    try:
+        TRAIN_PID_FILE.write_text(
+            json.dumps({"pid": proc.pid, "exp": exp, "ts": time.time()}),
+            encoding="utf-8")
+    except OSError:
+        logger.warning("写入训练 pid 文件失败", exc_info=True)
+
+
+def _clear_train_pid(pid: int | None = None) -> None:
+    """清登记; 指定 pid 时只在登记仍是该进程时删除, 避免旧 reader 删掉新一轮。"""
+    if pid is not None:
+        try:
+            cur = json.loads(TRAIN_PID_FILE.read_text(encoding="utf-8"))
+            if int(cur.get("pid") or 0) != int(pid):
+                return
+        except (OSError, ValueError, TypeError):
+            pass
+    TRAIN_PID_FILE.unlink(missing_ok=True)
+
+
+def reap_orphan_train() -> None:
+    """F11: 启动时回收上次 sidecar 崩溃遗留的训练进程 (独立进程组不会随父退出)。
+
+    只处理"进程仍存活且镜像仍是 python"的登记, 降低 PID 复用误杀风险。
+    """
+    try:
+        meta = json.loads(TRAIN_PID_FILE.read_text(encoding="utf-8"))
+        pid = int(meta.get("pid") or 0)
+    except (OSError, ValueError, TypeError):
+        return
+    if _pid_alive(pid) and _is_python_pid(pid):
+        logger.warning("检测到上次遗留的训练进程 pid=%s, 正在回收", pid)
+        try:
+            if sys.platform == "win32":
+                subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)],
+                               capture_output=True, timeout=15)
+            else:
+                os.killpg(os.getpgid(pid), signal.SIGKILL)
+        except Exception:
+            logger.warning("回收遗留训练进程失败 pid=%s", pid, exc_info=True)
+    _clear_train_pid()
 
 
 def _gate_entries(exp: str) -> list[dict]:
@@ -268,6 +364,7 @@ def _train_snapshot() -> dict:
                             if _train["state"] == "running" and _train["started_at"]
                             else None),
             "exit_code": _train["exit_code"],
+            "stage": _train.get("stage", ""),
             "early_stop": _train["early_stop"],
             "bind_voice": _train.get("bind_voice", ""),
             "degraded": _train.get("degraded"),
@@ -320,6 +417,58 @@ def _stop_proc(p: subprocess.Popen | None, timeout: float = 10) -> None:
             logger.warning("子进程强杀失败 pid=%s", p.pid, exc_info=True)
 
 
+# S5: 子进程 (训练/门禁/下载/重建) 不需要服务端凭据; 继承整个 os.environ 会把
+# ADR_TTS_API_KEY 等带进任何能被日志/崩溃转储看到的子进程。统一白名单外剔除。
+_SENSITIVE_ENV = ("ADR_TTS_API_KEY", "ADR_API_KEY", "ADR_ALLOW_QUERY_API_KEY",
+                  "ADR_ADMIN_PASSWORD", "ADR_ACCOUNT_PASSWORD")
+
+
+def _child_env(extra: dict | None = None) -> dict:
+    e = {k: v for k, v in os.environ.items() if k not in _SENSITIVE_ENV}
+    e.update({"PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1",
+              "PYTHONUNBUFFERED": "1"})
+    if extra:
+        e.update({k: str(v) for k, v in extra.items()})
+    return e
+
+
+def _release_engine_for_train() -> None:
+    """训练前释放常驻推理引擎, 避免 6/7 训练 OOM (F6)。
+
+    只在引擎已就绪且没有合成在跑时释放; 释放失败不影响训练 (只记日志),
+    训练结束后下一次合成会自动懒加载。
+    """
+    try:
+        if gsv_engine.is_ready() and gsv_engine.synth_busy() == 0:
+            gsv_engine.reset_engine("train")
+            logger.info("训练前已释放推理引擎显存")
+    except Exception:
+        logger.warning("训练前释放引擎失败 (继续训练)", exc_info=True)
+
+
+_ASR_TEXT_RE = re.compile(r"\|[A-Za-z]{2,3}\|")
+
+
+def _redact_log_line(line: str) -> str:
+    """S4/S10: 日志环脱敏 — 本机路径/用户名/ASR 原文不出前端。
+
+    上游 1-get-text / 3-get-semantic 会整行打印「切片路径|exp|LANG|识别原文」,
+    识别原文属个人敏感信息, 整行丢弃; 其余行只抹路径前缀。
+    """
+    try:
+        up = str(UPLOAD_DIR.resolve())
+        if up and up in line:
+            line = line.replace(up, "<UPLOAD>")
+        home = str(Path.home())
+        if home and home in line:
+            line = line.replace(home, "~")
+        if _ASR_TEXT_RE.search(line):
+            return "[已隐藏 ASR 原文行]"
+    except Exception:  # 脱敏失败也不能让 reader 线程退出
+        pass
+    return line
+
+
 def _train_reader(proc: subprocess.Popen, gate: subprocess.Popen | None = None,
                   run_id: int | None = None) -> None:
     """后台读训练 stdout → 日志环形缓冲; EOF 后收割退出码并收尾门禁。
@@ -348,21 +497,44 @@ def _train_reader(proc: subprocess.Popen, gate: subprocess.Popen | None = None,
     watchdog = threading.Timer(TRAIN_TIMEOUT, _on_timeout)
     watchdog.daemon = True
     watchdog.start()
+    rc = None
+    read_err = ""
     try:
         for line in proc.stdout:
             line = line.rstrip()
             if not line:
                 continue
+            line = _redact_log_line(line)  # S4: 前端日志环不留路径/ASR 原文
             with _train_lock:
                 if not _mine():
                     continue
                 _train["logs"].append(line)
+                # F5: gsv_finetune 每步打印 [[STAGE]] 7/7 xxx, 前端直接展示,
+                # 不再只能看滚动日志猜进度
+                if line.startswith("[[STAGE]]"):
+                    _train["stage"] = line[len("[[STAGE]]"):].strip()
                 if "收到训练门禁早停信号" in line:
                     _train["early_stop"] = True
         rc = proc.wait()
+    except Exception as e:
+        # F9: 管道/解码异常也必须收尾, 否则 state 永远 running、按钮锁死
+        read_err = f"{type(e).__name__}: {e}"
+        logger.warning("训练日志读取异常", exc_info=True)
+        try:
+            rc = proc.wait(timeout=5)
+        except Exception:
+            rc = None
     finally:
         watchdog.cancel()
         watchdog.join()  # 批次66: 已触发时等它写完 [timeout] 日志再收尾
+        _clear_train_pid(proc.pid)  # F11: 正常收尾后清登记
+    # F5: 门禁子进程若提前死亡 (OOM/脚本错), 训练会失去早停保护 — 明示出来
+    gate_rc = gate.poll() if gate is not None else None
+    if gate is not None and gate_rc not in (None, 0):
+        with _train_lock:
+            if _mine():
+                _train["logs"].append(
+                    f"[gate] 门禁进程已以 exit={gate_rc} 退出, 本轮无相似度早停")
     _stop_proc(gate)  # 只收本轮门禁, 不读 _train["gate"] (可能已是新一轮的)
     with _train_lock:
         if not _mine():
@@ -370,6 +542,8 @@ def _train_reader(proc: subprocess.Popen, gate: subprocess.Popen | None = None,
         _train["exit_code"] = rc
         if _train["state"] == "running":
             _train["state"] = "done" if rc == 0 else "failed"
+        if read_err:
+            _train["logs"].append(f"[abort] 日志读取异常: {read_err}")
         _train["gate"] = None
         exp, bind_voice = _train["exp"], _train.get("bind_voice")
     # 批次50: 退化门收尾 — 训练成功且有绑定档案时, 用门禁最优 sim 结算
@@ -453,6 +627,10 @@ async def train_start(body: TrainStartReq):
                     400, f"档案「{body.resume_from}」无微调权重, 无法续训 (先完成一次普通微调)")
             cmd += ["--resume-from", f"voice:{body.resume_from}"]
 
+        # F6: 训练与合成都吃显存, 训练前主动释放常驻引擎 (空闲才释放;
+        # 有合成在跑就保持现状, 由调度器排队, 不粗暴打断用户请求)
+        await asyncio.to_thread(_release_engine_for_train)
+
         # 质量门禁: CPU 打分, 与训练并行, sim≥0.80 写 STOP 早停
         gate_proc = None
         gate_err = ""
@@ -470,7 +648,7 @@ async def train_start(body: TrainStartReq):
                         gate_cmd, stdout=fh, stderr=subprocess.STDOUT,
                         text=True, encoding="utf-8", errors="replace", cwd=str(REPO),
                         start_new_session=True,  # 批次66: POSIX 整组可杀
-                        env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"})
+                        env=_child_env())
             except Exception as e:
                 gate_proc = None  # 门禁失败不影响训练, 但批次66 起记日志可见
                 gate_err = f"[gate] 质量门禁启动失败, 本轮无门禁: {e}"
@@ -482,8 +660,9 @@ async def train_start(body: TrainStartReq):
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, encoding="utf-8", errors="replace",
                 cwd=str(REPO), bufsize=1, start_new_session=True,  # 批次66: POSIX 整组可杀
-                env={**os.environ, "PYTHONIOENCODING": "utf-8",
-                     "PYTHONUTF8": "1"})  # 训练链全 utf-8, 否则 Windows GBK 输出乱码
+                env=_child_env())
+            # 训练链全 utf-8, 否则 Windows GBK 输出乱码; F5: -u/UNBUFFERED
+            # 保证上游 print 立即进管道, 不再长时间空白
         except Exception as e:
             spawn_err = e
         else:
@@ -492,13 +671,15 @@ async def train_start(body: TrainStartReq):
                                       args=(proc, gate_proc, run_id), daemon=True)
             _train.update(state="running", proc=proc, gate=gate_proc, exp=exp,
                           recipe=recipe, epochs=epochs, started_at=time.time(),
-                          exit_code=None, early_stop=False,
+                          exit_code=None, early_stop=False, stage="准备中",
                           bind_voice=bind_voice, degraded=None, run_id=run_id,
                           reader=reader)
             _train["logs"].clear()
-            _train["logs"].append(f"[CMD] {' '.join(cmd)}")
+            # S4/S6: 不把上传音频绝对路径/音色名写进日志环, 只留可判定的启动标记
+            _train["logs"].append("[CMD] gsv_finetune.py 已启动 (音频/音色参数已脱敏)")
             if gate_err:
                 _train["logs"].append(gate_err)
+            _record_train_pid(proc, exp)  # F11: 供下次启动回收孤儿
 
     if spawn_err is not None:
         # 批次66: 回滚门禁要收割不留孤儿; 放锁外线程池, 不卡事件循环/status
@@ -509,7 +690,9 @@ async def train_start(body: TrainStartReq):
 
 
 @router.get("/train/status", summary="训练状态 + 门禁曲线 + 日志尾部")
-async def train_status():
+def train_status():
+    # 普通 def (非 async): 要读门禁 jsonl (文件 IO), FastAPI 自动丢线程池,
+    # 不占用事件循环 — 前端 2s 轮询 + 合成并发时保持响应 (P7)
     return _train_snapshot()
 
 
@@ -551,8 +734,8 @@ def _probe_audio(path: Path) -> dict:
         pass
     exe = shutil.which("ffprobe")
     if not exe:  # GSV 仓库根通常自带
-        for cand in (OUTPUT_DIR.parent.parent / "third_party" / "gpt_sovits" / "ffmpeg.exe",
-                     OUTPUT_DIR.parent.parent / "third_party" / "gpt_sovits" / "ffprobe.exe"):
+        for cand in (REPO / "third_party" / "gpt_sovits" / "ffmpeg.exe",
+                     REPO / "third_party" / "gpt_sovits" / "ffprobe.exe"):
             if cand.exists():
                 exe = str(cand)
                 break
@@ -617,7 +800,9 @@ async def system_doctor(fix: bool = False,
     """检测依赖/GPU/权重/档案/端口/磁盘; fix=true 时裁剪超长 ref、清理 STOP 残留。"""
     from adr.core.doctor import run_checks
 
-    rep = run_checks(fix=fix)
+    # F8: run_checks 内含 GPU 探测/ffmpeg 子进程/磁盘统计, 同步执行会冻住
+    # 事件循环 (实测 ~2s), 期间 /health 与流式首包全部停摆 — 丢线程池。
+    rep = await asyncio.to_thread(run_checks, fix=fix)
     rep["checks"].append(_doctor_engine_check())
     summary: dict[str, int] = {}
     for c in rep["checks"]:
@@ -645,10 +830,8 @@ async def train_upload(file: UploadFile = File(...),
     if ext not in _UPLOAD_EXT:
         raise HTTPException(
             415, f"不支持的格式 {ext}, 可用: {'/'.join(sorted(_UPLOAD_EXT))}")
-    stem = re.sub(r"[^\w\-]+", "_", orig.stem)[:40] or "audio"
-    # 批次88 (BUG-03): 时间戳只到秒, 同秒同名上传会 truncate 覆盖前一个文件。
-    # 加随机后缀后每个请求独占路径, 失败回滚也只删自己那一个。
-    fname = f"{datetime.now():%Y%m%d_%H%M%S}_{stem}_{uuid.uuid4().hex[:8]}{ext}"
+    # S4: 落盘名只用 uuid, 不保留原文件名 (可能含人名); 原名只在响应里回显
+    fname = f"{uuid.uuid4().hex}{ext}"
     dest = UPLOAD_DIR / fname
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     size = 0
@@ -690,6 +873,7 @@ async def train_upload(file: UploadFile = File(...),
     log_event("material_upload", ext=ext, size=size,
               decl_fp=text_fp(decl) if decl else None)
     return {"path": str(dest), "size": size, "filename": fname,
+            "original_name": orig.name,
             "duration_s": duration_s, "samplerate": samplerate,
             "source_declaration": (source_declaration or "").strip()[:200]}
 
@@ -734,7 +918,9 @@ def _profile_worker(name: str, audio_path: str, prompt_text: str, style: str,
         from adr.models.gsv_engine import try_schedule_profile
         try_schedule_profile()
     except Exception as e:
-        logger.exception("控制台建档失败: %s", name)  # 批次66: 保留堆栈便于排查
+        # S6: 档案名可能是人名 — 日志只留指纹, 与审计口径一致
+        from adr.core.audit import text_fp
+        logger.exception("控制台建档失败 (profile_fp=%s)", text_fp(name))
         with _profile_lock:
             _profile_job.update(state="failed", message=str(e))
 
@@ -820,16 +1006,25 @@ _TQDM_RE = re.compile(r"(\d{1,3})%")
 
 
 def _dl_reader(proc: subprocess.Popen) -> None:
-    for line in proc.stdout:
-        line = line.rstrip()
-        if not line:
-            continue
-        with _dl_lock:
-            _dl["logs"].append(line)
-            m = _TQDM_RE.search(line)
-            if m:
-                _dl["percent"] = int(m.group(1))
-    rc = proc.wait()
+    rc = None
+    try:
+        for line in proc.stdout:
+            line = line.rstrip()
+            if not line:
+                continue
+            with _dl_lock:
+                _dl["logs"].append(line)
+                m = _TQDM_RE.search(line)
+                if m:
+                    _dl["percent"] = int(m.group(1))
+        rc = proc.wait()
+    except Exception:
+        # F9: 管道异常时也必须落地终态, 否则下载面板永远 downloading
+        logger.warning("模型下载日志读取异常", exc_info=True)
+        try:
+            rc = proc.wait(timeout=5)
+        except Exception:
+            rc = None
     with _dl_lock:
         _dl["exit_code"] = rc
         if _dl["state"] == "downloading":

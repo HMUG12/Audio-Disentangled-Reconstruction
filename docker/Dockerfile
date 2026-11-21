@@ -70,10 +70,13 @@ COPY pyproject.toml README.md LICENSE ./
 COPY adr/ ./adr/
 COPY configs/ ./configs/
 COPY scripts/ ./scripts/
-# 文档中心 (/api/adr/v1/docs) 白名单 8 篇 = README.md + 下列 7 篇。
+# 文档中心 (/api/adr/v1/docs) 白名单 = README.md + 下列 10 篇 (含英文 3 篇)。
 # 只拷白名单: docs/ 下的 m*-plan / audit / 路线图属内部材料, 不进公开镜像。
-COPY docs/demos.md docs/gpu-compat.md docs/update-manifest.md docs/tts-api-spec.md \
-     docs/architecture-design.md docs/release-notes-v1.2.0.md ./docs/
+# 批次131: 之前漏了 guide/troubleshooting/docs/en, 容器里文档中心残缺。
+COPY docs/demos.md docs/guide.md docs/troubleshooting.md docs/gpu-compat.md \
+     docs/update-manifest.md docs/tts-api-spec.md docs/architecture-design.md \
+     docs/release-notes-v1.2.0.md ./docs/
+COPY docs/en/ ./docs/en/
 COPY docs/architecture/windows-install-acceptance.md ./docs/architecture/
 RUN pip install -e . --no-deps
 

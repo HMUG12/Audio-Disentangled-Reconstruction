@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import subprocess
 import threading
+import time
 from io import BytesIO
 from pathlib import Path
 
@@ -106,10 +107,12 @@ def test_scan_unlink_permission_error_is_tolerated(tc, monkeypatch):
     """#21: 启动扫描删超限旧文件被占用时, 扫描不中断, LRU 照常重建。"""
     d = tc._dir()
     d.mkdir(parents=True)
+    now = time.time()
     for i, name in enumerate(["old", "mid", "new"]):
         f = d / _disk(tc, name)
         f.write_bytes(b"xx")
-        os.utime(f, (1000 + i, 1000 + i))
+        # S11 TTL 只看 mtime, 这里用"刚刚"的时间戳, 只验证超条数清理不被占用打断
+        os.utime(f, (now - 30 + i, now - 30 + i))
     real_unlink = Path.unlink
 
     def locked_unlink(self, missing_ok=False):

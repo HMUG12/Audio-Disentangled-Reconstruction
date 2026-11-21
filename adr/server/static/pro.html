@@ -796,7 +796,7 @@ function pickFile(f) {
       audioPath = d.path;
       const dur = d.duration_s == null ? "" :
         (d.duration_s >= 60 ? I.t("pro.dur_min", { t: (d.duration_s / 60).toFixed(1) }) : I.t("pro.dur_sec", { t: d.duration_s.toFixed(1) }));
-      $("dropTxt").textContent = I.t("pro.uploaded", { name: d.filename }) + dur;
+      $("dropTxt").textContent = I.t("pro.uploaded", { name: d.original_name || d.filename }) + dur;
       if (dur && d.duration_s > 1800)
         toast(I.t("pro.toast_long_audio"), true);
     })

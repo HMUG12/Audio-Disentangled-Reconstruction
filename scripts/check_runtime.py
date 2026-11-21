@@ -27,8 +27,9 @@ runtime 1.78GB。本脚本固化排除规则, 防止垃圾再混入。
     精简系统缺它装完 python.exe 起不来; installer.iss [Run] 静默安装)
 11. python/nltk_data 必须随包 (批次74: g2p-en 的 cmudict + nltk
     PerceptronTagger; 缺失时英文合成 LookupError — 无外网机器无法补下载)
-12. modelscope 必须随包 (批次75: GSV ASR 脚本 tools/asr/fasterwhisper_asr.py
-    与 funasr_asr.py 顶层 "from modelscope import snapshot_download" —
+12. ASR 入口链必须可用 (批次75/76: tools/asr/fasterwhisper_asr.py 顶层
+    "from tools.asr.funasr_asr import only_asr" → "from funasr import AutoModel"
+    与 "from modelscope import snapshot_download" — 缺 funasr/modelscope 时
     训练管线 2/7 ASR 步骤直接 ModuleNotFoundError, 训练必挂)
 13. 不得残留字节码缓存 (批次75: 安装包不应带 .pyc / __pycache__ 临时文件;
     自有代码树出现即 FAIL, site-packages 只统计告警)
@@ -201,16 +202,21 @@ def main() -> int:
             fails.append(f"nltk_data 无法被 runtime python 解析 (英文合成将失败): "
                          f"{probe.stderr.strip().splitlines()[-1] if probe.stderr.strip() else probe.returncode}")
 
-    # 12) modelscope 随包 (批次75: GSV ASR 脚本 tools/asr/fasterwhisper_asr.py
-    #     与 funasr_asr.py 顶层 "from modelscope import snapshot_download" —
-    #     训练管线 2/7 (ASR) 直接 ModuleNotFoundError, 训练必挂)
+    # 12) ASR 入口链随包 (批次75/76: 只探 modelscope 会漏掉 funasr —
+    #     tools/asr/fasterwhisper_asr.py 顶层 import funasr_asr → funasr，
+    #     缺任一包训练 2/7 (ASR) 直接 ModuleNotFoundError。按真实入口整链验证)
     if py.is_file():
         import subprocess
+        gsv = rt / GSV_ROOT
         probe = subprocess.run(
-            [str(py), "-B", "-c", "import modelscope; print(modelscope.__version__)"],
-            capture_output=True, text=True, timeout=120)
+            [str(py), "-B", "-c",
+             "import sys; sys.path[:0]=['.']; import modelscope, funasr; "
+             "import tools.asr.fasterwhisper_asr"],
+            cwd=str(gsv) if gsv.is_dir() else None,
+            capture_output=True, text=True, timeout=300)
         if probe.returncode != 0:
-            fails.append("modelscope 缺失 (训练 ASR 步骤将 ModuleNotFoundError): "
+            fails.append("ASR 入口链不可用 (训练 2/7 将直接失败; modelscope 缺失 / "
+                         "funasr 缺失都会 ModuleNotFoundError): "
                          f"{probe.stderr.strip().splitlines()[-1] if probe.stderr.strip() else probe.returncode}")
 
     # 13) 字节码缓存卫生 (批次75: 用户装完看到一堆 __pycache__/*.pyc 临时文件)

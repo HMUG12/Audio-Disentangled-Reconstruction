@@ -192,7 +192,9 @@ provider 选 **GPT-SoVITS**，API 地址填 `http://127.0.0.1:9881`，刷新音�
 默认仅本机可达。局域网调用须同时设置 API Key，否则服务拒绝启动：
 `$env:ADR_TTS_API_KEY="<你的密钥>"; python -m adr.server --addr 0.0.0.0`。
 
-客户端凭据三选一：`Authorization: Bearer <key>`、`X-API-Key: <key>` 头、`?api_key=<key>`。
+客户端凭据二选一（推荐）：`Authorization: Bearer <key>` 或 `X-API-Key: <key>` 头。
+查询参数 `?api_key=<key>` 默认关闭（会随 URL 进访问日志/代理日志）；确需使用时
+须额外设置 `ADR_ALLOW_QUERY_API_KEY=1`。
 未设置 Key 且确实要监听 `0.0.0.0` 时，需显式设 `ADR_ALLOW_UNAUTHENTICATED=1` 接受风险；
 跨站请求默认被拦截，放行用 `ADR_CORS_ORIGINS` / `ADR_ALLOWED_HOSTS`。
 

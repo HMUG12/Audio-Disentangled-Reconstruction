@@ -228,6 +228,13 @@ def create_app(engine=None) -> FastAPI:
         # 引擎注入 (测试) 时跳过预热; 生产启动即后台加载, 合成请求随时可进
         # (引擎锁会阻塞到预热完成, 保证一致性)
         if engine is None:
+            # F11: 上次 sidecar 崩溃可能留下独立进程组的训练, 先回收再预热
+            # (否则孤儿继续占 GPU, 预热/训练都会 OOM)。
+            try:
+                console.reap_orphan_train()
+            except Exception:
+                logging.getLogger("adr").warning(
+                    "回收遗留训练进程失败", exc_info=True)
             threading.Thread(target=_prewarm_gsv, args=(default_profile,),
                              daemon=True, name="adr-prewarm").start()
             # 批次90 (R3-LIFE-01): 兜底 — 非 uvicorn 优雅退出路径 (异常/直接

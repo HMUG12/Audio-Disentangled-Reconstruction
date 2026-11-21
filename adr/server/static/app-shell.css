@@ -201,6 +201,8 @@ body[data-adr-page] .toast { border-radius: 12px; box-shadow: 0 12px 30px rgba(2
 .adr-docs-head button:hover { color: var(--brand, #2b6cb0); border-color: var(--brand, #5eaaf7); }
 .adr-docs-head button.primary { background: var(--brand, #2b6cb0); color: #fff; border-color: transparent; }
 .adr-docs-head button.primary:hover { filter: brightness(1.06); color: #fff; }
+/* P4: 窄屏阅读态隐藏目录后, 用"返回目录"回到列表 */
+.adr-docs-back { display: none; }
 .adr-docs-x { width: 30px; padding: 0 !important; font-size: 15px !important; line-height: 1; }
 
 .adr-docs-body { flex: 1; display: grid; grid-template-columns: 264px minmax(0, 1fr); min-height: 0; }
@@ -500,7 +502,11 @@ body[data-adr-page="loading"] .hint { margin-top: 24px; }
 /* ── 窄屏适配 ───────────────────────────────────────────────────────── */
 @media (max-width: 960px) {
   body[data-adr-page] header.adr-topbar { padding: 0 18px; }
-  body[data-adr-page] .adr-topnav { display: none; }
+  /* P4: 960 以下不再隐藏主导航, 改为可横向滑动 (原实现导航直接消失且无替代入口) */
+  body[data-adr-page] .adr-topnav {
+    overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  }
+  body[data-adr-page] .adr-topnav::-webkit-scrollbar { display: none; }
   body[data-adr-page="pro"] main { padding: 18px 18px 56px; }
   body[data-adr-page="call"] main.cols { padding: 16px 18px 48px; grid-template-columns: 1fr; }
   body[data-adr-page="easy"] .wrap { padding: 16px 16px 64px; }
@@ -512,6 +518,7 @@ body[data-adr-page="loading"] .hint { margin-top: 24px; }
   .adr-docs-body { grid-template-columns: minmax(0, 1fr); }
   .adr-docs-list { border-right: none; border-bottom: 1px solid var(--line, #dcebfb); max-height: 42vh; }
   .adr-docs-panel.reading .adr-docs-list { display: none; }
+  .adr-docs-panel.reading .adr-docs-back { display: inline-flex; align-items: center; }
   .adr-docs-main { padding: 4px 18px 40px; min-width: 0; }
   .adr-docs-head { padding: 0 12px; }
   .adr-docs-head .adr-docs-badge { display: none; }
@@ -548,4 +555,7 @@ body[data-adr-page] [data-tip]:hover::after,
 body[data-adr-page] [data-tip]:focus-visible::after { opacity: 1; transform: translate(-50%, 0); }
 @media (prefers-reduced-motion: reduce) {
   body[data-adr-page] [data-tip]::after { transition: none; }
+  /* 系统开启"减少动态效果"时: 浮层/抽屉/卡片脉冲不再动画 */
+  .adr-overlay, .adr-docs-panel, .hub-card, .hub-card .hub-go::after,
+  #tip::before { animation: none !important; transition: none !important; }
 }

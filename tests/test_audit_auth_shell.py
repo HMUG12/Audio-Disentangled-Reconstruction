@@ -152,7 +152,9 @@ def test_shell_navigation_appends_key():
 
 def test_launcher_profiles_fetch_forwards_key():
     src = LAUNCHER.read_text(encoding="utf-8")
-    assert '"?api_key=" + encodeURIComponent(key)' in src
+    # P6: 拉档案走 X-API-Key 头, 不再把 key 拼进 URL (历史/Referer/access log)
+    assert 'headers: { "X-API-Key": key }' in src
+    assert "/api/adr/v1/profiles\" + (key ? \"?api_key=" not in src
     assert 'fillProfiles(lan?.url || "", cfg.api_key)' in src
 
 
