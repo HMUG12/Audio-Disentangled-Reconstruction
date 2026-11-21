@@ -295,8 +295,10 @@ def test_open_path_rejects_files_and_plain_http():
 
 # ===== 批次115 (审计 R5-FE-05): 账号修改文案与校验同口径 =====
 def test_launcher_account_hint_matches_validation():
-    """设置中心原先写「密码留空 = 不修改」, 但校验要求必填 — 按提示操作必失败。"""
+    """设置中心提示必须与校验同口径: 改密要旧密码 + 用户名 + 新密码,
+    不得再出现"密码留空 = 不修改"这种按提示操作必失败的文案。"""
     src = LAUNCHER.read_text(encoding="utf-8")
     assert "密码留空 = 不修改" not in src
-    assert "用户名与新密码都要填" in src
+    assert "改密必须验证旧密码" in src
+    assert 'if (!old) { showToast("请先输入旧密码"); return; }' in src
     assert 'if (pass.length < 6) { showToast("请填写新密码（至少 6 位）"); return; }' in src

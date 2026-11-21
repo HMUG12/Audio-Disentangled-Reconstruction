@@ -7,7 +7,7 @@
 #                         + torch stack + pinned deps
 #   adr\                  adr package source (PYTHONPATH-friendly flat copy)
 #   third_party\gpt_sovits\  GSV source tree
-#   scripts\              训练脚本随包 (批次71, 复盘§一: console.py/webui 以
+#   scripts\              训练脚本随包 (批次71, 复盘§一: console.py 以
 #                         子进程调 REPO/scripts/*.py, v1.0.1/v1.3.1 双包漏拷
 #                         → 用户点训练即 500「缺少训练脚本」)
 #   bin\                  ffmpeg.exe + ffprobe.exe (gyan 8.1.2, 批次71 依赖
@@ -152,8 +152,6 @@ modelscope==1.35.3
 fastapi==0.129.0
 uvicorn[standard]==0.41.0
 python-multipart==0.0.24
-gradio==6.4.0
-gradio_client==2.0.3
 faster-whisper==1.2.1
 ctranslate2==4.8.1
 onnxruntime==1.24.4
@@ -279,23 +277,29 @@ if ($LASTEXITCODE -ge 8) { throw "robocopy adr failed ($LASTEXITCODE)" }
 robocopy (Join-Path $RepoRoot "configs") (Join-Path $OutDir "configs") /E /NFL /NDL /NJH /NJS /NP /XF *.pyc | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy configs failed ($LASTEXITCODE)" }
 # 训练脚本必须随包 (批次71, 复盘§一: v1.0.1/v1.3.1 双包漏拷 scripts/,
-# console.py:386 / webui 以子进程调 REPO/scripts/gsv_finetune.py —
+# console.py 以子进程调 REPO/scripts/gsv_finetune.py —
 # 缺失即用户点训练 500「缺少训练脚本」, check_runtime 第 8 项防复发)。
 # 构建脚本 (build_*.ps1 等) 一并随包: 体积可忽略, 排障时可用。
 robocopy (Join-Path $RepoRoot "scripts") (Join-Path $OutDir "scripts") /E /NFL /NDL /NJH /NJS /NP /XD __pycache__ /XF *.pyc | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy scripts failed ($LASTEXITCODE)" }
-# 内置文档中心 (/api/adr/v1/docs) 的白名单 8 篇 = README.md + 下列 7 篇。
+# 内置文档中心 (/api/adr/v1/docs) 的白名单 = README.md + 下列 12 个路径
+# (10 篇中文 + 3 篇英文译文, 与 adr/server/docs_api.py 的 DOC_CATALOG 对齐)。
 # 不随包 = 装完文档中心空、/check 还会误报"已是最新"(2026-11-14 深审 A1)。
 # 只拷白名单, 不整目录拷: docs/ 里还有 m*-plan / audit / 路线图等内部材料,
 # 整目录随包等于把内部计划发到用户磁盘上 (与 docs_api "内部材料不进白名单" 的口径矛盾)。
 $docFiles = @(
     "demos.md",
+    "guide.md",
+    "troubleshooting.md",
     "gpu-compat.md",
     "update-manifest.md",
     "tts-api-spec.md",
     "architecture-design.md",
     "release-notes-v1.2.0.md",
-    "architecture\windows-install-acceptance.md"
+    "architecture\windows-install-acceptance.md",
+    "en\quickstart.md",
+    "en\guide.md",
+    "en\troubleshooting.md"
 )
 foreach ($rel in $docFiles) {
     $src = Join-Path (Join-Path $RepoRoot "docs") $rel
@@ -412,7 +416,7 @@ try {
         & $py -c "import torch; assert torch.version.cuda is not None, 'not a CUDA torch build'; assert torch.cuda.is_available(), 'CUDA torch installed but cuda unavailable (driver/runtime mismatch?)'; print('GPU variant smoke: CUDA OK,', torch.cuda.get_device_name(0))"
         if ($LASTEXITCODE -ne 0) { throw "GPU smoke failed: CUDA not usable in built runtime" }
     }
-    & $py -c "import adr, adr.server, adr.models.gsv_engine, adr.models.rvc_engine, adr.models.hub, adr.data.asr, adr.webui; print('adr imports OK')"
+    & $py -c "import adr, adr.server, adr.models.gsv_engine, adr.models.rvc_engine, adr.models.hub, adr.data.asr; print('adr imports OK')"
     if ($LASTEXITCODE -ne 0) { throw "adr import smoke failed" }
     # GSV import 需与 gsv_engine._gsv_context 同款上下文: cwd=GSV 根
     # (sv.py 用 os.getcwd() 拼 eres2net 路径) + 双 sys.path (根 + GPT_SoVITS)

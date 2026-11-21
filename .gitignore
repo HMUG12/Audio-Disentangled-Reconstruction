@@ -14,6 +14,8 @@ data/voices/
 data/opencpop/
 data/opencpop_npz/
 *.wav
+# 启动器界面音效是随仓库发布的小体积资源, 不受上面的 *.wav 忽略
+!desktop/src/assets/sfx/*.wav
 
 # ---- 模型权重 / 第三方仓库 (GB 级) ----
 third_party/
@@ -37,6 +39,12 @@ examples/samples/*
 dist/
 # 批次44: 便携 runtime 构建输出 (python + 依赖 + 代码副本) 与缓存
 build/
+# 官网静态文档站: scripts/build_site.py 生成, 重建命令见 README
+site/
+
+# ---- 内部审计/评审材料 (不随公开仓库发布) ----
+internal/
+设计参考.md
 
 # ---- Docker (批次56: compose bind mount 持久化目录) ----
 docker/data/
@@ -50,6 +58,16 @@ docker/data/
 *.zip
 *.log
 *.tmp
+
+# ---- 本地安装包 / 临时审计产物 (不入库) ----
+*.exe
+*.msi
+AUDIT_REPORT_R*.md
+
+# ---- 凭据 (绝不入库) ----
+huggingface.txt
+.hf_token
+.env
 
 # ---- Python ----
 __pycache__/

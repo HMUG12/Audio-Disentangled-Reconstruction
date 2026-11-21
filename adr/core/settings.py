@@ -56,7 +56,7 @@ def ensure_runtime_bins_on_path() -> None:
         os.environ["PATH"] = bs + os.pathsep + os.pathsep.join(parts)
 
 
-# 模块级执行: server / webui / doctor 等所有入口最终都 import 本模块,
+# 模块级执行: server / console / doctor 等所有入口最终都 import 本模块,
 # 收口在这里才能覆盖全部启动路径 (python -m adr.server、server.bat、壳拉起)
 ensure_runtime_bins_on_path()
 
@@ -87,6 +87,8 @@ ENV_REGISTRY: dict[str, str] = {
     "ADR_PROFILE_IMPORT_MAX_MB": "server",
     "ADR_FFMPEG_TIMEOUT_SEC": "server",
     "ADR_LOG_LEVEL": "server",
+    # 界面语言 (壳 config.rs 注入, settings_store 默认值回退)
+    "ADR_UI_LANG": "shell",
     "ADR_ENGINE_WATCHDOG_SEC": "engine",
     # 文档中心在线拉取基址 (adr/server/docs_api.py, 默认官方仓库 main 分支)
     "ADR_DOCS_ONLINE_BASE": "server",
@@ -97,6 +99,8 @@ ENV_REGISTRY: dict[str, str] = {
     "ADR_TTS_SPEED_MIN": "server",
     "ADR_TTS_SPEED_MAX": "server",
     "ADR_TTS_WEIGHTS_MAX_MB": "engine",
+    # 权重搜索目录追加 (adr/models/voice_library.py, os.pathsep 分隔)
+    "ADR_WEIGHTS_DIRS": "engine",
     "ADR_INFER_MAX_TEXT_CHARS": "cli",
     "ADR_INFER_MAX_TIMESTEPS": "cli",
     # --- 缓存 ---

@@ -1,9 +1,10 @@
 """文档中心 API 回归 (2026-11-14 深审 A1/A6 补测)。
 
-覆盖三件事:
-1. 白名单 8 篇在源码树里全部可读 (文档改名/移路径会在这里红, 而不是装完才发现)
+覆盖四件事:
+1. 白名单 10 篇在源码树里全部可读 (文档改名/移路径会在这里红, 而不是装完才发现)
 2. 非白名单 slug 一律 404, 不做路径穿越
 3. 安装包漏拷 docs/ 时 /check 必须给出 local=0 的可识别信号, 而不是"已是最新"
+4. 双语文档与模糊搜索: 缺英文回落中文并标 fallback, 拼错/中文短句也能命中
 """
 import pytest
 from fastapi.testclient import TestClient
@@ -75,3 +76,44 @@ def test_check_reports_missing_bundled_docs(monkeypatch, tmp_path, client):
     assert body["updates"] == []
     # 索引同样应为空, 而不是报错
     assert client.get("/api/adr/v1/docs").json()["docs"] == []
+
+
+def test_index_english_marks_fallback(client):
+    """英文索引: 有英文原文的标 en, 没有的回落中文并标 fallback。"""
+    body = client.get("/api/adr/v1/docs?lang=en").json()
+    assert body["lang"] == "en"
+    by = {d["slug"]: d for d in body["docs"]}
+    assert by["guide"]["lang"] == "en" and by["guide"]["fallback"] is False
+    assert by["gpu"]["lang"] == "zh" and by["gpu"]["fallback"] is True
+    # 分组名跟界面语言走, 不跟文档实际语言走
+    assert by["gpu"]["group"] == "Guides"
+
+
+def test_read_doc_lang_falls_back_to_chinese(client):
+    en = client.get("/api/adr/v1/docs/guide", params={"lang": "en"}).json()
+    assert en["lang"] == "en" and en["markdown"].strip()
+    zh = client.get("/api/adr/v1/docs/gpu", params={"lang": "en"}).json()
+    assert zh["lang"] == "zh" and zh["fallback"] is True
+
+
+def test_search_fuzzy_english_and_chinese(client):
+    en = client.get("/api/adr/v1/docs/search",
+                    params={"q": "troubleshoot", "lang": "en"}).json()
+    assert en["results"] and en["results"][0]["slug"] == "troubleshooting"
+    assert en["results"][0]["score"] > 0
+
+    zh = client.get("/api/adr/v1/docs/search", params={"q": "显存不足"}).json()
+    assert zh["results"]
+    assert zh["results"][0]["slug"] in ("gpu", "troubleshooting")
+
+    blank = client.get("/api/adr/v1/docs/search", params={"q": "  "}).json()
+    assert blank["results"] == []
+    assert blank["suggestions"] == ["troubleshooting", "guide"]
+
+
+def test_search_no_match_returns_empty_not_error(client):
+    body = client.get("/api/adr/v1/docs/search", params={"q": "zzzzzz"}).json()
+    assert body["results"] == []
+    # 结果数量受 limit 约束, 且非法 limit 不炸
+    assert len(client.get("/api/adr/v1/docs/search",
+                          params={"q": "文档", "limit": 1}).json()["results"]) <= 1

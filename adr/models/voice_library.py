@@ -1,11 +1,17 @@
 """音色档案库: 录一次 → 存成命名音色 → 永久复用 (快速克隆的持久化层)。
 
-档案结构: data/voices/<name>/
+档案结构: <ADR_DATA_DIR>/voices/<name>/
     ref.wav        参考音频 (3-10 秒干净人声)
     meta.json      {prompt_text, t2s_weights, vits_weights, created_at}
 
 权重字段可指向微调产物 (如 GPT_weights_v2/user_voice-e8.ckpt),
 实现"零样本即用 + 微调升级"两档持久化。
+
+2026-11-15 (深审后修复): 档案目录从仓库 data/voices 迁到 ADR_DATA_DIR。
+原实现绑在 REPO_ROOT 下, 安装版解析成 <安装目录>\\runtime\\data\\voices —
+装完即空, 用户此前训练的模型"看起来丢了"; 且 meta 里存绝对路径, 换机/重装
+必然断。现在: 落盘位置跟用户数据目录走 (跨安装/升级保留), 读取时按文件名
+在多个权重目录里重新解析 (见 resolve_weights)。
 """
 from __future__ import annotations
 
@@ -18,10 +24,86 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
+from adr.core.config import adr_data_dir
 from adr.core.naming import is_safe_name, resolve_within
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-VOICES_DIR = REPO_ROOT / "data" / "voices"
+# 用户数据目录 (Windows: %LOCALAPPDATA%/ADR/data 或历史 F:/ADR_data),
+# 与安装目录解耦 — 覆盖安装/换包型都不影响音色档案。
+VOICES_DIR = adr_data_dir() / "voices"
+# 旧位置 (仓库/安装目录内): 仅用于一次性迁移, 迁移完不再写入
+LEGACY_VOICES_DIR = REPO_ROOT / "data" / "voices"
+_MIGRATE_MARK = ".migrated_from_repo_v1"
+_migrate_done = False
+
+# 权重搜索目录 (按顺序): 用户归档 > GSV 训练产物 > 预训练底模, 可用
+# ADR_WEIGHTS_DIRS (分号分隔) 追加自定义目录。meta 里只存文件名也能找回。
+WEIGHTS_SEARCH_DIRS = (
+    "weights_archive",
+    "weights",
+    "third_party/gpt_sovits/SoVITS_weights_v2",
+    "third_party/gpt_sovits/GPT_weights_v2",
+    "third_party/gpt_sovits/GPT_SoVITS/pretrained_models",
+)
+
+
+def _weight_roots() -> list[Path]:
+    roots = [adr_data_dir() / rel for rel in WEIGHTS_SEARCH_DIRS]
+    roots += [REPO_ROOT / rel for rel in WEIGHTS_SEARCH_DIRS]
+    for extra in os.environ.get("ADR_WEIGHTS_DIRS", "").split(os.pathsep):
+        if extra.strip():
+            roots.append(Path(extra.strip()))
+    return roots
+
+
+def resolve_weights(value: Optional[str]) -> Optional[str]:
+    """把 meta 里的权重路径解析成当前机器上真实存在的文件。
+
+    - 原路径存在 → 原样返回
+    - 否则取文件名, 在 WEIGHTS_SEARCH_DIRS 里逐个找 (跨安装/换机/重命名目录)
+    - 都找不到 → 返回原值 (引擎会给出可读的"权重不存在"错误, 不静默降级成零样本)
+    """
+    if not value:
+        return value
+    p = Path(value)
+    if p.is_file():
+        return str(p)
+    name = p.name
+    for root in _weight_roots():
+        cand = root / name
+        if cand.is_file():
+            return str(cand)
+    return value
+
+
+def _migrate_legacy_once() -> None:
+    """把旧 data/voices 一次性复制到用户数据目录 (只复制, 不删旧目录)。
+
+    仅在 VOICES_DIR 仍是默认位置时执行 — 测试里 monkeypatch VOICES_DIR 的
+    场景不会被真实档案污染。marker 存在即跳过, 幂等。
+    """
+    global _migrate_done
+    if _migrate_done or VOICES_DIR != adr_data_dir() / "voices":
+        return
+    _migrate_done = True
+    try:
+        VOICES_DIR.mkdir(parents=True, exist_ok=True)
+        mark = VOICES_DIR / _MIGRATE_MARK
+        if mark.exists() or not LEGACY_VOICES_DIR.is_dir():
+            return
+        for src in LEGACY_VOICES_DIR.iterdir():
+            if not src.is_dir() or src.name.startswith("_sweep_tmp"):
+                continue
+            dst = VOICES_DIR / src.name
+            if dst.exists():
+                continue
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+        mark.write_text("migrated " + time.strftime("%Y-%m-%d %H:%M:%S"),
+                        encoding="utf-8")
+    except OSError:
+        # 迁移失败不阻断启动: 用户仍可在设置里手动指定/重新导入
+        return
+
 
 
 def _trim_silence(wav, sr: int, top_db: float = 30.0):
@@ -140,6 +222,7 @@ def save_voice(
     # is_safe_name 拦 "..", resolve 检查兜底拼接后必须仍落在档案库根内。
     if not is_safe_name(name):
         raise ValueError(f"音色名含非法路径成分: {name!r}")
+    _migrate_legacy_once()
     vdir = resolve_within(VOICES_DIR, name)
     if vdir is None:
         raise ValueError(f"音色名解析后越出档案库目录: {name!r}")
@@ -196,6 +279,7 @@ def bind_weights(
     """
     if not is_safe_name(name):
         raise ValueError(f"音色档案名非法: {name!r}")
+    _migrate_legacy_once()
     with profile_lock(name):   # 批次66: 读-改-写整体加锁防丢更新
         return _bind_weights_locked(name, vits_weights, t2s_weights, sim, note)
 
@@ -323,7 +407,8 @@ def _rollback_voice_locked(name: str) -> dict:
 
 
 def list_voices() -> list[str]:
-    """全部音色名。"""
+    """全部音色名 (首次调用顺带把旧 data/voices 迁到用户数据目录)。"""
+    _migrate_legacy_once()
     if not VOICES_DIR.exists():
         return []
     return sorted(d.name for d in VOICES_DIR.iterdir()
@@ -331,13 +416,21 @@ def list_voices() -> list[str]:
 
 
 def load_voice(name: str) -> dict:
-    """加载音色档案 → {ref_audio, prompt_text, t2s_weights, vits_weights}。"""
+    """加载音色档案 → {ref_audio, prompt_text, t2s_weights, vits_weights}。
+
+    权重路径在此统一解析 (跨安装/换机后仍能找到同名权重文件)。
+    """
     # 批次41a: 用户可控名直接拼路径, 非法成分 (../ 等) 先拒绝再落盘
     if not is_safe_name(name):
         raise ValueError(f"音色档案名非法: {name!r}")
+    _migrate_legacy_once()
     vdir = VOICES_DIR / name
     meta = json.loads((vdir / "meta.json").read_text(encoding="utf-8"))
     meta["ref_audio"] = str(vdir / "ref.wav")
+    for key in ("t2s_weights", "vits_weights"):
+        if meta.get(key):
+            meta[f"{key}_missing"] = not Path(resolve_weights(meta[key])).is_file()
+            meta[key] = resolve_weights(meta[key])
     return meta
 
 

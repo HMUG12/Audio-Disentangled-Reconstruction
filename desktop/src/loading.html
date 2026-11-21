@@ -29,48 +29,69 @@
     user-select: none;
   }
   .box { text-align: center; }
-  .ring {
-    width: 56px; height: 56px; margin: 0 auto 24px;
-    border: 4px solid var(--ring); border-top-color: var(--ring-top);
-    border-radius: 50%;
-    animation: spin 0.9s linear infinite;
+  .mascot {
+    width: 132px; height: 132px; margin: 0 auto 18px; display: block;
+    object-fit: contain; animation: breath 3.6s ease-in-out infinite;
   }
+  .bar { width: 168px; height: 3px; margin: 16px auto 0; border-radius: 999px;
+    background: var(--ring); overflow: hidden; }
+  .bar i { display: block; width: 40%; height: 100%; border-radius: inherit;
+    background: var(--ring-top); animation: slide 1.4s ease-in-out infinite; }
   h1 { font-size: 20px; font-weight: 600; margin: 0 0 8px; letter-spacing: .5px; color: var(--h1); }
   #status { font-size: 13px; color: var(--status); min-height: 18px; }
-  .hint { font-size: 12px; color: var(--hint); margin-top: 28px; }
+  .hint { font-size: 12px; color: var(--hint); margin-top: 26px; }
+  @keyframes breath {
+    0%, 100% { transform: translateY(0) scale(1); }
+    50% { transform: translateY(-4px) scale(1.015); }
+  }
+  @keyframes slide {
+    0% { transform: translateX(-120%); }
+    100% { transform: translateX(320%); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .mascot, .bar i { animation: none; }
+    .bar i { width: 100%; }
+  }
   #back {
     display: none; margin: 22px auto 0; background: var(--back-bg); color: var(--back-txt);
     border: 1px solid var(--back-line); border-radius: 8px; padding: 8px 18px;
     font-size: 13px; cursor: pointer;
   }
   #back:hover { border-color: var(--back-hover); color: var(--back-hover-txt); }
-  @keyframes spin { to { transform: rotate(360deg); } }
+
 </style>
 <link rel="stylesheet" href="app-shell.css">
 </head>
 <body data-adr-page="loading">
   <div class="box">
-    <div class="ring"></div>
-    <h1>ADR Studio</h1>
-    <div id="status">正在初始化…</div>
+    <img class="mascot" id="mascot" src="assets/mascot/load.png" alt="">
+    <h1>正在准备引擎</h1>
+    <div id="status">马上就好…</div>
+    <div class="bar"><i></i></div>
     <button id="back" onclick="goLauncher()">← 返回启动器</button>
-    <div class="hint">本地低资源语音克隆训练框架</div>
+    <div class="hint">第一次启动会久一点，之后就快了。</div>
   </div>
 <script>
   // 壳通过 eval 调用此函数更新启动状态
   window.__adrStatus = function (text) {
     document.getElementById("status").textContent = text;
     // 出现失败/超时字样时亮出返回按钮, 避免卡死在加载页
-    if (/失败|超时/.test(text)) document.getElementById("back").style.display = "block";
+    if (/失败|超时/.test(text)) {
+      document.getElementById("back").style.display = "block";
+      document.getElementById("mascot").src = "assets/mascot/work.png";
+    }
   };
   function goLauncher() {
-    if (window.__TAURI__) {
-      // invoke 失败 (命令未注册/内部错误) 时降级为页面直接导航, 兜底不卡死 (批次28 复审 P1)
-      window.__TAURI__.core.invoke("back_to_launcher").catch(() => location.replace("launcher.html"));
-    } else location.replace("launcher.html");
+    // P0: 不再直接 location.replace 绕过门禁 — 首启 / 预热 / 登录未完成时
+    // 壳侧会拒绝, 这里把原因显示出来, 而不是跳进半成品启动器。
+    if (!window.__TAURI__) {
+      document.getElementById("status").textContent = "请在本机桌面应用中操作";
+      return;
+    }
+    window.__TAURI__.core.invoke("back_to_launcher").catch((e) => {
+      document.getElementById("status").textContent = String(e);
+    });
   }
-  // 主题切换控件: 右上角 (过渡页, 无页头)
-  if (window.adrTheme) window.adrTheme.mountSwitch();
 </script>
 </body>
 </html>

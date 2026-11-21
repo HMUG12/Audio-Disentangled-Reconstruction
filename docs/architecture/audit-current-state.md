@@ -99,10 +99,9 @@
 
 | 模式 | 命令行 |
 | --- | --- |
-| `legacy` | `python -m adr.cli webui --host <h> --port <p> --no-browser` |
-| `pro` / `easy` / `call` | `python -m adr.server --addr <h> --port <p> --from-shell` |
+| `pro` / `easy` / `call` / `settings` | `python -m adr.server --addr <h> --port <p> --from-shell` |
 
-端口决策顺序：`shell.json.service_port` > 9881（仅非 legacy）> 随机空闲端口（[lib.rs](../../desktop/src-tauri/src/lib.rs#L1269-L1288)）。
+端口决策顺序：`shell.json.service_port` > 9881 > 随机空闲端口（[lib.rs](../../desktop/src-tauri/src/lib.rs#L1269-L1288)）。
 
 ### 3.4 环境变量生产/消费
 

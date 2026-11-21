@@ -135,7 +135,7 @@
 
   .gauge-wrap { text-align: center; }
   .gauge-wrap canvas { width: 150px; height: 96px; }
-  .gauge-wrap .gl { font-size: 11.5px; color: var(--dim); margin-top: -6px; }
+  .gauge-wrap .gl { font-size: 11.5px; color: var(--dim); margin-top: 2px; }
 
   /* ---------- controls ---------- */
   label.f { display: block; font-size: 12px; color: var(--sub); margin: 12px 0 6px; }
@@ -239,12 +239,14 @@
     <h2 data-i18n="pro.ov_hardware">硬件资源</h2>
     <div class="grid g4">
       <div class="card gauge-wrap">
+        <div class="k" data-i18n="pro.gpu_vram">GPU 显存</div>
         <canvas id="gGpu" width="300" height="192"></canvas>
-        <div class="gl" id="gGpuTxt" data-i18n="pro.gpu_vram">GPU 显存</div>
+        <div class="gl" id="gGpuTxt">—</div>
       </div>
       <div class="card gauge-wrap">
+        <div class="k" data-i18n="pro.ov_ram">内存占用</div>
         <canvas id="gRam" width="300" height="192"></canvas>
-        <div class="gl" id="gRamTxt" data-i18n="pro.ov_ram">内存占用</div>
+        <div class="gl" id="gRamTxt">—</div>
       </div>
       <div class="card">
         <div class="k" data-i18n="pro.ov_disk_free">磁盘剩余</div>
@@ -473,9 +475,10 @@
   <div class="panel">
     <h2><span data-i18n="pro.pretrained_model">预训练模型</span> <span id="mDir" class="hint" style="margin-left:auto;font-weight:400"></span></h2>
     <table>
-      <thead><tr><th data-i18n="pro.th_model">模型</th><th data-i18n="pro.th_category">类别</th><th data-i18n="pro.th_desc">说明</th><th data-i18n="pro.th_size">体积</th><th data-i18n="pro.th_status">状态</th><th style="width:110px" data-i18n="pro.th_actions">操作</th></tr></thead>
+      <thead><tr><th data-i18n="pro.th_model">模型</th><th data-i18n="pro.th_category">类别</th><th data-i18n="pro.th_desc">说明</th><th data-i18n="pro.th_size">体积</th><th data-i18n="pro.th_status">状态</th><th style="width:236px" data-i18n="pro.th_actions">操作</th></tr></thead>
       <tbody id="mBody"><tr><td colspan="6" class="empty" data-i18n="pro.loading">加载中…</td></tr></tbody>
     </table>
+    <div class="hint" style="margin-top:10px" data-i18n="pro.import_hint">离线恢复：本地文件需与模型同名（如 bigvgan_22khz_80band.pt），导入时自动校验 SHA256。</div>
     <div class="prog" style="margin-top:14px; display:none" id="mProgBox">
       <i id="mProg"></i>
     </div>
@@ -670,9 +673,6 @@ function drawGauge(cvId, txtId, used, total, color1, color2, subTxt) {
   ctx.font = `600 ${r * 0.42}px "Segoe UI", sans-serif`;
   ctx.textAlign = "center";
   ctx.fillText(Math.round(pct * 100) + "%", cx, cy - r * 0.18);
-  ctx.fillStyle = cssVar("--cv-label");
-  ctx.font = `11px "Segoe UI", sans-serif`;
-  ctx.fillText(subTxt, cx, cy - r * 0.18 + 18);
   const el = $(txtId);
   if (el) el.textContent = subTxt;
 }
@@ -1032,8 +1032,26 @@ $("pExport").onclick = async () => {
   try {
     const ctrl = new AbortController();
     const kill = setTimeout(() => ctrl.abort(), 600000);
-    const r = await fetch(api("/api/adr/v1/profiles/" + encodeURIComponent(name) + "/export"),
-                          { signal: ctrl.signal, headers: hdr() });
+    const exportUrl = api("/api/adr/v1/profiles/" + encodeURIComponent(name) + "/export");
+    const doFetch = (pwd) => {
+      const hs = hdr();
+      if (pwd) hs["X-ADR-Password"] = pwd;
+      return fetch(exportUrl, { signal: ctrl.signal, headers: hs });
+    };
+    let r = await doFetch("");
+    // 导出保护: 每次导出都要验本机账号密码
+    if (r.status === 403) {
+      let code = "";
+      try { const j = await r.clone().json(); code = j.code || ""; } catch (_) {}
+      if (code === "password_required" || code === "password_invalid") {
+        const ask = I.lang === "en"
+          ? "Enter the local account password (export protection):"
+          : "请输入本机账号密码（导出保护）：";
+        const pwd = prompt(ask);
+        if (!pwd) { clearTimeout(kill); toast(I.t("pro.toast_export_fail", { msg: "cancelled" }), true); return; }
+        r = await doFetch(pwd);
+      }
+    }
     clearTimeout(kill);
     if (!r.ok) {
       let m = "HTTP " + r.status;
@@ -1162,23 +1180,86 @@ async function loadModels() {
   } catch (e) { $("errline").textContent = I.t("pro.models_fail", { msg: e.message }); }
 }
 function renderModels(dlName, dlPct) {
+  const btn = (attr, val, label, extra) =>
+    `<button class="btn" style="padding:4px 10px;font-size:12px${extra || ""}" ${attr}="${esc(val)}">${label}</button>`;
   $("mBody").innerHTML = modelRows.map(m => {
-    const busy = dlName === m.name && dlPct != null && dlPct < 100;
-    const act = m.downloaded
-      ? '<span class="tag ok">' + I.t("pro.tag_cached") + '</span>'
+    const busy = dlName === m.name;
+    const stat = m.downloaded
+      ? '<span class="tag ok">v' + esc(m.version || "?") + "</span>"
       : busy
         ? `<span class="tag run">${dlPct == null ? I.t("pro.tag_downloading") : dlPct + "%"}</span>`
-        : `<button class="btn" style="padding:4px 14px;font-size:12px" data-dl="${esc(m.name)}">${I.t("pro.tag_download")}</button>`;
+        : '<span class="tag no">' + I.t("pro.tag_not_downloaded") + '</span>';
+    const acts = [];
+    if (m.downloaded) {
+      acts.push(btn("data-verify", m.name, I.t("pro.btn_verify")));
+    } else if (!busy) {
+      acts.push(btn("data-dl", m.name, I.t("pro.tag_download")));
+    }
+    acts.push(btn("data-import", m.name, I.t("pro.btn_import")));
+    if (m.downloaded) acts.push(btn("data-del", m.name, I.t("pro.btn_delete"), ";color:#e5484d"));
     return `<tr>
       <td><b>${esc(m.name)}</b></td>
       <td><span class="tag no">${esc(m.category)}</span></td>
       <td class="hint">${esc(m.description || "")}</td>
       <td>${m.size_mb} MB</td>
-      <td>${m.downloaded ? '<span class="tag ok">v' + esc(m.version || "?") + "</span>" : '<span class="tag no">' + I.t("pro.tag_not_downloaded") + '</span>'}</td>
-      <td>${act}</td>
+      <td>${m.downloaded ? '<span class="tag ok">' + I.t("pro.tag_cached") + '</span>' : stat}</td>
+      <td><div style="display:flex;gap:6px;flex-wrap:wrap">${acts.join("")}</div></td>
     </tr>`;
   }).join("");
   $("mBody").querySelectorAll("[data-dl]").forEach(b => b.onclick = () => downloadModel(b.dataset.dl));
+  $("mBody").querySelectorAll("[data-verify]").forEach(b => b.onclick = () => verifyModel(b.dataset.verify));
+  $("mBody").querySelectorAll("[data-import]").forEach(b => b.onclick = () => pickImport(b.dataset.import));
+  $("mBody").querySelectorAll("[data-del]").forEach(b => b.onclick = () => deleteModel(b.dataset.del));
+}
+async function verifyModel(name) {
+  try {
+    const d = await jfetch(`/api/adr/v1/models/${encodeURIComponent(name)}/verify`, { method: "POST" });
+    if (d.checked === "size") {
+      toast(I.t("pro.verify_size", { name, mb: Math.round((d.size_bytes || 0) / 1048576) }));
+    } else {
+      toast(d.ok ? I.t("pro.verify_ok", { name }) : I.t("pro.verify_bad", { name }), !d.ok);
+    }
+  } catch (e) { toast(I.t("pro.verify_fail", { msg: e.message }), true); }
+}
+async function deleteModel(name) {
+  if (!confirm(I.t("pro.delete_confirm", { name }))) return;
+  try {
+    await jfetch(`/api/adr/v1/models/${encodeURIComponent(name)}`, { method: "DELETE" });
+    toast(I.t("pro.delete_done", { name }));
+    loadModels();
+  } catch (e) { toast(I.t("pro.delete_fail", { msg: e.message }), true); }
+}
+function pickImport(name) {
+  const info = modelRows.find(m => m.name === name);
+  const inp = document.createElement("input");
+  inp.type = "file";
+  inp.accept = ".pt,.bin,.pth,.safetensors";
+  inp.onchange = () => {
+    const f = inp.files && inp.files[0];
+    if (!f) return;
+    if (info && info.filename && f.name !== info.filename) {
+      toast(I.t("pro.import_name_bad", { file: info.filename }), true);
+      return;
+    }
+    importModel(name, f);
+  };
+  inp.click();
+}
+async function importModel(name, file) {
+  const fd = new FormData();
+  fd.append("file", file, file.name);
+  $("mStat").textContent = I.t("pro.import_uploading", { name });
+  try {
+    const d = await jfetch(`/api/adr/v1/models/${encodeURIComponent(name)}/import`,
+                           { method: "POST", body: fd });
+    $("mStat").textContent = "";
+    if (d.verified) toast(I.t("pro.import_done", { name, mb: Math.round((d.size_bytes || 0) / 1048576) }));
+    else toast(I.t("pro.import_unverified", { name }), true);
+    loadModels();
+  } catch (e) {
+    $("mStat").textContent = "";
+    toast(I.t("pro.import_fail", { msg: e.message }), true);
+  }
 }
 async function downloadModel(name) {
   try {

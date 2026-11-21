@@ -131,7 +131,7 @@ pub(crate) fn start_and_wait(
     window: &Option<WebviewWindow>,
     state: &State<ServerState>,
 ) -> Option<(Child, String, Instant)> {
-    let (child, started) = start_server(mode, window, state)?;
+    let (child, started) = start_server(window, state)?;
     // 探活成功 (start_server 内 wait_healthy 已 200) 才转 Prewarming (批次40):
     // 维持不变式 "Prewarming: 服务已 healthy" — 此前本路径 Phase 停在 Starting。
     // 前端零感知: Starting/Prewarming 在 engine_status 中都映射 "loading"。
@@ -143,7 +143,6 @@ pub(crate) fn start_and_wait(
     // launcher.html"), 批次101 起由壳显式告知。
     let sop = shell_origin_param(window);
     let target = match mode {
-        "legacy" => format!("{base}/"),
         "pro" => format!("{base}/pro?desktop=1{sop}"),
         "easy" => format!("{base}/easy?desktop=1{sop}"),
         _ => format!("{base}/call?desktop=1{sop}"),
@@ -152,12 +151,8 @@ pub(crate) fn start_and_wait(
     if let Some(t) = app.tray_by_id("adr-tray") {
         let _ = t.set_tooltip(Some(format!("ADR Studio — {target}{expose_tip}")));
     }
-    // 批次66: pro/easy/call 导航带 api_key (legacy 是 Gradio, 不走 ADR 鉴权)
-    let key = if mode == "legacy" {
-        String::new()
-    } else {
-        console_key_query()
-    };
+    // 批次66: 控制台页导航带 api_key (页面从 ?api_key= 读 key)
+    let key = console_key_query();
     navigate(window, &format!("{target}{key}"));
     Some((child, target, started))
 }
@@ -194,7 +189,6 @@ pub(crate) fn key_query(raw: &str) -> String {
 /// 启动 sidecar 并探活 (不导航, 预热流程与 launch_console 共用)。
 /// 成功后写 pid/base_url; 返回 (子进程, 启动时刻); 失败返回 None。
 pub(crate) fn start_server(
-    mode: &str,
     window: &Option<WebviewWindow>,
     state: &State<ServerState>,
 ) -> Option<(Child, Instant)> {
@@ -209,15 +203,14 @@ pub(crate) fn start_server(
     };
     // 调用模式: 0.0.0.0 对局域网开放 API; 默认仅本机 (webview 与探活都走 127.0.0.1)
     let host = if state.expose.load(Ordering::Relaxed) { "0.0.0.0" } else { "127.0.0.1" };
-    // pro/easy 承载 TTS 服务: 优先绑定 9881 (NEKO GPT-SoVITS provider 默认端口, 零配置直连);
-    // 9881 被占用则回退随机端口并提示。legacy 是 Gradio WebUI, 不承载 TTS, 恒用随机端口。
+    // 承载 TTS 服务: 优先绑定 9881 (NEKO GPT-SoVITS provider 默认端口, 零配置直连);
+    // 9881 被占用则回退随机端口并提示。
     // 批次48: 设置中心 service_port > 0 时最高优先 (仍被占则回退默认逻辑)。
     let cfg = shell_config();
     let cfg_port = cfg.service_port.unwrap_or(0);
-    let (port, using_preferred) = if mode != "legacy" && cfg_port > 0 && probe_fixed_port(cfg_port, host)
-    {
+    let (port, using_preferred) = if cfg_port > 0 && probe_fixed_port(cfg_port, host) {
         (cfg_port, true)
-    } else if mode != "legacy" && probe_fixed_port(ADR_PREFERRED_PORT, host) {
+    } else if probe_fixed_port(ADR_PREFERRED_PORT, host) {
         (ADR_PREFERRED_PORT, true)
     } else {
         let Some(p) = free_tcp_port() else {
@@ -226,7 +219,7 @@ pub(crate) fn start_server(
         };
         (p, false)
     };
-    if mode != "legacy" && !using_preferred && cfg_port == 0 {
+    if !using_preferred && cfg_port == 0 {
         update_status(window, &format!(
             "9881 被其他程序占用, 本次改用端口 {port} (NEKO 侧需手动填写该端口)"
         ));
@@ -234,29 +227,17 @@ pub(crate) fn start_server(
     let base = format!("http://127.0.0.1:{port}");
 
     let mut cmd = Command::new(&python);
-    match mode {
-        "legacy" => {
-            cmd.args([
-                "-m", "adr.cli", "webui",
-                "--host", host,
-                "--port", &port.to_string(),
-                "--no-browser",
-            ]);
-        }
-        // pro / easy: 同一个 FastAPI 服务, 静态控制台页由 server 提供
-        _ => {
-            cmd.args([
-                "-m", "adr.server",
-                "--addr", host,
-                "--port", &port.to_string(),
-                // 批次99 (首启实测): 全新安装时 .terms_agreed_v1 尚不存在, 而壳
-                // 在条款页之前就要起服务预热 — 不带此参数 server 会 exit 2,
-                // 预热直接卡死 "服务启动失败"。条款由壳层 prewarm 门禁担保
-                // (未同意不放行导航), server 侧不再重复拦截且不写标记。
-                "--from-shell",
-            ]);
-        }
-    }
+    // pro / easy / call: 同一个 FastAPI 服务, 静态控制台页由 server 提供
+    cmd.args([
+        "-m", "adr.server",
+        "--addr", host,
+        "--port", &port.to_string(),
+        // 批次99 (首启实测): 全新安装时 .terms_agreed_v1 尚不存在, 而壳
+        // 在条款页之前就要起服务预热 — 不带此参数 server 会 exit 2,
+        // 预热直接卡死 "服务启动失败"。条款由壳层 prewarm 门禁担保
+        // (未同意不放行导航), server 侧不再重复拦截且不写标记。
+        "--from-shell",
+    ]);
     cmd.current_dir(&cwd);
     // server.log 编码统一 (批次56 review): Windows pipe 下 Python 默认 ANSI(GBK)
     // 编码中文, 与壳的 UTF-8 proc_log 行混排乱码 — 与 console.py 起训练子进程对齐
@@ -332,7 +313,7 @@ pub(crate) fn start_server(
     // 不变式 (批次37): pid 写入 → Starting
     state.set_phase(Phase::Starting);
 
-    let health_path = if mode == "legacy" { "/" } else { "/api/adr/v1/health" };
+    let health_path = "/api/adr/v1/health";
     update_status(window, "引擎加载中… 首次启动导入 torch/CUDA 较慢");
     if !wait_healthy(&base, health_path, window) {
         kill_tree(child.id());

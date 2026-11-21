@@ -9,8 +9,10 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -21,6 +23,7 @@ from pydantic import BaseModel
 
 from adr.models import voice_library
 from adr.server import pathsafe
+from adr.core.exceptions import EngineStalledError
 from adr.server.exceptions import (
     EXPORT_FAILED,
     IMPORT_FAILED,
@@ -106,6 +109,33 @@ async def readyz():
     }, status_code=200 if ok else 503)
 
 
+@router.post("/engine/restart", summary="重启合成引擎 (释放显存并重建模型)")
+async def engine_restart(request: Request):
+    """手动重启引擎: 丢弃已加载模型 + 释放显存, 后台重新预热。
+
+    与进程级看门狗 (降级超时直接退出进程) 不同, 这里不杀进程 — 控制台轮询、
+    训练子进程与前端连接都不中断, 只重建推理模型。引擎锁被卡死 worker 占着
+    时返回 503, 由看门狗/Docker 重启兜底 (那种情况进程内已无法恢复)。
+    """
+    from adr.models import gsv_engine as _gsv
+
+    if _gsv.is_loading():
+        return json_error(409, "引擎正在加载或预热, 请稍后再试", "engine_busy")
+    try:
+        reset = await asyncio.to_thread(_gsv.reset_engine, "manual")
+    except EngineStalledError as exc:
+        return json_error(503, str(exc), "engine_stalled")
+    threading.Thread(
+        target=_gsv.prewarm,
+        args=(getattr(request.app.state, "default_profile", None),),
+        daemon=True,
+        name="adr-engine-reload",
+    ).start()
+    logger.info("[engine] 手动重启: 已丢弃模型并开始重新预热")
+    return {"ok": True, "reset": bool(reset), "reloading": True,
+            "engine_stage": _gsv.stage()}
+
+
 @router.get("/profiles", summary="音色档案清单")
 async def profiles():
     out = []
@@ -169,7 +199,7 @@ async def profile_ref(name: str):
 
 
 @router.get("/profiles/{name}/export", summary="导出音色档案包 (.adrvoice, 含权重)")
-async def profile_export(name: str):
+async def profile_export(name: str, request: Request):
     """导出 .adrvoice 包 (参考音频 + 绑定微调权重)。
 
     注意: 权重即声音本体, 包内含生物特征性质数据, 分享时自行斟酌。
@@ -186,6 +216,15 @@ async def profile_export(name: str):
     # 批次66: 404 由档案存在性直接判定, 不再匹配异常文案 "不存在"
     if name not in voice_library.list_voices():
         return json_error(404, f"档案不存在: {name}", EXPORT_FAILED)
+    # P1: 导出模型包二次验证 (每次导出都验, 不在会话内免验)
+    from adr.core import settings_store
+    from adr.server import local_account
+    if settings_store.get_settings()["security"]["protect_export"]:
+        pwd = request.headers.get("x-adr-password", "")
+        if not pwd:
+            return json_error(403, "导出模型包需要本机账号密码", "password_required")
+        if not local_account.verify_password(pwd):
+            return json_error(403, "本机账号密码不正确", "password_invalid")
     fd, tmp = tempfile.mkstemp(suffix=".adrvoice")
     os.close(fd)
     try:

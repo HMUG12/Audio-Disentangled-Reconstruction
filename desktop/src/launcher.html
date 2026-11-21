@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <title>ADR Studio</title>
 <script src="theme.js"></script>
+<script src="sfx.js"></script>
 <style>
   /* classic: 原暗色配色 (变量取原值) */
   :root {
@@ -14,7 +15,7 @@
     --card-hover-line: #2dd4bf55; --card-hover-shadow: 0 12px 34px #000a; --card-busy-line: #2dd4bf88;
     --tag-txt: #7f92b5; --tag-bg: #182136; --tag-line: #223050; --exp-hover: #a5b4d0;
     --warn: #fbbf24; --warn-bg: #241d0c; --warn-line: #4a3a14;
-    --ic-classic-bg: #0d3340; --ic-classic: #22d3ee; --ic-pro-bg: #172a52; --ic-pro: #60a5fa;
+    --ic-set-bg: #0d3340; --ic-set: #22d3ee; --ic-pro-bg: #172a52; --ic-pro: #60a5fa;
     --ic-easy-bg: #0d3a2b; --ic-easy: #34d399; --ic-call-bg: #2a1a4d; --ic-call: #c084fc;
     --shine: #ffffff08;
     --err-bg: #2a1215; --err-txt: #fca5a5; --err-line: #7f1d1d88; --err: #f87171;
@@ -37,7 +38,7 @@
     --card-busy-line: #5EAAF7;
     --tag-txt: #2B6CB0; --tag-bg: #F0F7FF; --tag-line: #DCEBFB; --exp-hover: #2B6CB0;
     --warn: #975A16; --warn-bg: #FFFAF0; --warn-line: #F6E05E;
-    --ic-classic-bg: #F0F7FF; --ic-classic: #2B6CB0; --ic-pro-bg: #F0F7FF; --ic-pro: #5EAAF7;
+    --ic-set-bg: #F0F7FF; --ic-set: #2B6CB0; --ic-pro-bg: #F0F7FF; --ic-pro: #5EAAF7;
     --ic-easy-bg: #F0F7FF; --ic-easy: #2F855A; --ic-call-bg: #F0F7FF; --ic-call: #6B46C1;
     --shine: #5EAAF714;
     --err-bg: #FFF5F5; --err-txt: #C53030; --err-line: #FEB2B2; --err: #C53030;
@@ -58,7 +59,7 @@
     font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
     background: var(--bg); color: var(--txt); min-height: 100vh;
     display: flex; flex-direction: column; align-items: center;
-    justify-content: center; gap: 8px; overflow: hidden; user-select: none;
+    justify-content: safe center; gap: 8px; overflow-x: hidden; overflow-y: auto; user-select: none;
   }
   /* 背景光晕 */
   body::before, body::after {
@@ -75,7 +76,7 @@
   .sub { color: var(--sub); font-size: 13.5px; margin-bottom: 34px; }
 
   .grid { display: grid; grid-template-columns: repeat(4, 236px); gap: 18px; }
-  @media (max-width: 1120px) { .grid { grid-template-columns: repeat(2, 236px); } }
+  @media (max-width: 1039px) { .grid { grid-template-columns: repeat(2, 236px); } }
   @media (max-width: 620px) { .grid { grid-template-columns: 1fr; width: min(320px, 90vw); } }
 
   .card {
@@ -103,12 +104,14 @@
     color: var(--warn); background: var(--warn-bg); border: 1px solid var(--warn-line);
     border-radius: 8px; padding: 7px 10px; }
   .exp-warn.on { display: block; }
-  .classic .ic { background: var(--ic-classic-bg); } .classic .go { color: var(--ic-classic); }
+  .settings { border-style: dashed; }
+  .settings:hover:not(.busy) { border-style: solid; }
+  .settings .ic { background: var(--ic-set-bg); } .settings .go { color: var(--ic-set); }
   .pro    .ic { background: var(--ic-pro-bg); } .pro    .go { color: var(--ic-pro); }
   .easy   .ic { background: var(--ic-easy-bg); } .easy   .go { color: var(--ic-easy); }
   .call   .ic { background: var(--ic-call-bg); } .call   .go { color: var(--ic-call); }
-  /* SVG stroke 展示属性被 CSS 覆盖 (classic 下变量 = 原属性值) */
-  .classic .ic svg { stroke: var(--ic-classic); } .pro .ic svg { stroke: var(--ic-pro); }
+  /* SVG stroke 展示属性被 CSS 覆盖 (classic 主题下变量 = 原属性值) */
+  .settings .ic svg { stroke: var(--ic-set); } .pro .ic svg { stroke: var(--ic-pro); }
   .easy .ic svg { stroke: var(--ic-easy); } .call .ic svg { stroke: var(--ic-call); }
   .card.busy .go::after {
     content: ""; display: inline-block; width: 11px; height: 11px; margin-left: 8px;
@@ -124,13 +127,86 @@
   #toast { position: fixed; left: 50%; bottom: 34px; transform: translateX(-50%);
     max-width: 80vw; background: var(--err-bg); color: var(--err-txt); border: 1px solid var(--err-line);
     border-radius: 10px; padding: 10px 18px; font-size: 13px; display: none; }
-  .foot { color: var(--faint); font-size: 11.5px; margin-top: 30px; }
+  .foot { color: var(--faint); font-size: 11.5px; margin-top: 30px;
+    max-width: min(1040px, 92vw); text-align: center; line-height: 2.1; }
+  #st-ver:not(:empty)::before { content: " · "; }
   .foot a { color: var(--dim); cursor: pointer; text-decoration: none; }
   .foot a:hover { color: var(--brand); }
+  /* 首次启动 3 步引导 (Adria) */
+  #tour { position: fixed; inset: 0; z-index: 60; background: rgba(3, 7, 14, .62); }
+  #tour[hidden] { display: none; }
+  .tour-focus { position: relative; z-index: 61; outline: 2px solid var(--brand);
+    outline-offset: 7px; border-radius: 18px; pointer-events: none; }
+  .tour-tip { position: fixed; z-index: 62; width: min(360px, 92vw); display: flex; gap: 12px;
+    background: var(--modal-grad); border: 1px solid var(--modal-line); border-radius: 16px;
+    box-shadow: var(--modal-shadow); padding: 16px 18px; }
+  .tour-tip > img { width: 64px; height: 64px; object-fit: contain; flex: none;
+    border-radius: 12px; background: var(--tag-bg); }
+  .tour-body { flex: 1; min-width: 0; }
+  .tour-step { font-size: 10.5px; letter-spacing: 1px; color: var(--brand); font-weight: 650; }
+  .tour-body h3 { font-size: 15px; margin: 2px 0 5px; }
+  .tour-body p { font-size: 12.5px; line-height: 1.65; color: var(--muted); }
+  .tour-acts { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+  .tour-acts span { flex: 1; }
+  .tour-acts button { font-family: inherit; font-size: 12px; border-radius: 8px; cursor: pointer;
+    padding: 6px 12px; border: 1px solid var(--modal-line); background: var(--field);
+    color: var(--strong); }
+  .tour-acts button:hover { border-color: var(--brand); color: var(--brand); }
+  #tour-skip { border: none; background: none; color: var(--dim); padding: 6px 2px; }
+  #tour-next { background: var(--save-bg); border-color: var(--save-line); color: var(--save-txt);
+    font-weight: 600; }
+  @media (prefers-reduced-motion: reduce) {
+    .tour-focus, .tour-tip, .card { transition: none !important; animation: none !important; }
+  }
   #eng { font-size: 12.5px; color: var(--sub); margin-bottom: 26px; }
   #eng.ready { color: var(--ok); }
   #eng.loading { color: var(--warn); }
   #eng.stopped { color: var(--err); }
+
+  /* 状态面板: 引擎链路 + 显存/内存/队列/训练 (只复用页面已有变量) */
+  .dash { width: min(998px, 92vw); margin-top: 18px; display: flex; align-items: center; gap: 16px;
+    background: var(--card-grad); border: 1px solid var(--card-line); border-radius: 14px;
+    box-shadow: var(--card-shadow); padding: 10px 16px; }
+  .dash[hidden] { display: none; }
+  .dash-link { display: flex; align-items: center; gap: 9px; flex: none; padding-right: 16px;
+    border-right: 1px solid var(--sep); }
+  .dash-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); flex: none; }
+  .dash-dot.ready { background: var(--ok); }
+  .dash-dot.loading { background: var(--warn); animation: dashPulse 1.5s ease-out infinite; }
+  .dash-dot.stopped { background: var(--faint); }
+  @keyframes dashPulse {
+    0% { box-shadow: 0 0 0 0 var(--warn-line); }
+    70% { box-shadow: 0 0 0 7px transparent; }
+    100% { box-shadow: 0 0 0 0 transparent; }
+  }
+  .dash-link b { display: block; font-size: 12.5px; font-weight: 650; }
+  .dash-link small { display: block; font-size: 10.5px; color: var(--dim); margin-top: 1px; }
+  .dash-grid { flex: 1; display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; min-width: 0; }
+  .dash-item { min-width: 0; }
+  .dash-item > span { display: block; font-size: 10.5px; color: var(--dim); letter-spacing: .3px; }
+  .dash-item > b { display: block; font-size: 12.5px; font-weight: 600; margin-top: 2px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+  .dash-bar { height: 3px; margin-top: 5px; border-radius: 3px; background: var(--tag-bg);
+    overflow: hidden; }
+  .dash-bar[hidden] { display: none; }
+  .dash-bar i { display: block; height: 100%; width: 0; border-radius: 3px; background: var(--brand);
+    transition: width .35s ease; }
+  .dash-bar i.hi { background: var(--warn); }
+  .dash-bar i.full { background: var(--err); }
+  .dash-cancel { flex: none; font-family: inherit; font-size: 11.5px; font-weight: 600; cursor: pointer;
+    border: 1px solid var(--err-line); background: var(--err-bg); color: var(--err-txt);
+    border-radius: 8px; padding: 5px 11px; }
+  .dash-cancel:hover { filter: brightness(1.08); }
+  .dash-cancel[hidden] { display: none; }
+  @media (max-width: 900px) {
+    .dash { flex-wrap: wrap; }
+    .dash-link { border-right: none; padding-right: 0; }
+    .dash-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .dash-dot.loading { animation: none; }
+    .dash-bar i { transition: none; }
+  }
 
   /* 批次73: 顶部横幅 (更新可用 / 包型不匹配; 均可关闭) */
   .bn { position: fixed; left: 0; right: 0; top: 0; z-index: 45; display: none;
@@ -201,22 +277,34 @@
   #about .ab-note { font-size: 11px; line-height: 1.7; color: var(--faint);
     border-top: 1px solid var(--sep); padding-top: 14px; }
 
-  /* 设置模态框 (批次48) */
-  #set-ov { position: fixed; inset: 0; z-index: 50; display: none;
-    place-items: center; background: var(--overlay); }
-  #set-ov.on { display: grid; }
+  /* 全局设置 (P0: 由模态框升级为整页; 保存栏吸底, 顶部导航吸顶) */
+  #set-ov { position: fixed; inset: 0; z-index: 70; display: none; background: var(--bg); }
+  #set-ov.on { display: block; }
   #set {
-    width: min(560px, 92vw); max-height: 86vh; overflow-y: auto;
-    background: var(--modal-grad);
-    border: 1px solid var(--modal-line); border-radius: 18px; padding: 26px 28px 22px;
-    box-shadow: var(--modal-shadow); position: relative;
+    width: 100%; height: 100%; overflow-y: auto; background: var(--bg);
+    padding: 0 max(20px, calc((100% - 920px) / 2)) 96px;
+    position: relative;
   }
-  #set .st-close { position: absolute; top: 12px; right: 14px; width: 28px; height: 28px;
+  #set .st-top { position: sticky; top: 0; z-index: 4; background: var(--bg);
+    padding: 20px 0 10px; border-bottom: 1px solid var(--sep); margin-bottom: 8px; }
+  .st-nav { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 12px; }
+  .st-nav a { font-size: 11.5px; font-weight: 600; color: var(--muted); cursor: pointer;
+    border: 1px solid var(--tag-line); border-radius: 999px; padding: 5px 11px; text-decoration: none; }
+  .st-nav a:hover { color: var(--brand); border-color: var(--focus); }
+  #set .st-close { position: fixed; top: 14px; right: 18px; z-index: 6; width: 28px; height: 28px;
     display: grid; place-items: center; color: var(--dim); font-size: 18px;
     cursor: pointer; border-radius: 8px; border: none; background: none; }
   #set .st-close:hover { color: var(--txt); background: var(--close-hover-bg); }
   .st-title { font-size: 19px; font-weight: 700; margin-bottom: 3px; }
   .st-sub { font-size: 11.5px; color: var(--dim); margin-bottom: 14px; }
+  .st-jump { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+    background: var(--tag-bg); border: 1px solid var(--card-hover-line); border-radius: 12px;
+    padding: 12px 14px; cursor: pointer; font-family: inherit; color: var(--strong); }
+  .st-jump:hover { background: var(--code-hover); }
+  .st-jump span { flex: 1; min-width: 0; display: grid; gap: 3px; }
+  .st-jump b { font-size: 13.5px; font-weight: 650; }
+  .st-jump small { font-size: 11px; color: var(--dim); line-height: 1.5; }
+  .st-jump i { font-style: normal; font-size: 12.5px; font-weight: 600; color: var(--brand); }
   .st-sec { font-size: 11.5px; font-weight: 650; color: var(--brand); letter-spacing: 1px;
     margin: 16px 0 6px; border-top: 1px solid var(--sep); padding-top: 13px; }
   .st-row { display: flex; align-items: center; justify-content: space-between;
@@ -237,8 +325,8 @@
   .st-hint { font-size: 11px; color: var(--dim); line-height: 1.6; margin: 3px 0 6px; }
   .st-hint code { font-family: Consolas, monospace; font-size: 11px; color: var(--code-txt);
     background: var(--code-bg); border-radius: 5px; padding: 1px 6px; }
-  .st-hint a, .st-links a { color: var(--dim); cursor: pointer; text-decoration: none; }
-  .st-hint a:hover, .st-links a:hover { color: var(--brand); }
+  .st-hint a { color: var(--dim); cursor: pointer; text-decoration: none; }
+  .st-hint a:hover { color: var(--brand); }
   .st-inline { display: flex; gap: 16px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
   .st-inline label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
   .st-adv { margin-top: 14px; border: 1px dashed var(--tag-line); border-radius: 10px;
@@ -246,14 +334,21 @@
   .st-adv summary { font-size: 12px; color: var(--tag-txt); cursor: pointer; user-select: none; }
   .st-adv summary:hover { color: var(--brand); }
   .st-adv[open] summary { margin-bottom: 6px; }
-  .st-foot { display: flex; align-items: center; gap: 12px; margin-top: 18px; }
+  .st-foot { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px max(20px, calc((100% - 920px) / 2));
+    background: var(--bg); border-top: 1px solid var(--sep);
+    box-shadow: 0 -8px 24px #0000000a; }
   .st-foot .st-eff { font-size: 11px; color: var(--warn); margin-right: auto; }
+  .st-danger { background: none; border: 1px solid var(--danger, #d9534f); color: var(--danger, #d9534f);
+    font-size: 12px; font-weight: 600; border-radius: 9px; padding: 7px 14px;
+    cursor: pointer; font-family: inherit; }
+  .st-danger:hover { background: #d9534f12; }
   #st-save { background: var(--save-bg); border: 1px solid var(--save-line); color: var(--save-txt);
     font-size: 13px; font-weight: 600; border-radius: 10px; padding: 8px 26px;
     cursor: pointer; font-family: inherit; box-shadow: var(--save-shadow); }
   #st-save:hover { background: var(--save-hover); }
   #st-save.busy { opacity: .6; pointer-events: none; }
-  .st-links { font-size: 12.5px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
 </style>
 <link rel="stylesheet" href="app-shell.css">
 </head>
@@ -273,24 +368,6 @@
   <div id="eng">● 检测引擎状态…</div>
 
   <div class="grid">
-    <div class="card classic" data-mode="legacy">
-      <div class="shine"></div>
-      <div class="ic">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#22d3ee"
-             stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h.01M10 8h.01M6 12h.01M10 12h.01M14 8h4M14 12h4M6 16h12"/>
-        </svg>
-      </div>
-      <h2>经典控制台</h2>
-      <p>原 Gradio WebUI，功能最全、久经实测。习惯旧版操作流程的优选。</p>
-      <div class="tags"><span class="tag">稳定版</span><span class="tag">全功能</span></div>
-      <label class="exp" title="勾选后引擎监听 0.0.0.0, 局域网设备可调用 TTS API (建议配合 API Key 鉴权)">
-        <input type="checkbox"> 对外提供调用 (局域网)
-      </label>
-      <div class="exp-warn">未配置 ADR_TTS_API_KEY 时, 局域网内所有设备均可无鉴权调用合成 API。建议在启动前设置环境变量。</div>
-      <div class="go">进入 →</div>
-    </div>
-
     <div class="card pro" data-mode="pro">
       <div class="shine"></div>
       <div class="ic">
@@ -341,9 +418,60 @@
       <div class="tags"><span class="tag">API 调试</span><span class="tag">代码片段</span></div>
       <div class="go">进入 →</div>
     </div>
+
+    <div class="card settings" data-action="settings" role="button" tabindex="0"
+         aria-label="打开设置">
+      <div class="shine"></div>
+      <div class="ic">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#22d3ee"
+             stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>
+        </svg>
+      </div>
+      <h2>设置</h2>
+      <p>合成默认值、引擎与数据目录、账号和局域网调用，都在这里。</p>
+      <div class="tags"><span class="tag">全局默认值</span><span class="tag">引擎</span></div>
+      <div class="go">打开 →</div>
+    </div>
   </div>
 
-  <div class="foot">经典控制台按需启动；专业 / 新手复用常驻引擎（启动时已预热），进出秒级切换 · <a id="set-link">设置</a> · <a id="about-link">关于 ADR Studio</a> · <span id="acct-who"></span><a id="acct-out" style="display:none">退出登录</a></div>
+  <!-- 状态面板: 引擎链路 / 显存 / 内存 / 合成队列 / 训练任务 -->
+  <div id="dash" class="dash" hidden>
+    <div class="dash-link">
+      <span class="dash-dot" id="dash-dot"></span>
+      <span><b id="dash-phase">检测中</b><small>常驻引擎</small></span>
+    </div>
+    <div class="dash-grid">
+      <div class="dash-item"><span>显存</span><b id="dash-gpu">—</b>
+        <div class="dash-bar" id="dash-gpu-bar-wrap"><i id="dash-gpu-bar"></i></div></div>
+      <div class="dash-item"><span>内存</span><b id="dash-ram">—</b>
+        <div class="dash-bar" id="dash-ram-bar-wrap"><i id="dash-ram-bar"></i></div></div>
+      <div class="dash-item"><span>合成队列</span><b id="dash-queue">—</b></div>
+      <div class="dash-item"><span>训练任务</span><b id="dash-train">—</b>
+        <div class="dash-bar" id="dash-train-bar-wrap" hidden><i id="dash-train-bar"></i></div></div>
+    </div>
+    <button class="dash-cancel" id="dash-cancel" type="button" hidden>取消训练</button>
+  </div>
+
+  <div class="foot">三个控制台共用常驻引擎，进出秒级切换 · <a id="set-link">设置</a> · <a id="about-link">关于 ADR Studio</a> · <a id="st-env" data-tip="检查 Python 依赖、FFmpeg 与 GPU 是否就绪">环境自检</a> · <a id="st-engine-restart" data-tip="结束当前引擎进程并重新预热，约 5–10 秒">重启引擎</a> · <a id="st-open-log" data-tip="打开 F:\ADR_data\logs 日志目录">日志目录</a> · <a id="st-update" data-tip="联网查询是否有新版本">检查更新</a><span id="st-ver"></span> · <span id="acct-who"></span><a id="acct-out" style="display:none;margin-left:8px;padding:3px 10px;border:1px solid var(--tag-line);border-radius:999px;color:var(--dim)">退出登录</a></div>
+  <div id="tour" hidden>
+    <div class="tour-tip" role="dialog" aria-modal="true" aria-labelledby="tour-title">
+      <img src="assets/mascot/idle.png" alt="">
+      <div class="tour-body">
+        <div class="tour-step" id="tour-step">1 / 3</div>
+        <h3 id="tour-title">先挑一个控制台</h3>
+        <p id="tour-text">新手台三步出声，专业台全参数，调用台给程序对接。选顺手的一个就行。</p>
+        <div class="tour-acts">
+          <button id="tour-skip" type="button">跳过</button>
+          <span></span>
+          <button id="tour-prev" type="button">上一步</button>
+          <button id="tour-next" type="button">下一步</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="toast"></div>
 
   <div id="upd-ov">
@@ -378,10 +506,47 @@
   <div id="set-ov">
     <div id="set">
       <button class="st-close" id="set-x" title="关闭">✕</button>
-      <div class="st-title">设置</div>
-      <div class="st-sub">改动以进程环境变量注入本地引擎，不污染系统环境；保存后下次启动引擎时生效。</div>
+      <div class="st-top">
+        <div class="st-title">全局设置</div>
+        <div class="st-sub">外观与语言、引擎、网络、账号、数据都在这一个页面；改动保存后引擎相关项下次启动生效。</div>
+        <div class="st-nav">
+          <a data-go="g-look">外观与语言</a>
+          <a data-go="g-call">调用与网络</a>
+          <a data-go="g-voice">声音档案</a>
+          <a data-go="g-engine">下载与启动</a>
+          <a data-go="g-safety">声音安全</a>
+          <a data-go="g-account">本地账号</a>
+          <a data-go="g-reset">数据与重置</a>
+        </div>
+      </div>
 
-      <div class="st-sec">调用</div>
+      <div class="st-sec" id="g-look">外观与语言</div>
+      <div class="st-row">
+        <span>界面主题</span>
+        <span class="st-inline">
+          <label><input type="radio" name="st-theme" value="default"> 浅蓝（默认）</label>
+          <label><input type="radio" name="st-theme" value="classic"> 经典绿</label>
+        </span>
+      </div>
+      <div class="st-row">
+        <span>控制台语言</span>
+        <span class="st-inline">
+          <label><input type="radio" name="st-lang" value="zh"> 中文</label>
+          <label><input type="radio" name="st-lang" value="en"> English</label>
+        </span>
+      </div>
+      <div class="st-row">
+        <span>界面音效<small style="display:block;color:var(--dim);font-size:11px;line-height:1.6;margin-top:3px">进入控制台、保存反馈与引擎就绪时播放轻提示音。</small></span>
+        <input type="checkbox" id="st-sound">
+      </div>
+      <div class="st-hint">主题与语言只在这个设置页切换；已打开的控制台页面保存后刷新一次即可同步。</div>
+
+      <button class="st-jump" id="st-open-synth" type="button">
+        <span><b>合成默认值</b><small>控制台里的改动是临时的；这里保存的才是每次启动的默认值</small></span>
+        <i>打开 →</i>
+      </button>
+
+      <div class="st-sec" id="g-call">调用与网络</div>
       <div class="st-row">
         <span>对外提供调用 (局域网)</span>
         <input type="checkbox" id="st-lan">
@@ -393,7 +558,7 @@
       </div>
       <div class="st-hint">开启局域网后调用方请求头需带 <code>Authorization: Bearer &lt;key&gt;</code>。</div>
 
-      <div class="st-sec">声音档案</div>
+      <div class="st-sec" id="g-voice">声音档案</div>
       <div class="st-row st-input-row">
         <span>存放目录</span>
         <input type="text" id="st-datadir" placeholder="留空 = 默认位置 (%LOCALAPPDATA%\ADR\data)" spellcheck="false">
@@ -405,7 +570,7 @@
         <datalist id="st-profiles"></datalist>
       </div>
 
-      <div class="st-sec">下载与启动</div>
+      <div class="st-sec" id="g-engine">下载与启动</div>
       <div class="st-row">
         <span>模型下载源</span>
         <span class="st-inline">
@@ -422,7 +587,7 @@
         <input type="number" id="st-dlrate" min="0" max="1024" step="0.5" placeholder="0 = 不限速">
       </div>
 
-      <div class="st-sec">声音安全</div>
+      <div class="st-sec" id="g-safety">声音安全</div>
       <div class="st-row">
         <span>审计日志 (上传/建档/合成事件记入数据目录 logs/audit.log，不含文本与声纹明文)</span>
         <input type="checkbox" id="st-audit">
@@ -435,27 +600,35 @@
         <span>设备标识: ADR 不采集设备指纹、不上报遥测，无任何外发设备标识。</span>
       </div>
 
-      <div class="st-sec">本地账号</div>
+      <div class="st-sec" id="g-account">本地账号</div>
       <div class="st-row">
         <span>当前账号（仅本机登录用）</span>
         <span class="st-inline"><code id="st-acct">…</code></span>
       </div>
       <div class="st-input-row">
-        <span>修改账号 / 密码（用户名与新密码都要填，密码至少 6 位）</span>
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
-          <input type="text" id="st-acct-user" placeholder="用户名" spellcheck="false" style="flex:1">
-          <input type="password" id="st-acct-pass" placeholder="新密码（至少 6 位）" autocomplete="new-password" style="flex:1">
+        <span>修改账号 / 密码（改密必须验证旧密码）</span>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
+          <input type="password" id="st-acct-old" placeholder="旧密码" autocomplete="current-password" style="flex:1;min-width:120px">
+          <input type="text" id="st-acct-user" placeholder="用户名" spellcheck="false" style="flex:1;min-width:110px">
+          <input type="password" id="st-acct-pass" placeholder="新密码（至少 6 位）" autocomplete="new-password" style="flex:1;min-width:140px">
           <button id="st-acct-save" style="background:var(--save-bg);border:1px solid var(--save-line);color:var(--save-txt);font-size:12.5px;font-weight:600;border-radius:9px;padding:8px 14px;cursor:pointer;font-family:inherit;white-space:nowrap">保存账号</button>
+          <button class="st-danger" id="st-logout" type="button">退出登录</button>
         </div>
         <div class="st-hint">口令只在本机以 PBKDF2 派生后保存（数据目录 .local_account），明文不落盘、不外发；账号仅用于解锁本机控制台，不涉及任何服务器。</div>
       </div>
 
-      <div class="st-sec">维护</div>
-      <div class="st-row st-links">
-        <a id="st-open-log">打开日志目录</a> · <a id="st-update">检查更新</a> · <span id="st-ver"></span>
+      <div class="st-sec" id="g-security">安全</div>
+      <div class="st-row">
+        <span>进入全局设置需要密码（每次打开都验证）</span>
+        <input type="checkbox" id="st-protect-settings">
       </div>
+      <div class="st-row">
+        <span>导出模型包需要密码（每次导出都验证）</span>
+        <input type="checkbox" id="st-protect-export">
+      </div>
+      <div class="st-hint">两项都使用本机账号密码；仍在使用内置默认口令时不可开启。</div>
 
-      <details class="st-adv">
+      <details class="st-adv" id="g-advanced">
         <summary>高级设置</summary>
         <div class="st-row st-input-row">
           <span>服务端口 (0 = 默认 9881，被占自动回退)</span>
@@ -505,9 +678,31 @@
         </div>
       </details>
 
+      <div class="st-sec" id="g-reset">数据与重置</div>
+      <div class="st-row">
+        <span>恢复初始状态<small style="display:block;color:var(--dim);font-size:11px;line-height:1.6;margin-top:3px">
+          清空全部设置、主题语言与首启引导，重新走一次首次启动。模型、声音档案、训练产物与日志都会保留。</small></span>
+        <button class="st-danger" id="st-reset" type="button">恢复初始状态</button>
+      </div>
+
       <div class="st-foot">
-        <span class="st-eff">环境变量类改动下次启动引擎生效</span>
+        <span class="st-eff" id="st-eff">环境变量类改动下次启动引擎生效</span>
         <button id="st-save">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 进入全局设置的二次验证 -->
+  <div id="pw-gate" style="display:none;position:fixed;inset:0;z-index:90;background:var(--overlay);place-items:center">
+    <div style="width:min(340px,92vw);background:var(--modal-grad);border:1px solid var(--modal-line);border-radius:14px;padding:22px 22px 18px;box-shadow:var(--modal-shadow)">
+      <b style="font-size:15px">进入全局设置</b>
+      <div style="font-size:12px;color:var(--dim);margin:6px 0 12px;line-height:1.6">需要验证本机账号密码（每次打开都验）。</div>
+      <input type="password" id="pw-gate-input" placeholder="本机账号密码" autocomplete="current-password"
+             style="width:100%;background:var(--field);border:1px solid var(--tag-line);border-radius:8px;color:var(--txt);font-size:13px;padding:9px 11px;outline:none;font-family:inherit">
+      <div id="pw-gate-msg" style="font-size:11.5px;color:var(--danger,#d9534f);min-height:16px;margin-top:6px"></div>
+      <div style="display:flex;gap:9px;justify-content:flex-end;margin-top:8px">
+        <button id="pw-gate-cancel" style="background:none;border:1px solid var(--tag-line);color:var(--muted);font-size:12.5px;border-radius:9px;padding:7px 14px;cursor:pointer;font-family:inherit">取消</button>
+        <button id="pw-gate-ok" style="background:var(--save-bg);border:1px solid var(--save-line);color:var(--save-txt);font-size:12.5px;font-weight:600;border-radius:9px;padding:7px 16px;cursor:pointer;font-family:inherit">验证</button>
       </div>
     </div>
   </div>
@@ -520,6 +715,7 @@ const toast = document.getElementById("toast");
 let timer = null;
 
 function showToast(msg, ok) {
+  try { window.ADR_SFX && ADR_SFX.play(ok ? "ok" : "err"); } catch (_) {}
   toast.textContent = msg;
   toast.style.display = "block";
   toast.style.background = ok ? "var(--ok-bg)" : "var(--err-bg)";
@@ -533,17 +729,18 @@ let launching = false;
 
 async function launch(mode, card) {
   if (!window.__TAURI__) { showToast("请在 ADR Studio 桌面应用内使用"); return; }
-  // 防重入: UIA/双击可双投递 click, 两次并发 enter_console 会 spawn 两个 Gradio
+  // 防重入: UIA/双击可双投递 click, 两次并发 enter_console 会 spawn 两个服务进程
   // (kill_current 落在首个 pid 写入窗口前会静默通过)。成功后不复位——壳即将
   // 导航离开本页, JS 状态随页面卸载重置; 失败才复位恢复可点。
   if (launching) return;
   launching = true;
+  try { window.ADR_SFX && ADR_SFX.play("enter"); } catch (_) {}
   cards.forEach(c => c.classList.remove("busy"));
   card.classList.add("busy");
   const expose = card.querySelector(".exp input")?.checked ?? false;
   try {
     // 阻塞式命令: 探活通过后壳会把窗口导航到对应控制台
-    // (pro/easy 服务常驻时走热通道秒进; legacy/冷启动回落完整启动流程)
+    // (pro/easy 服务常驻时走热通道秒进; 冷启动回落完整启动流程)
     await window.__TAURI__.core.invoke("enter_console", { mode, expose });
   } catch (e) {
     launching = false;
@@ -552,6 +749,7 @@ async function launch(mode, card) {
   }
 }
 cards.forEach(c => {
+  if (!c.dataset.mode) return;   // 设置卡不是控制台, 由下方单独绑定
   c.addEventListener("click", () => launch(c.dataset.mode, c));
   // 勾选框点击不触发卡片进入; call 卡无勾选框 → 可选链防空 (批次27 复审 ISSUE-1:
   // 旧写法 null.addEventListener 抛 TypeError 中止整个 script, 拖死托盘复位与状态条轮询)
@@ -571,13 +769,155 @@ const ENG_TXT = {
   loading: "● 引擎预热中 · 可先进入, 首次合成会稍慢",
   stopped: "● 引擎未启动 · 首次进入需等待预热"
 };
+// 状态面板: 引擎链路 + 显存/内存/合成队列/训练 (3s 与引擎状态同一轮询)
+const dash = document.getElementById("dash");
+const dashEls = {
+  dot: document.getElementById("dash-dot"),
+  phase: document.getElementById("dash-phase"),
+  gpu: document.getElementById("dash-gpu"),
+  gpuBar: document.getElementById("dash-gpu-bar"),
+  ram: document.getElementById("dash-ram"),
+  ramBar: document.getElementById("dash-ram-bar"),
+  queue: document.getElementById("dash-queue"),
+  train: document.getElementById("dash-train"),
+  trainBar: document.getElementById("dash-train-bar"),
+  trainBarWrap: document.getElementById("dash-train-bar-wrap"),
+  cancel: document.getElementById("dash-cancel"),
+};
+const DASH_PHASE = { ready: "已就绪", loading: "预热中", stopped: "未启动" };
+const TRAIN_TXT = { idle: "空闲", done: "已完成", failed: "失败", stopped: "已停止" };
+let dashBase = "";      // 引擎基址 (仅 ready 时有效; 重启/端口漂移后清空重取)
+let dashKey = null;     // shell 设置的 API Key (null = 尚未读取)
+let dashPolling = false;
+let dashStopping = false;
+
+function dashBar(el, pct) {
+  const p = Math.max(0, Math.min(100, Number(pct) || 0));
+  el.style.width = p + "%";
+  el.className = p >= 92 ? "full" : p >= 72 ? "hi" : "";
+}
+function dashGB(v) { return v == null || !isFinite(+v) ? "—" : (+v).toFixed(1) + " GB"; }
+function dashDur(sec) {
+  if (!isFinite(+sec) || +sec <= 0) return "";
+  const m = Math.floor(sec / 60), s = Math.round(sec % 60);
+  return m ? `${m}m${s ? " " + s + "s" : ""}` : `${s}s`;
+}
+
+function renderDash(phase, st) {
+  const d = dashEls;
+  d.dot.className = "dash-dot " + (phase === "ready" ? "ready" : phase === "loading" ? "loading" : "stopped");
+  d.phase.textContent = DASH_PHASE[phase] || "未启动";
+
+  const gpu = st && st.gpu;
+  d.gpu.textContent = gpu ? `${dashGB(gpu.used_gb)} / ${dashGB(gpu.total_gb)}`
+    : (st ? "无 CUDA / 未加载" : "—");
+  d.gpu.title = gpu ? String(gpu.name || "") : "";
+  dashBar(d.gpuBar, gpu && gpu.total_gb ? gpu.used_gb / gpu.total_gb * 100 : 0);
+
+  const ram = st && st.ram;
+  d.ram.textContent = ram ? `${dashGB(ram.used_gb)} / ${dashGB(ram.total_gb)}` : "—";
+  d.ram.title = ram && ram.percent != null ? `占用 ${ram.percent}%` : "";
+  dashBar(d.ramBar, ram ? ram.percent : 0);
+
+  const q = st ? Number(st.queue_depth || 0) : 0;
+  d.queue.textContent = !st ? "—"
+    : q > 0 ? `${q} 个等待${st.synth_busy ? " · 合成中" : ""}`
+    : st.synth_busy ? "合成中" : "空闲";
+
+  const t = st && st.train;
+  const state = t ? t.state : "";
+  const curve = (t && t.gate_curve) || [];
+  const cur = curve.length ? curve[curve.length - 1].epoch : null;
+  d.train.title = state === "running" && t ? `实验 ${t.exp || "—"} · 配方 ${t.recipe || "—"}` : "";
+  if (!t) d.train.textContent = "—";
+  else if (state === "running") {
+    d.train.textContent = (cur != null ? `第 ${cur}/${t.epochs} 轮 · ` : "") + (dashDur(t.elapsed_sec) || "进行中");
+  } else if (state === "done") {
+    d.train.textContent = t.best_sim != null ? `已完成 · 相似度 ${(+t.best_sim).toFixed(3)}` : "已完成";
+  } else if (state === "failed") {
+    d.train.textContent = "失败 · 专业台可看日志";
+  } else {
+    d.train.textContent = TRAIN_TXT[state] || "空闲";
+  }
+
+  // 训练进度: 已记录轮次 / 总轮次 (无曲线时不显示空条)
+  const running = state === "running";
+  d.cancel.hidden = !running || dashStopping;
+  d.trainBarWrap.hidden = !(running && Number(t.epochs) > 0 && cur != null);
+  dashBar(d.trainBar, running && t.epochs ? cur / t.epochs * 100 : 0);
+}
+
+async function pollDash(phase) {
+  if (!window.__TAURI__ || dashPolling) return;
+  dash.hidden = false;
+  dashPolling = true;
+  try {
+    const core = window.__TAURI__.core;
+    if (phase !== "ready") {
+      dashBase = "";                 // 引擎未就绪: 地址作废, 只显示链路态
+      renderDash(phase, null);
+      return;
+    }
+    if (!dashBase) {
+      try { dashBase = (await core.invoke("lan_info"))?.url || ""; } catch (_) { dashBase = ""; }
+      if (dashKey == null) {
+        try {
+          const cfg = await core.invoke("load_shell_settings");
+          dashKey = String(cfg?.api_key || "").split(",").map(k => k.trim()).find(Boolean) || "";
+        } catch (_) { dashKey = ""; }
+      }
+      if (!dashBase) { renderDash(phase, null); return; }
+    }
+    const r = await fetch(dashBase.replace(/\/$/, "") + "/api/adr/v1/system/stats",
+      { headers: dashKey ? { "X-API-Key": dashKey } : {} });
+    if (r.status === 401) dashKey = null;  // 设置里改过 Key → 下轮重读
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    renderDash(phase, await r.json());
+  } catch (_) {
+    dashBase = "";                   // 引擎重启后端口会变, 下轮重取
+    renderDash(phase, null);
+  } finally {
+    dashPolling = false;
+  }
+}
+
+dashEls.cancel.addEventListener("click", async () => {
+  if (!dashBase || dashStopping) return;
+  dashStopping = true;
+  dashEls.cancel.disabled = true;
+  try {
+    const r = await fetch(dashBase.replace(/\/$/, "") + "/api/adr/v1/train/stop", {
+      method: "POST", headers: dashKey ? { "X-API-Key": dashKey } : {},
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.detail || ("HTTP " + r.status));
+    }
+    showToast("已发送停止训练指令", true);
+  } catch (e) {
+    showToast("停止训练失败: " + e.message);
+  } finally {
+    dashStopping = false;
+    dashEls.cancel.disabled = false;
+    pollEngine();
+  }
+});
+
+let lastPhase = "";
 async function pollEngine() {
   if (!window.__TAURI__) { eng.textContent = "● 请在 ADR Studio 桌面应用内使用"; return; }
+  let phase = "stopped";
   try {
-    const { phase } = await window.__TAURI__.core.invoke("engine_status");
+    phase = (await window.__TAURI__.core.invoke("engine_status")).phase || "stopped";
     eng.textContent = ENG_TXT[phase] || ENG_TXT.stopped;
     eng.className = phase === "ready" ? "ready" : phase === "loading" ? "loading" : "stopped";
   } catch (_) { /* 忽略轮询错误 */ }
+  // 预热完毕 (含手动重启后回 ready) 给一声轻提示, 首次加载不响
+  if (phase === "ready" && lastPhase && lastPhase !== "ready") {
+    try { window.ADR_SFX && ADR_SFX.play("notify"); } catch (_) {}
+  }
+  lastPhase = phase;
+  pollDash(phase);
 }
 pollEngine();
 setInterval(pollEngine, 3000);
@@ -592,7 +932,7 @@ aboutOv.addEventListener("click", e => { if (e.target === aboutOv) aboutOv.class
   try {
     const v = await window.__TAURI__.app.getVersion();
     el.textContent = `version ${v}`;
-  } catch (_) { el.textContent = "version 1.3.1"; }
+  } catch (_) { el.textContent = "version 1.3.1-beta.92"; }
 })();
 document.getElementById("about-qq").addEventListener("click", e => {
   const t = e.currentTarget.textContent.replace(/^QQ\s*/, "");
@@ -607,6 +947,77 @@ let stAutostart = false;   // 注册表当前真值 (保存时比对, 避免无�
 let _compatTouched = false; // 批次57 review: 用户是否主动碰过兼容勾选框 (未碰则保存保持 null 自动语义)
 let stCompatLoaded = null;  // 上次加载的 compat_cpu 真值 (null=自动语义; 保存时判断"此前是否显式值")
 let stPaths = {};          // app_paths 缓存 (打开日志/数据目录)
+let stLanUrl = "";         // 引擎基址 (跳转控制台设置用)
+let stApiKey = "";         // 首个非空 key (跨源跳转时携带)
+let stBaseline = "";       // 打开设置时的控件快照 (未保存提醒)
+let stThemeLoaded = "default";
+const ST_TRACK_IDS = [
+  "st-lan", "st-key", "st-datadir", "st-profile", "st-autostart", "st-dlrate",
+  "st-audit", "st-wavmeta", "st-port", "st-numba", "st-device", "st-threads",
+  "st-loglevel", "st-workers", "st-cuda", "st-compat",
+  "st-protect-settings", "st-protect-export",
+];
+function stSnapshot() {
+  return JSON.stringify({
+    v: ST_TRACK_IDS.map(id => {
+      const e = $st(id);
+      return e ? (e.type === "checkbox" ? e.checked : e.value) : null;
+    }),
+    hf: document.querySelector('input[name="st-hf"]:checked')?.value || "",
+    theme: document.querySelector('input[name="st-theme"]:checked')?.value || "",
+    lang: document.querySelector('input[name="st-lang"]:checked')?.value || "",
+  });
+}
+function stEsc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g,
+    c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+async function stLoadServer(base, key) {
+  if (!base) return null;
+  try {
+    const r = await fetch(base.replace(/\/$/, "") + "/api/adr/v1/settings",
+      { headers: key ? { "X-API-Key": key } : {} });
+    return r.ok ? await r.json() : null;
+  } catch (_) { return null; }
+}
+async function stPutUi(base, key, theme, lang, protectExport) {
+  if (!base) return;
+  const r = await fetch(base.replace(/\/$/, "") + "/api/adr/v1/settings", {
+    method: "PUT",
+    headers: Object.assign({ "Content-Type": "application/json" },
+      key ? { "X-API-Key": key } : {}),
+    body: JSON.stringify({
+      ui: { theme, lang },
+      security: { protect_export: !!protectExport },
+    }),
+  });
+  if (!r.ok) throw new Error("控制台设置保存失败: HTTP " + r.status);
+}
+
+/* 进入全局设置的二次验证 (protect_settings) */
+function askSettingsPassword() {
+  const inv = window.__TAURI__?.core.invoke;
+  return new Promise((resolve) => {
+    const box = document.getElementById("pw-gate");
+    const inp = document.getElementById("pw-gate-input");
+    const msg = document.getElementById("pw-gate-msg");
+    const ok = document.getElementById("pw-gate-ok");
+    const cancel = document.getElementById("pw-gate-cancel");
+    box.style.display = "grid";
+    inp.value = ""; msg.textContent = "";
+    const close = (v) => { box.style.display = "none"; resolve(v); };
+    ok.onclick = async () => {
+      try {
+        const good = await inv("account_verify", { password: inp.value });
+        if (good) close(true);
+        else msg.textContent = "密码不正确";
+      } catch (e) { msg.textContent = String(e); }
+    };
+    cancel.onclick = () => close(false);
+    inp.onkeydown = (e) => { if (e.key === "Enter") ok.click(); };
+    setTimeout(() => inp.focus(), 30);
+  });
+}
 
 // 引擎就绪 → 拉档案列表填默认档案下拉 (datalist)
 async function fillProfiles(base, keys) {
@@ -627,19 +1038,30 @@ async function fillProfiles(base, keys) {
 }
 
 async function openSettings() {
-  setOv.classList.add("on");
   const inv = window.__TAURI__?.core.invoke;
   if (!inv) { showToast("请在 ADR Studio 桌面应用内使用"); return; }
+  // 设置密码保护: 每次打开都验一次
+  try {
+    const pre = await inv("load_shell_settings");
+    if (pre && pre.protect_settings && !(await askSettingsPassword())) return;
+  } catch (_) { /* 读取失败按未保护处理 */ }
+  // 首启引导 (tour) 层级更高, 打开设置时先挂起, 关闭后恢复
+  try { window.__adrTour && window.__adrTour.suspend(); } catch (_) {}
+  setOv.classList.add("on");
+  document.documentElement.style.overflow = "hidden";
   try {
     const [cfg, paths, lan] = await Promise.all([
       inv("load_shell_settings"), inv("app_paths"), inv("lan_info")
     ]);
     stPaths = paths || {};
+    stLanUrl = lan?.url || "";
+    stApiKey = String(cfg.api_key || "").split(",").map(k => k.trim()).find(Boolean) || "";
     $st("st-lan").checked = !!cfg.lan_expose;
     $st("st-key").value = cfg.api_key || "";
     $st("st-datadir").value = cfg.data_dir || "";
     $st("st-datadir").dataset.now = cfg.data_dir || "";
     $st("st-datadir-now").textContent = paths?.data_dir || "(默认位置)";
+    $st("st-sound").checked = window.ADR_SFX ? ADR_SFX.enabled() : true;
     document.querySelector('input[name="st-hf"][value="' + (cfg.hf_mirror ? "mirror" : "off") + '"]').checked = true;
     $st("st-profile").value = cfg.default_profile || "";
     $st("st-dlrate").value = cfg.download_rate || "";
@@ -682,8 +1104,31 @@ async function openSettings() {
     $st("st-lan-ip").textContent = lan?.ip || "未获取到 (离线?)";
     $st("st-lan-url").textContent = lan?.url || "引擎未运行";
     $st("st-copy-url").style.display = lan?.url ? "" : "none";
+    // 外观与语言: 以服务端 settings.json 为准; 引擎未起时回落本地值
+    stThemeLoaded = window.adrTheme ? adrTheme.get() : "default";
+    let theme = stThemeLoaded, lang = "zh";
+    const sv = await stLoadServer(lan?.url || "", stApiKey);
+    if (sv && sv.ui) {
+      theme = sv.ui.theme || theme;
+      lang = sv.ui.lang || lang;
+    }
+    document.querySelectorAll('input[name="st-theme"]').forEach(b => { b.checked = b.value === theme; });
+    document.querySelectorAll('input[name="st-lang"]').forEach(b => { b.checked = b.value === lang; });
+    $st("st-protect-settings").checked = !!cfg.protect_settings;
+    $st("st-protect-export").checked = !!(sv && sv.security && sv.security.protect_export);
     fillProfiles(lan?.url || "", cfg.api_key);
+    stBaseline = stSnapshot();
   } catch (e) { showToast("加载设置失败: " + e); }
+}
+
+function closeSettings() {
+  if (!setOv.classList.contains("on")) return;
+  const dirty = stBaseline && stSnapshot() !== stBaseline;
+  if (dirty && !confirm("设置还有未保存的更改，确定离开？")) return;
+  if (dirty && window.adrTheme) adrTheme.set(stThemeLoaded);
+  setOv.classList.remove("on");
+  document.documentElement.style.overflow = "";
+  try { window.__adrTour && window.__adrTour.resume(); } catch (_) {}
 }
 
 async function saveSettings() {
@@ -715,12 +1160,37 @@ async function saveSettings() {
       // 自动兼容固化成 Some(false) 而静默失效
       compat_cpu: (_compatTouched || stCompatLoaded != null)
         ? $st("st-compat").checked : null,
+      protect_settings: $st("st-protect-settings").checked,
     };
+    if (cfg.protect_settings) {
+      const ai = await refreshAccount();
+      if (ai && ai.default_password) {
+        throw new Error("请先修改默认口令，再开启设置密码保护");
+      }
+    }
     await inv("save_shell_settings", { settings: cfg });
     if (cfg.autostart !== stAutostart) {
       await inv("autostart_set", { enable: cfg.autostart });
       stAutostart = cfg.autostart;
     }
+    // 外观与语言: 写服务端 settings.json (控制台读取) + 本地缓存 (壳页面立即生效)
+    const theme = document.querySelector('input[name="st-theme"]:checked')?.value || "default";
+    const lang = document.querySelector('input[name="st-lang"]:checked')?.value || "zh";
+    try {
+      localStorage.setItem("adr.theme", theme);
+      localStorage.setItem("adr_lang", lang);
+    } catch (_) { /* 隐私模式等禁用存储时忽略 */ }
+    if (stLanUrl) {
+      await stPutUi(stLanUrl, stApiKey, theme, lang, $st("st-protect-export").checked);
+    }
+    // 保存回读校验: 避免写盘失败/被占用时仍提示成功
+    const back = await inv("load_shell_settings");
+    if (String(back.api_key || "") !== String(cfg.api_key || "")
+        || String(back.device || "") !== String(cfg.device || "")) {
+      throw new Error("保存后回读不一致，请重试");
+    }
+    stThemeLoaded = theme;
+    stBaseline = stSnapshot();
     // 三卡片"对外提供调用"勾选框联动新默认值
     document.querySelectorAll(".exp input").forEach(b => { if (b) b.checked = cfg.lan_expose; });
     const oldDir = $st("st-datadir").dataset.now || "";
@@ -734,10 +1204,57 @@ async function saveSettings() {
 }
 
 $st("set-link").addEventListener("click", openSettings);
+const setCard = document.querySelector(".card.settings");
+setCard.addEventListener("click", openSettings);
+setCard.addEventListener("keydown", e => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openSettings(); }
+});
+// 本机设置 → 控制台设置 (合成默认值, 服务端 settings.json, 即时生效)
+// 深链: launcher.html?settings=1 直接打开全局设置 (便于排障/截图)
+try {
+  if (new URLSearchParams(location.search).get("settings") === "1") openSettings();
+} catch (_) { /* 极老 WebView 无 URLSearchParams 时忽略 */ }
+$st("st-open-synth").addEventListener("click", () => {
+  if (!stLanUrl) { showToast("引擎还没启动，稍后再试"); return; }
+  const sep = stLanUrl.includes("?") ? "&" : "?";
+  const q = "desktop=1&shell_origin="
+    + encodeURIComponent(location.origin || "tauri://localhost")
+    + (stApiKey ? "&api_key=" + encodeURIComponent(stApiKey) : "");
+  location.href = stLanUrl.replace(/\/$/, "") + "/settings" + sep + q;
+});
 $st("st-compat").addEventListener("change", () => { _compatTouched = true; });
-$st("set-x").addEventListener("click", () => setOv.classList.remove("on"));
-setOv.addEventListener("click", e => { if (e.target === setOv) setOv.classList.remove("on"); });
+$st("set-x").addEventListener("click", closeSettings);
+// 整页设置不再点遮罩关闭 (遮罩已铺满), 保留 Esc
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && setOv.classList.contains("on")) closeSettings();
+});
 $st("st-save").addEventListener("click", saveSettings);
+// 音效开关即时生效 (存 localStorage, 与引擎设置无关)
+$st("st-sound").addEventListener("change", e => {
+  if (!window.ADR_SFX) return;
+  ADR_SFX.set(e.target.checked);
+  if (e.target.checked) ADR_SFX.play("ok");
+});
+document.querySelectorAll(".st-nav a").forEach(a => {
+  a.addEventListener("click", () => {
+    const el = document.getElementById(a.dataset.go);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+});
+document.querySelectorAll('input[name="st-theme"]').forEach(b => {
+  b.addEventListener("change", () => {
+    if (b.checked && window.adrTheme) adrTheme.set(b.value);
+  });
+});
+$st("st-reset").addEventListener("click", async () => {
+  const inv = window.__TAURI__?.core.invoke;
+  if (!confirm("恢复初始状态？将清空全部设置、主题语言与首启引导，并重新进入首次启动。\n模型、声音档案、训练产物与日志都会保留。")) return;
+  if (!confirm("再次确认：此操作不可撤销。")) return;
+  try {
+    ["adr.theme", "adr_lang", "adr_api_key"].forEach(k => { try { localStorage.removeItem(k); } catch (_) {} });
+    await inv("factory_reset");
+  } catch (e) { showToast("重置失败: " + e); }
+});
 $st("st-open-data").addEventListener("click", () => {
   const p = stPaths?.data_dir;
   if (!p) { showToast("目录信息暂不可用, 请重开设置面板"); return; }
@@ -748,6 +1265,39 @@ $st("st-open-log").addEventListener("click", () => {
   if (!p) { showToast("目录信息暂不可用, 请重开设置面板"); return; }
   window.__TAURI__?.core.invoke("open_path", { path: p }).catch(e => showToast(String(e)));
 });
+$st("st-env").addEventListener("click", async () => {
+  const inv = window.__TAURI__?.core.invoke;
+  if (!inv) { showToast("请在 ADR Studio 桌面应用内使用"); return; }
+  try {
+    const r = await inv("env_check");
+    const list = r.checks || [];
+    const bad = list.filter(c => !c.ok);
+    if (!bad.length) { showToast("环境自检通过 (" + list.length + " 项)", true); return; }
+    showToast("自检 " + bad.length + "/" + list.length + " 项异常: " +
+      bad.map(c => c.name + (c.detail ? "(" + c.detail + ")" : "")).join("；"));
+  } catch (e) {
+    showToast("自检失败: " + e);
+  }
+});
+$st("st-engine-restart").addEventListener("click", async () => {
+  if (!stLanUrl) { showToast("引擎未运行, 无法重启"); return; }
+  if (!confirm("重启合成引擎？会卸载模型并重新加载（约 30–60 秒），期间合成请求会失败。\n训练、档案与设置不受影响。")) return;
+  const a = $st("st-engine-restart");
+  a.textContent = "重启中…";
+  try {
+    const r = await fetch(stLanUrl.replace(/\/$/, "") + "/api/adr/v1/engine/restart", {
+      method: "POST",
+      headers: stApiKey ? { "X-API-Key": stApiKey } : {},
+    });
+    if (r.status === 409) { showToast("引擎正在加载或预热, 请稍后再试"); return; }
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    showToast("引擎已重启, 后台重新预热中", true);
+  } catch (e) {
+    showToast("重启失败: " + e);
+  } finally {
+    a.textContent = "重启引擎";
+  }
+});
 $st("st-update").addEventListener("click", () => runUpdateCheck(true));
 $st("st-copy-url").addEventListener("click", () => {
   const url = $st("st-lan-url").textContent;
@@ -756,7 +1306,7 @@ $st("st-copy-url").addEventListener("click", () => {
       .then(() => showToast("地址已复制", true), () => showToast("复制失败, 请手动复制"));
   }
 });
-// 维护区版本号 (与关于框一致)
+// 启动器底部版本号 (与关于框一致)
 (async () => {
   try { $st("st-ver").textContent = "v" + await window.__TAURI__.app.getVersion(); }
   catch (_) { $st("st-ver").textContent = ""; }
@@ -779,7 +1329,9 @@ function paintAccount(info) {
   const who = document.getElementById("acct-who");
   const out = document.getElementById("acct-out");
   if (!info) return;
-  if (who) who.textContent = info.username ? "账号: " + info.username : "";
+  if (who) who.textContent = info.username
+    ? "账号: " + info.username + (info.default_password ? "（仍用默认口令，进控制台前请改密）" : "")
+    : "";
   if (out) out.style.display = info.logged_in ? "" : "none";
 }
 document.getElementById("acct-out").addEventListener("click", async () => {
@@ -791,17 +1343,28 @@ document.getElementById("acct-out").addEventListener("click", async () => {
 });
 document.getElementById("st-acct-save").addEventListener("click", async () => {
   const inv = window.__TAURI__?.core.invoke;
+  const old = document.getElementById("st-acct-old").value;
   const user = document.getElementById("st-acct-user").value.trim();
   const pass = document.getElementById("st-acct-pass").value;
+  if (!old) { showToast("请先输入旧密码"); return; }
   if (!user) { showToast("用户名不能为空"); return; }
   if (pass.length < 6) { showToast("请填写新密码（至少 6 位）"); return; }
+  if (pass === "Adr12345@") { showToast("请勿使用内置默认口令"); return; }
   try {
-    await inv("account_set", { username: user, password: pass });
+    await inv("account_set", { username: user, password: pass, oldPassword: old });
+    document.getElementById("st-acct-old").value = "";
     document.getElementById("st-acct-pass").value = "";
     const info = await refreshAccount();
     paintAccount(info);
     document.getElementById("st-acct").textContent = info?.username || user;
     showToast("本地账号已更新", true);
+  } catch (e) { showToast(String(e)); }
+});
+document.getElementById("st-logout").addEventListener("click", async () => {
+  if (!confirm("退出登录？下次启动需要重新输入密码。")) return;
+  try {
+    await window.__TAURI__?.core.invoke("account_logout");
+    location.href = "prewarm.html";
   } catch (e) { showToast(String(e)); }
 });
 refreshAccount().then(paintAccount);
@@ -932,7 +1495,80 @@ $upd("upd-inst").addEventListener("click", async () => {
 // 启动器加载: 静默查一次 (24h 缓存, 不打扰)
 runUpdateCheck(false);
 // 主题切换控件: 右上角 (启动器无页头)
-if (window.adrTheme) window.adrTheme.mountSwitch();
+/* P0: 主题切换移到设置页内部 (设置面板左侧「外观与语言」) */
+
+// ===== 首次启动 3 步引导 (Adria) =====
+(function tour() {
+  const KEY = "adr.tour_v1";
+  let seen = "";
+  try { seen = localStorage.getItem(KEY) || ""; } catch (_) { return; }
+  if (seen === "done") return;
+  const box = document.getElementById("tour");
+  const tip = box.querySelector(".tour-tip");
+  const elStep = document.getElementById("tour-step");
+  const elTitle = document.getElementById("tour-title");
+  const elText = document.getElementById("tour-text");
+  const bPrev = document.getElementById("tour-prev");
+  const bNext = document.getElementById("tour-next");
+  const steps = [
+    { sel: ".grid", title: "先挑一个控制台",
+      text: "新手台三步出声，专业台全参数，调用台给程序对接。选顺手的一个就行。" },
+    { sel: ".card.settings", title: "设置在这里",
+      text: "控制台里改的参数只是临时的；想长期生效，就在这里存成默认值。" },
+    { sel: "#eng", title: "引擎状态看这里",
+      text: "绿色就能秒进。第一次合成会稍慢，是在准备模型，正常。" }
+  ];
+  let i = 0, prevEl = null;
+
+  function place(el) {
+    const r = el.getBoundingClientRect();
+    const tw = Math.min(360, innerWidth * 0.92);
+    const left = Math.max(12, Math.min(innerWidth - tw - 12, r.left + r.width / 2 - tw / 2));
+    const below = r.bottom + 16;
+    const top = below + 190 < innerHeight ? below : Math.max(12, r.top - 210);
+    tip.style.left = left + "px";
+    tip.style.top = top + "px";
+  }
+  function show(n) {
+    i = Math.max(0, Math.min(steps.length - 1, n));
+    if (prevEl) prevEl.classList.remove("tour-focus");
+    const s = steps[i];
+    const el = document.querySelector(s.sel);
+    if (el) { el.classList.add("tour-focus"); prevEl = el; place(el); }
+    elStep.textContent = (i + 1) + " / " + steps.length;
+    elTitle.textContent = s.title;
+    elText.textContent = s.text;
+    bPrev.style.visibility = i === 0 ? "hidden" : "";
+    bNext.textContent = i === steps.length - 1 ? "开始使用" : "下一步";
+  }
+  function done() {
+    box.hidden = true;
+    if (prevEl) prevEl.classList.remove("tour-focus");
+    try { localStorage.setItem(KEY, "done"); } catch (_) {}
+  }
+  bNext.addEventListener("click", () => (i === steps.length - 1 ? done() : show(i + 1)));
+  bPrev.addEventListener("click", () => show(i - 1));
+  document.getElementById("tour-skip").addEventListener("click", done);
+  box.addEventListener("click", e => { if (!tip.contains(e.target)) done(); });
+  addEventListener("resize", () => { if (prevEl) place(prevEl); });
+  // 设置页打开期间挂起引导, 关闭后恢复当前步
+  let suspended = false;
+  window.__adrTour = {
+    suspend: () => {
+      if (box.hidden) return;
+      suspended = true;
+      box.hidden = true;
+      if (prevEl) prevEl.classList.remove("tour-focus");
+    },
+    resume: () => {
+      if (!suspended) return;
+      suspended = false;
+      box.hidden = false;
+      show(i);
+    },
+  };
+  setTimeout(() => { box.hidden = false; show(0); }, 700);
+})();
 </script>
 </body>
 </html>

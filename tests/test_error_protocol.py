@@ -5,7 +5,6 @@
 - v2 HTTP: 错误响应 {"message", "code"} (code 增量字段, 既有 message 逐字保留)
 - native HTTP: /profiles/{name}/ref 404 带 code
 - v3 WS: init 类型化上报 (profile_invalid / profile_not_found) + error 帧 code
-- webui 面: _err dict 为 UI 形态, 无 wire 协议, 不加 code (设计备案, 无需测试)
 - 批次84 (#12/#13): 内部故障 400→500/503 分流; HTTPException/401/422 统一补 message
 """
 import json
@@ -279,20 +278,4 @@ def test_v3_synth_error_code(client, voice_dir):
         assert err is not None
         assert err["message"] == "boom"
         assert err["code"] == "internal_error"
-
-
-# ─── 批次111 (审计 R5-WEBUI-02): 流式克隆失败必须可见 ───
-
-def test_webui_stream_clone_surfaces_errors():
-    """输出端只有流式音频, 没有地方放错误 dict; 旧实现三条失败路径裸 return,
-    点「流式克隆」后界面无输出无报错。现在统一 raise gr.Error。"""
-    gr = pytest.importorskip("gradio")
-    from adr.webui import _stream_clone_cmd
-
-    with pytest.raises(gr.Error):
-        list(_stream_clone_cmd(None, "   ", "", "", "cut3"))
-    # 参考音频不合规 → 报错要带原因, 不能只丢个空响应
-    with pytest.raises(gr.Error) as ei:
-        list(_stream_clone_cmd(None, "你好", "", "", "cut3"))
-    assert "参考音频" in str(ei.value)
 

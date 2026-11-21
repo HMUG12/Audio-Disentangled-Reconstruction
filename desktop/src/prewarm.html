@@ -46,7 +46,7 @@
     font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
     background: var(--bg); color: var(--txt); min-height: 100vh;
     display: flex; flex-direction: column; align-items: center;
-    justify-content: center; gap: 8px; overflow: hidden; user-select: none;
+    justify-content: safe center; gap: 8px; overflow-x: hidden; overflow-y: auto; user-select: none;
   }
   /* 背景光晕 (与 launcher 一致) */
   body::before, body::after {
@@ -240,6 +240,7 @@
   }
   .lcard h2 { font-size: 16.5px; font-weight: 700; }
   .lcard h2 em { font-style: normal; color: var(--brand); }
+  .lcard .lsub { font-size: 12px; color: var(--muted); margin-top: -6px; }
   .lgrid { display: flex; flex-direction: column; gap: 9px; }
   .lfld { display: flex; flex-direction: column; gap: 5px; }
   .lfld label { font-size: 12px; color: var(--muted); }
@@ -304,7 +305,7 @@
   /* 向导卡片 780px 居中, 形象缩到右侧留白里 */
   body.setup-mode #mascot { width: min(220px, 16vw); right: max(4px, 1vw); }
   @media (max-width: 1180px) { body.setup-mode #mascot { display: none; } }
-  /* 窄窗: 先收图, 再让图整列退场 (壳最小窗 960×600) */
+  /* 窄窗: 先收图, 再让图整列退场 (壳最小窗 1040×660) */
   @media (max-width: 1080px) {
     .pw-main { grid-template-columns: minmax(0, 1fr) minmax(0, 300px); gap: 28px; }
     #mascot { width: min(320px, 100%); }
@@ -400,10 +401,17 @@
             </div>
             <div class="sfld">
               <label>密码（至少 6 位）</label>
-              <input type="password" id="su-pass" placeholder="默认 Adr12345@" autocomplete="new-password">
+              <input type="password" id="su-pass" placeholder="至少 6 位，请勿使用默认口令" autocomplete="new-password">
+            </div>
+            <div class="sfld">
+              <label>控制台语言</label>
+              <select id="su-lang">
+                <option value="zh">中文</option>
+                <option value="en">English</option>
+              </select>
             </div>
           </div>
-          <div class="shint">想省事就用默认：账号 <b>ADR</b>，密码 <b>Adr12345@</b>。之后可在「启动器 → 设置 → 账号」修改。</div>
+          <div class="shint">请设置只有你知道的密码；内置默认口令不再预填。之后可在「启动器 → 设置 → 账号」修改。</div>
           <div class="shint">口令只会以 PBKDF2 派生值留在本机——明文不保存，也不联网校验。</div>
         </section>
 
@@ -455,50 +463,18 @@
             <h3>模型住在这里</h3>
             <div class="sstatic">位置：<code id="su-models">正在查找…</code></div>
             <div class="smini">
+              <button id="su-env">环境自检</button>
               <button id="su-checkmodels">检查完整性</button>
               <button id="su-openmodels">打开模型目录</button>
             </div>
+            <div class="shint" id="su-env-msg" style="white-space:pre-line"></div>
             <div class="shint" id="su-models-msg">只读取本机文件，不联网、不下载；缺失的部分会在预热时补齐。自定义权重按 GPT-SoVITS 的目录结构放入即可，随后在「启动器 → 模型」切换。</div>
           </div>
 
           <div class="ogrp">
-            <h3>声音档案的位置</h3>
-            <div class="sfld">
-              <label>声音档案文件夹（留空 = 默认位置）</label>
-              <input type="text" id="su-datadir" placeholder="%LOCALAPPDATA%\ADR\data" spellcheck="false">
-            </div>
-            <div class="shint">档案目录可自行指定，模型目录由安装位置固定。两者都只留在本机。</div>
+            <h3>其余设置在启动器里</h3>
+            <div class="shint">声音档案位置、开机自启、声音安全审计、默认档案、流式节奏与模型下载源，都已收进「启动器 → 全局设置」。首启只保留影响引擎启动的选项，避免同一项在两处各存一份。</div>
           </div>
-
-          <div class="ogrp">
-            <h3>启动与隐私</h3>
-            <div class="srow"><input type="checkbox" id="su-autostart"> 随系统启动</div>
-            <div class="srow"><input type="checkbox" id="su-audit" checked> 记录声音安全审计日志（只记事件，不写文本与声纹）</div>
-            <div class="srow"><input type="checkbox" id="su-wavmeta" checked> 导出的音频标注「AI 生成」</div>
-            <div class="srow"><input type="checkbox" id="su-deviceid" disabled> 采集设备唯一标识 —— 本版不采集，仅作说明</div>
-            <div class="shint">服务协议、隐私政策与开源许可：上一步的「使用条款」已确认（AGPL-3.0-only，本地免费使用）。</div>
-          </div>
-
-          <details class="oadv">
-            <summary>高级选项（可选）：默认档案、流式节奏与下载源</summary>
-            <div class="sgrid">
-              <div class="sfld">
-                <label>默认声音档案（留空 = 不指定）</label>
-                <input type="text" id="su-profile" placeholder="如 my_voice" spellcheck="false">
-              </div>
-              <div class="sfld">
-                <label>流式首段字数上限（默认 14）</label>
-                <input type="number" id="su-streamhead" min="1" max="200" placeholder="14">
-              </div>
-              <div class="sfld">
-                <label>长句细分上限（默认 40）</label>
-                <input type="number" id="su-splitmax" min="1" max="400" placeholder="40">
-              </div>
-            </div>
-            <div class="srow" style="margin-top:10px"><input type="checkbox" id="su-autotune" checked> 启动后自动标定设备（Autopilot）</div>
-            <div class="srow"><input type="checkbox" id="su-mirror"> 通过 hf-mirror 国内镜像下载模型（通常更快）</div>
-            <div class="shint" style="margin-top:8px">启动后进入启动器，不会自动打开控制台。设备画像与调度报告将在后续版本提供。</div>
-          </details>
         </section>
       </div>
 
@@ -517,7 +493,8 @@
   <!-- 批次102: 本机账号登录 (壳启动即弹; 登录前不放行进入启动器) -->
   <div id="login">
     <div class="lcard">
-      <h2>登录<em>本机账号</em></h2>
+      <h2>欢迎回来</h2>
+      <div class="lsub">登录后继续你的声音工作台。</div>
       <div class="lgrid">
         <div class="lfld">
           <label>账号</label>
@@ -528,11 +505,18 @@
           <input type="password" id="pw-pass" placeholder="请输入密码" autocomplete="current-password">
         </div>
       </div>
+      <label style="display:flex;align-items:center;gap:7px;font-size:12px;color:var(--dim);margin-top:10px;cursor:pointer">
+        <input type="checkbox" id="pw-remember" style="accent-color:var(--brand);width:14px;height:14px">
+        记住我（7 天免密登录）
+      </label>
       <div class="smsg" id="pw-msg"></div>
       <div class="lacts">
-        <button id="pwLogin">登录</button>
+        <button id="pwLogin">进入</button>
       </div>
-      <div class="tfoot">账号与口令只留在本机（口令仅保存 PBKDF2 派生值，明文不存）。登录只解锁本机界面，与云端账号无关。</div>
+      <div style="text-align:center;margin-top:10px">
+        <a id="pw-forgot" style="font-size:11.5px;color:var(--dim);cursor:pointer;text-decoration:none">忘记密码？</a>
+      </div>
+      <div class="tfoot">账号只在本机校验，不上传。</div>
     </div>
   </div>
 
@@ -666,7 +650,7 @@ function setTermsMode(on) {
 const setupEl = document.getElementById("setup");
 const $su = id => document.getElementById(id);
 let suBase = null;              // 现有 shell.json 配置 (保存时在其基础上改, 不丢其他字段)
-let suAuto = false;             // 注册表当前自启真值 (避免无谓写注册表)
+/* 开机自启等其余设置已移到「启动器 → 全局设置」 */
 const STRENGTHS = ["auto", "low", "mid", "balanced", "strong", "max"];
 // 批次103: 3 页式向导 — 一页只做一件事 (账号 / 性能 / 存放·隐私)
 const O_PAGES = [
@@ -718,32 +702,23 @@ async function initSetup() {
   if (!inv) return;
   try { suBase = await inv("load_shell_settings") || {}; } catch (_) { suBase = {}; }
   const cfg = suBase;
-  $su("su-datadir").value = cfg.data_dir || "";
-  $su("su-profile").value = cfg.default_profile || "";
   $su("su-device").value = (cfg.device === "cuda" || cfg.device === "cpu") ? cfg.device : "auto";
   $su("su-threads").value = cfg.torch_threads || "";
   // 显存上限: 0.1~1.0 存比例, 界面用百分比; 未设置/越界 = 不限制
   const frac = typeof cfg.gpu_mem_fraction === "number" ? cfg.gpu_mem_fraction : 0;
   $su("su-gpumem").value = frac > 0 ? Math.round(frac * 100) : "";
   $su("su-strength").value = STRENGTHS.includes(cfg.strength) ? cfg.strength : "auto";
-  $su("su-streamhead").value = cfg.stream_head || "";
-  $su("su-splitmax").value = cfg.split_max || "";
-  $su("su-autotune").checked = cfg.autotune !== false;
-  $su("su-mirror").checked = !!cfg.hf_mirror;
-  $su("su-audit").checked = cfg.safety_audit !== false;
-  $su("su-wavmeta").checked = cfg.wav_metadata !== false;
   try {
     const acc = await inv("account_info");
     $su("su-user").value = acc?.username || "ADR";
-    // 未自定义过 = 仍是内置默认账号, 预填默认口令省一次输入
-    if (!acc?.customized) $su("su-pass").value = "Adr12345@";
+    $su("su-lang").value = cfg.lang === "en" ? "en" : "zh";
   } catch (_) {
     $su("su-user").value = "ADR";
-    $su("su-pass").value = "Adr12345@";
+    $su("su-lang").value = "zh";
   }
-  try { suAuto = !!(await inv("autostart_get")); } catch (_) { suAuto = false; }
-  $su("su-autostart").checked = suAuto;
   await refreshModels();
+  // 首启默认跑一次环境自检 (只读本地文件), 结果直接显示在第 3 步
+  try { $su("su-env").click(); } catch (_) {}
 }
 async function saveSetup() {
   const inv = window.__TAURI__?.core.invoke;
@@ -752,31 +727,33 @@ async function saveSetup() {
   btn.disabled = true; btn.textContent = "保存中…";
   suMsg("");
   try {
+    // 只写首启真正需要的项; 其余键保持 suBase 原值, 由「全局设置」统一维护
     const cfg = Object.assign({}, suBase || {});
-    cfg.data_dir = $su("su-datadir").value.trim();
-    cfg.default_profile = $su("su-profile").value.trim();
     cfg.device = $su("su-device").value;
     cfg.torch_threads = Math.min(Math.max(parseInt($su("su-threads").value, 10) || 0, 0), 128);
     // 显存上限: 百分比 → 比例; 0/空/越界 = 不限制 (null → 不注入)
     const pct = parseFloat($su("su-gpumem").value);
     cfg.gpu_mem_fraction = (isFinite(pct) && pct >= 10 && pct <= 100) ? Math.round(pct) / 100 : null;
     cfg.strength = $su("su-strength").value;
-    cfg.stream_head = Math.min(Math.max(parseInt($su("su-streamhead").value, 10) || 0, 0), 200);
-    cfg.split_max = Math.min(Math.max(parseInt($su("su-splitmax").value, 10) || 0, 0), 400);
-    cfg.autotune = $su("su-autotune").checked;
-    cfg.hf_mirror = $su("su-mirror").checked;
-    cfg.safety_audit = $su("su-audit").checked;
-    cfg.wav_metadata = $su("su-wavmeta").checked;
-    cfg.autostart = $su("su-autostart").checked;
+    cfg.lang = $su("su-lang").value === "en" ? "en" : "zh";
     await inv("save_shell_settings", { settings: cfg });
-    // 账号: 密码留空 = 不动已有账号; 非空则设置/覆盖 (口令仅 PBKDF2 派生后落盘)
-    const pass = $su("su-pass").value;
-    if (pass) {
-      await inv("account_set", { username: $su("su-user").value.trim(), password: pass });
+    // 保存回读校验: 写盘失败/被占用时不静默放行
+    const back = await inv("load_shell_settings");
+    if (String(back.lang || "") !== String(cfg.lang || "")
+        || String(back.device || "") !== String(cfg.device || "")) {
+      throw new Error("设置保存校验失败，请重试");
     }
-    if (cfg.autostart !== suAuto) {
-      await inv("autostart_set", { enable: cfg.autostart });
-      suAuto = cfg.autostart;
+    // 账号: 已有账号时保留原密码 (改密走全局设置, 需验旧密码);
+    // 没有账号时必须在首启设置自己的口令, 不接受内置默认值。
+    const acc0 = await inv("account_info");
+    if (!acc0 || !acc0.customized) {
+      const pass = $su("su-pass").value;
+      if (!pass || pass.length < 6 || pass === "Adr12345@") {
+        throw new Error("请设置至少 6 位、且不同于内置默认口令的密码");
+      }
+      await inv("account_set", {
+        username: $su("su-user").value.trim(), password: pass, oldPassword: null,
+      });
     }
     await inv("complete_setup");
     setSetupMode(false);
@@ -793,8 +770,9 @@ $su("oNext").addEventListener("click", () => {
     // 第 1 页先本地校验口令长度, 免得走到最后一步才报错
     if (oIdx === 0) {
       const pass = $su("su-pass").value;
-      if (pass && pass.length < 6) { suMsg("密码至少 6 位（也可以直接使用默认的 Adr12345@）"); return; }
       if (!$su("su-user").value.trim()) { suMsg("请填写账号（默认 ADR 即可）"); return; }
+      if (pass.length < 6) { suMsg("请设置至少 6 位密码"); return; }
+      if (pass === "Adr12345@") { suMsg("请勿使用内置默认口令，换一个只有你知道的密码"); return; }
     }
     showPage(oIdx + 1);
     return;
@@ -805,6 +783,13 @@ $su("oBack").addEventListener("click", () => showPage(oIdx - 1));
 $su("suSkip").addEventListener("click", async () => {
   const inv = window.__TAURI__?.core.invoke;
   try {
+    // 账号密码不可跳过: 否则会回落到内置默认口令 (ADR / Adr12345@)
+    const acc = await inv("account_info");
+    if (acc && !acc.customized) {
+      showPage(0);
+      suMsg("请先设置本机账号密码，再跳过其余配置");
+      return;
+    }
     await inv("complete_setup");
     setSetupMode(false);
     setTip("已跳过首启配置，使用默认设置启动引擎…");
@@ -812,6 +797,17 @@ $su("suSkip").addEventListener("click", async () => {
   } catch (e) {
     suMsg(String(e));
   }
+});
+$su("su-env").addEventListener("click", async () => {
+  const inv = window.__TAURI__?.core.invoke;
+  const out = $su("su-env-msg");
+  out.textContent = "检查中…";
+  try {
+    const r = await inv("env_check");
+    out.textContent = (r.checks || []).map(c =>
+      (c.ok ? "✓ " : (c.required ? "✗ " : "! ")) + c.name + "：" + (c.detail || "")
+    ).join("\n");
+  } catch (e) { out.textContent = String(e); }
 });
 $su("su-checkmodels").addEventListener("click", refreshModels);
 $su("su-openmodels").addEventListener("click", async () => {
@@ -828,6 +824,7 @@ $su("su-openmodels").addEventListener("click", async () => {
 // ===== 批次102: 本机账号登录 (壳启动即弹, 登录前不放行进入启动器) =====
 // 登录从 launcher 前移到预热页首屏: 引擎预热与登录并行, 但导航必须等登录完成。
 const $pw = id => document.getElementById(id);
+let pwResetMode = false;   // 忘记密码流程: 已清账号, 正在设置新口令
 function setLoginMode(on) {
   document.body.classList.toggle("login-mode", on);
   if (on) setMascot("idle");
@@ -842,9 +839,11 @@ async function initLogin() {
   try {
     const acc = await inv("account_info");
     if (acc?.logged_in) return false;
+    pwResetMode = false;
     $pw("pw-user").value = acc?.username || "ADR";
     $pw("pw-pass").value = "";
-    $pw("pw-pass").placeholder = acc?.customized ? "请输入密码" : "默认口令 Adr12345@";
+    $pw("pw-pass").placeholder = acc?.customized ? "请输入密码" : "请先在向导中设置密码";
+    $pw("pwLogin").textContent = "进入";
     pwMsg("");
     setLoginMode(true);
     return true;
@@ -869,19 +868,50 @@ async function doLogin() {
   const inv = window.__TAURI__?.core.invoke;
   const btn = $pw("pwLogin");
   if (!inv) { pwMsg("请在本机桌面应用中运行"); return; }
-  btn.disabled = true; btn.textContent = "登录中…";
+  btn.disabled = true; btn.textContent = pwResetMode ? "设置中…" : "登录中…";
   pwMsg("");
   try {
-    await inv("account_login", { username: $pw("pw-user").value.trim(), password: $pw("pw-pass").value });
+    const user = $pw("pw-user").value.trim();
+    const pass = $pw("pw-pass").value;
+    if (pwResetMode) {
+      // 忘记密码: 直接设置新口令 (不走默认口令), account_set 成功即置登录态
+      if (!user) { pwMsg("请填写账号"); btn.disabled = false; btn.textContent = "设置并进入"; return; }
+      if (pass.length < 6) { pwMsg("密码至少 6 位"); btn.disabled = false; btn.textContent = "设置并进入"; return; }
+      if (pass === "Adr12345@") { pwMsg("请不要使用内置默认口令"); btn.disabled = false; btn.textContent = "设置并进入"; return; }
+      await inv("account_set", { username: user, password: pass, oldPassword: null });
+      pwResetMode = false;
+      if ($pw("pw-remember").checked) {
+        await inv("account_login", { username: user, password: pass, remember: true });
+      }
+    } else {
+      await inv("account_login", {
+        username: user, password: pass, remember: $pw("pw-remember").checked,
+      });
+    }
+    setMascot("sing");
     setLoginMode(false);
-    setTip("登录成功，引擎就绪后进入启动器", "ok");
+    setTip("欢迎回来，正在准备引擎…", "ok");
     await afterLogin();
   } catch (e) {
     pwMsg(String(e));
   }
-  btn.disabled = false; btn.textContent = "登录";
+  btn.disabled = false; btn.textContent = pwResetMode ? "设置并进入" : "进入";
 }
 $pw("pwLogin").addEventListener("click", doLogin);
+$pw("pw-forgot").addEventListener("click", async () => {
+  const inv = window.__TAURI__?.core.invoke;
+  if (!inv) { pwMsg("请在本机桌面应用中操作"); return; }
+  if (!confirm("忘记密码将清除本机账号文件（声音档案、模型与训练产物不受影响），随后立即设置新密码。继续？")) return;
+  try {
+    await inv("account_reset");
+    pwResetMode = true;
+    $pw("pw-pass").value = "";
+    $pw("pw-pass").placeholder = "设置新密码（至少 6 位）";
+    $pw("pwLogin").textContent = "设置并进入";
+    pwMsg("请输入新密码；设置成功后直接进入。");
+    $pw("pw-pass").focus();
+  } catch (e) { pwMsg(String(e)); }
+});
 $pw("pw-pass").addEventListener("keydown", (ev) => {
   if (ev.key === "Enter") doLogin();
 });
@@ -920,7 +950,7 @@ document.getElementById("btnReject").addEventListener("click", async () => {
   try { await window.__TAURI__.core.invoke("reject_terms"); } catch (_) { /* 退出失败仅提示, 不做强制手段 */ }
 });
 // 主题切换控件: 右上角 (预热页无页头)
-if (window.adrTheme) window.adrTheme.mountSwitch();
+/* P0: 主题切换只保留在全局设置 (启动器 → 设置), 预热/向导页不再放按钮 */
 </script>
 </body>
 </html>

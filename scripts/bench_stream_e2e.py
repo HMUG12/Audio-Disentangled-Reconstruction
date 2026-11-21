@@ -1,11 +1,11 @@
-"""批次3-4: WebUI 流式端到端验收 — 复刻 WebUI prewarm → 流式首包的真实时序。
+"""批次3-4: 控制台流式端到端验收 — 复刻控制台 prewarm → 流式首包的真实时序。
 
-不含 gradio 传输开销 (浏览器侧另测), 度量:
+不含浏览器传输开销 (页面侧另测), 度量:
   A. 预热耗时 (引擎加载 + 档案权重热换)
   B. 预热完成后第一次点"流式合成"的首包 (用户真实首次体验)
   C. 热机第二次的首包
 
-用法: python scripts/bench_webui_stream_e2e.py
+用法: python scripts/bench_stream_e2e.py
 """
 import sys
 import time
@@ -35,7 +35,7 @@ def main():
     from adr.models.voice_library import list_voices, load_voice
 
     t0 = time.perf_counter()
-    from adr.models.gsv_engine import get_gsv_engine  # 与 webui prewarm 同构
+    from adr.models.gsv_engine import get_gsv_engine  # 与控制台 prewarm 同构
     voices = list_voices()
     assert voices, "无音色档案"
     prof = load_voice(voices[0])
@@ -45,7 +45,7 @@ def main():
     for _ in eng.synthesize_stream("你好。", prof["ref_audio"],
                                    vits_weights=prof.get("vits_weights"),
                                    split_method="cut3"):
-        break  # 流式路径形状预热 (与 webui prewarm 一致)
+        break  # 流式路径形状预热 (与控制台 prewarm 一致)
     t_warm = time.perf_counter() - t0
     print(f"[e2e] A. 预热 (引擎+权重热换+流式形状): {t_warm:.1f}s")
 

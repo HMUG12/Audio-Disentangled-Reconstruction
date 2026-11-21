@@ -6,15 +6,16 @@
 规则:
 - api_keys 为空列表 → 完全放行 (默认关闭, N.E.K.O 零改造兼容)
 - 豁免路径: /api/adr/v1/health、/api/adr/v1/readyz (监控探活不带凭据)
-  + /, /pro, /easy, /call, /server (控制台静态页, 页面 JS 首屏读取 URL 上的
+  + /, /pro, /easy, /call, /settings (控制台静态页, 页面 JS 首屏读取 URL 上的
   api_key 后转存 sessionStorage 并抹掉地址栏, 后续请求改带 X-API-Key 头)
 - HTTP 凭据: ``Authorization: Bearer <key>`` / ``X-API-Key: <key>``;
   查询参数 ``?api_key=<key>`` **默认关闭**, 仅在 ``ADR_ALLOW_QUERY_API_KEY=1``
   时作为兜底 (查询串会泄漏进浏览器历史 / Referer / 反代日志)
 - WS 凭据三选一 (Track B 收口): 查询参数 ``?token=<key>`` (NEKO http→ws 转换
-  会透传 query, 故兼容 ``?api_key=``) / 查询参数 ``?api_key=<key>``
-  / ``Sec-WebSocket-Protocol`` 子协议首元素。首条消息通道不采用 —
-  v3 协议首条必须是 init, 加鉴权帧会破坏协议兼容
+  会透传 query, 是 v3 协议固有握手通道) / ``?api_key=<key>`` (与 HTTP 同政策,
+  仅 ``ADR_ALLOW_QUERY_API_KEY=1`` 时接受) / ``Sec-WebSocket-Protocol``
+  子协议首元素。首条消息通道不采用 — v3 协议首条必须是 init, 加鉴权帧会破坏
+  协议兼容。``?token=`` 会进入反代/访问日志, 部署方需自行脱敏
 - key 精确匹配 (大小写敏感, 恒定时间比较); 未通过 HTTP 统一
   ``401 {"detail": ..., "message": ..., "code": "unauthorized"}`` (批次84:
   与全站错误契约对齐, 只增字段), WS 在握手前 close (4401)
@@ -34,11 +35,11 @@ from adr.server.exceptions import UNAUTHORIZED
 # 加载; 页面 JS 发起的 API 调用仍走鉴权 — 与 /pro /easy 语义一致。
 # 批次90: /readyz 与 /health 同档 — 容器 HEALTHCHECK 不带 key, 只回就绪态。
 EXEMPT_PATHS = {"/api/adr/v1/health", "/api/adr/v1/readyz",
-                "/", "/pro", "/easy", "/call", "/server"}
+                "/", "/pro", "/easy", "/call", "/settings"}
 
 # 各页语言包 /i18n-<page>.js: 严格只放行 console.py 真正提供的白名单形态,
 # 不接受 /i18n-../x.js、/i18n-a/b.js 之类的任意后缀 (深审 A9)。
-_I18N_PAGE_JS = re.compile(r"/i18n-(index|easy|pro|call)\.js")
+_I18N_PAGE_JS = re.compile(r"/i18n-(index|easy|pro|call|settings)\.js")
 
 
 def _is_exempt(path) -> bool:
@@ -161,17 +162,23 @@ class APIKeyMiddleware:
 
     @staticmethod
     def _extract_ws_key(scope):
-        """WS 凭据 (Track B): query token= → query api_key= → 子协议首元素。
+        """WS 凭据 (Track B): query token= → (受开关约束的) query api_key= → 子协议首元素。
 
         子协议通道: 客户端 ``WebSocket(url, ["<key>"])``, 取首元素为 key,
         由 v3 端点在 accept 时回显 (浏览器要求回显选中子协议, 否则握手失败)。
+
+        ``token=`` 是 v3 协议固有的握手通道 (N.E.K.O 的 http→ws 转换会透传 query),
+        无法改为请求头, 保留但会进入访问日志 —— 部署方需在反代侧脱敏 query。
+        ``api_key=`` 与 HTTP 侧同政策: 仅 ``ADR_ALLOW_QUERY_API_KEY=1`` 时接受,
+        避免两套入口对同一凭据给出相反的暴露策略。
         """
         key = _query_key(scope, b"token")
         if key:
             return key
-        key = _query_key(scope, b"api_key")
-        if key:
-            return key
+        if allow_query_api_key():
+            key = _query_key(scope, b"api_key")
+            if key:
+                return key
         headers = dict(scope.get("headers") or [])
         proto = headers.get(b"sec-websocket-protocol")
         if proto:

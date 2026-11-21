@@ -46,12 +46,23 @@ pub(crate) async fn launch_console(
     mode: String,
     expose: Option<bool>,
 ) -> Result<String, String> {
-    if !matches!(mode.as_str(), "legacy" | "pro" | "easy" | "call") {
+    if !matches!(mode.as_str(), "pro" | "easy" | "call") {
         return Err(format!("未知控制台模式: {mode}"));
     }
     // 批次101: 本地账号门禁 — 未登录不进控制台 (纯前端遮罩可被绕过, 壳侧兜一道)
     if !account::logged_in() {
         return Err("请先在启动器登录本地账号".into());
+    }
+    // 审计 S1: 仍用内置默认口令时拒绝进控制台, 强制先改密 (设置页可改)
+    if account::using_default_password() {
+        return Err("当前仍在使用内置默认口令，请先在「设置 → 账号」修改密码".into());
+    }
+    // P0 门禁: 条款/首启/预热未完成时不放行控制台, 避免出现半成品界面
+    if !terms_agreed_flag() || !setup_done_flag() {
+        return Err("请先完成首次启动配置".into());
+    }
+    if PREWARM_ACTIVE.load(Ordering::Relaxed) {
+        return Err("引擎正在预热，请等待完成后进入控制台".into());
     }
     if LAUNCH_IN_PROGRESS
         .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
@@ -71,8 +82,8 @@ pub(crate) async fn launch_console(
     result
 }
 
-/// 进入控制台: pro/easy 优先走热通道 (服务常驻且 expose 一致 → 直接导航, 秒进);
-/// 服务不可用 / legacy / expose 切换 → 回落 launch_console 冷启动。
+/// 进入控制台: pro/easy/call 优先走热通道 (服务常驻且 expose 一致 → 直接导航,
+/// 秒进); 服务不可用 / expose 切换 → 回落 launch_console 冷启动。
 #[tauri::command]
 pub(crate) async fn enter_console(
     app: AppHandle,
@@ -84,8 +95,16 @@ pub(crate) async fn enter_console(
     if !account::logged_in() {
         return Err("请先在启动器登录本地账号".into());
     }
-    if mode == "legacy" {
-        return launch_console(app, mode, Some(expose)).await;
+    // 审计 S1: 默认口令不放行 (与 launch_console 同口径)
+    if account::using_default_password() {
+        return Err("当前仍在使用内置默认口令，请先在「设置 → 账号」修改密码".into());
+    }
+    // P0 门禁: 条款 / 首启 / 预热任一项未完成都不放行
+    if !terms_agreed_flag() || !setup_done_flag() {
+        return Err("请先完成首次启动配置".into());
+    }
+    if PREWARM_ACTIVE.load(Ordering::Relaxed) {
+        return Err("引擎正在预热，请等待完成后进入控制台".into());
     }
     let state: State<ServerState> = app.state();
     let base = state.base_url.lock().unwrap().clone();
@@ -189,7 +208,14 @@ pub(crate) async fn retry_prewarm(app: AppHandle) -> Result<(), String> {
 /// loading 页「返回启动器」按钮: 停服务 + 导航回 launcher (批次28 复审 P1,
 /// 逻辑对齐托盘 home 菜单项)。未注册时 invoke 会 rejected, 前端需自行 catch 兜底。
 #[tauri::command]
-pub(crate) fn back_to_launcher(app: AppHandle) {
+pub(crate) fn back_to_launcher(app: AppHandle) -> Result<(), String> {
+    // P0 门禁: 首启 / 登录 / 预热未完成时不允许回启动器 (避免跳过引导与半成品导航)
+    if !terms_agreed_flag() || !setup_done_flag() || !account::logged_in() {
+        return Err("首次配置尚未完成，请先完成引导".into());
+    }
+    if PREWARM_ACTIVE.load(Ordering::Relaxed) {
+        return Err("引擎正在预热，请等待完成".into());
+    }
     let state: State<ServerState> = app.state();
     kill_current(&state);
     if let Some(t) = app.tray_by_id("adr-tray") {
@@ -197,6 +223,7 @@ pub(crate) fn back_to_launcher(app: AppHandle) {
     }
     let window = app.get_webview_window("main");
     navigate(&window, &app_page(&window, "launcher.html"));
+    Ok(())
 }
 
 /// 批次102: 登录成功后进启动器。
@@ -448,4 +475,84 @@ pub(crate) fn complete_setup() -> Result<(), String> {
         .unwrap_or(0);
     std::fs::write(&p, format!("done_at={ts}\n"))
         .map_err(|e| format!("写入首启配置标记失败: {e}"))
+}
+
+/// P0: 首启环境自检 (纯本地, 不联网)。前端据此展示通过/告警项。
+#[tauri::command]
+pub(crate) fn env_check() -> serde_json::Value {
+    let rt = |exe: &str| -> Option<PathBuf> {
+        let base = if let Ok(p) = std::env::current_exe() {
+            p.parent()
+                .map(|d| d.join("runtime"))
+                .filter(|d| d.is_dir())
+                .or_else(find_repo_root)
+        } else {
+            find_repo_root()
+        }?;
+        let p = base.join(exe);
+        if p.is_file() { Some(p) } else { None }
+    };
+
+    let py = rt("python/python.exe");
+    let ff = rt("bin/ffmpeg.exe");
+    let models = check_models();
+    let data = adr_data_dir();
+    let data_ok = data.as_ref().map(|d| {
+        std::fs::create_dir_all(d).is_ok()
+            && std::fs::write(d.join(".write_check"), b"ok")
+                .map(|_| std::fs::remove_file(d.join(".write_check")).is_ok())
+                .unwrap_or(false)
+    }).unwrap_or(false);
+    let gpu = crate::update::has_nvidia_gpu();
+
+    let checks = serde_json::json!([
+        {"id": "python", "name": "Python 运行时", "ok": py.is_some(),
+         "detail": py.map(|p| p.display().to_string()).unwrap_or_else(|| "未找到便携运行时".into()),
+         "required": true},
+        {"id": "ffmpeg", "name": "ffmpeg", "ok": ff.is_some(),
+         "detail": ff.map(|p| p.display().to_string()).unwrap_or_else(|| "未找到内置 ffmpeg".into()),
+         "required": true},
+        {"id": "models", "name": "底模权重", "ok": models["ready"].as_bool().unwrap_or(false),
+         "detail": format!("{}/{} 已就位", models["found"], models["total"]),
+         "required": false},
+        {"id": "data", "name": "数据目录可写", "ok": data_ok,
+         "detail": data.map(|d| d.display().to_string()).unwrap_or_else(|| "数据目录不可用".into()),
+         "required": true},
+        {"id": "gpu", "name": "NVIDIA 显卡", "ok": gpu,
+         "detail": if gpu { "已检测到，可启用 CUDA".into() } else { "未检测到，将使用 CPU".to_string() },
+         "required": false},
+    ]);
+    let ready = checks.as_array().map(|a| a.iter().all(|c| {
+        c["ok"].as_bool().unwrap_or(false) || !c["required"].as_bool().unwrap_or(true)
+    })).unwrap_or(false);
+    serde_json::json!({"checks": checks, "ready": ready})
+}
+
+/// P0: 恢复初始状态 — 清空设置与引导标记, 保留模型 / 声音档案 / 训练产物 / 日志。
+#[tauri::command]
+pub(crate) fn factory_reset(app: AppHandle) -> Result<(), String> {
+    let state: State<ServerState> = app.state();
+    kill_current(&state);
+    *state.base_url.lock().unwrap() = None;
+    state.set_phase(Phase::Stopped);
+
+    // 首启标记 + 设置文件; 条款标记与本地账号保留 (避免重复同意/丢失账号)
+    if let Some(p) = setup_flag_path() {
+        let _ = std::fs::remove_file(p);
+    }
+    if let Some(d) = adr_data_dir() {
+        let _ = std::fs::remove_file(d.join("settings.json"));
+    }
+    let _ = std::fs::remove_file(shell_settings_path());
+    reload_shell_config();
+
+    if let Some(t) = app.tray_by_id("adr-tray") {
+        let _ = t.set_tooltip(Some("ADR Studio — 已恢复初始设置"));
+    }
+    let window = app.get_webview_window("main");
+    navigate(&window, &app_page(&window, "prewarm.html"));
+    // 重新走一遍预热流程 (它会先等首启完成, 再拉起引擎)
+    let h = app.clone();
+    std::thread::spawn(move || prewarm_flow(h));
+    Ok(())
 }

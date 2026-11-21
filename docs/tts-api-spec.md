@@ -292,8 +292,11 @@ python -m adr.server
 |---|---|
 | Authorization 头 | `Authorization: Bearer my-secret-key` |
 | X-API-Key 头 | `X-API-Key: my-secret-key` |
-| 查询参数 | `/api/v2/tts?text=...&api_key=my-secret-key` |
+| 查询参数 (需显式开启) | `ADR_ALLOW_QUERY_API_KEY=1` 时可用 `/api/v2/tts?text=...&api_key=my-secret-key` |
 
+- 查询参数默认关闭: 它会随 Referer、浏览器历史与反代 access log 留存;
+  仅当部署方显式设置 `ADR_ALLOW_QUERY_API_KEY=1` 时才接受 (WS 的 `?token=`
+  是 v3 协议固有握手通道, 不受此开关影响)
 - key **精确匹配** (大小写敏感); 未通过 → `401 {"message": "unauthorized"}`
 - 豁免路径: `GET /api/adr/v1/health` (监控探活免凭据)
 - CORS 预检 (OPTIONS) 不要求凭据, 浏览器前端可正常携带凭据跨域调用
@@ -312,6 +315,10 @@ curl -H "Authorization: Bearer my-secret-key" \
 `ref_audio_path`/权重切换端点接受服务器本地路径 — 等同于把文件系统
 部分读权交给调用方, 请勿对不可信方开放 (公网部署建议: 反向代理 +
 HTTPS + 限定 key 消费方)。
+
+需要收窄可读范围时设置 `ADR_TTS_AUDIO_ROOTS` (逗号分隔的绝对目录),
+`ref_audio_path` 越界直接 400; 未设置时保持 GSV 零改造兼容 (接受任意
+本机绝对路径)。服务以 API Key 启动且未设该变量时, 启动日志会打印提示。
 
 边界（批次78 / CODE_REVIEW #11）:
 

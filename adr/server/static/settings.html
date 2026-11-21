@@ -1,0 +1,685 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'">
+<title>ADR Studio · 设置</title>
+<script src="/theme.js"></script>
+<script src="/i18n.js"></script>
+<script src="/i18n-settings.js"></script>
+<style>
+  /* classic: 原绿色系浅色 (变量取原值) */
+  :root {
+    color-scheme: light;
+    --bg: #f6f7fb; --card: #ffffff; --line: #e5e9f2;
+    --txt: #1f2937; --sub: #6b7280; --dim: #9ca3af;
+    --green: #10b981; --green-d: #059669; --blue: #3b82f6;
+    --red: #ef4444; --amber: #f59e0b;
+    --glow1: #d1fae5aa; --glow2: #dbeafeaa;
+    --surface: #fff; --on-accent: #fff; --field: #fbfcfe;
+    --ring: #10b98118; --card-shadow: 0 8px 30px #1f293710;
+    --btn-g: linear-gradient(135deg, #10b981, #059669); --btn-g-shadow: 0 6px 18px #10b98140;
+    --tint: #ecfdf5; --tint2: #d1fae5; --soft: #eef2f7; --hover-line: #a7f3d0;
+    --sel-line: #d8dce8; --sel-txt: #2a2f3e;
+    --toast-bg: #1f2937; --toast-txt: #fff;
+  }
+  /* default: 浅蓝手绘风 (与新图标一致) */
+  [data-theme="default"] {
+    color-scheme: light;
+    --bg: #F0F7FF; --card: #FFFFFF; --line: #DCEBFB;
+    --txt: #1A202C; --sub: #718096; --dim: #7A8AA0;
+    --green: #5EAAF7; --green-d: #2B6CB0; --blue: #2B6CB0;
+    --red: #DC2626; --amber: #B7791F;
+    --glow1: rgba(94, 170, 247, 0.18); --glow2: rgba(43, 108, 176, 0.10);
+    --surface: #FFFFFF; --on-accent: #FFFFFF; --field: #FAFCFF;
+    --ring: rgba(94, 170, 247, 0.18); --card-shadow: 0 8px 24px rgba(94, 170, 247, 0.15);
+    --btn-g: linear-gradient(135deg, #5EAAF7, #3B8FE8); --btn-g-shadow: 0 4px 12px rgba(94, 170, 247, 0.3);
+    --tint: #EAF4FF; --tint2: #D6E9FD; --soft: #F0F7FF; --hover-line: #A9D0FA;
+    --sel-line: #DCEBFB; --sel-txt: #1A202C;
+    --toast-bg: #1A202C; --toast-txt: #FFFFFF;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI Variable", "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    background:
+      radial-gradient(700px 400px at 90% -5%, var(--glow1), transparent 60%),
+      radial-gradient(600px 380px at -5% 105%, var(--glow2), transparent 60%),
+      var(--bg);
+    color: var(--txt); min-height: 100vh; font-size: 16px;
+  }
+  header { display: flex; align-items: center; gap: 12px; padding: 18px 26px; }
+  .logo { font-size: 20px; font-weight: 800; color: var(--green-d); letter-spacing: .3px; }
+  .logo small { font-weight: 500; color: var(--sub); font-size: 13px; margin-left: 8px; }
+  #back {
+    margin-left: auto; background: var(--surface); color: var(--sub); border: 1.5px solid var(--line);
+    border-radius: 999px; padding: 8px 18px; font-size: 13.5px; cursor: pointer;
+    font-family: inherit; transition: .15s;
+  }
+  #back:hover { border-color: var(--green); color: var(--txt); }
+
+  .wrap { max-width: 880px; margin: 0 auto; padding: 6px 20px 104px; }
+  .lead { color: var(--sub); font-size: 14px; line-height: 1.7; margin: 2px 2px 16px; }
+
+  .status {
+    display: none; margin: 0 0 16px; padding: 12px 16px; border-radius: 12px;
+    border: 1.5px solid var(--line); background: var(--tint);
+    font-size: 13.5px; line-height: 1.65; word-break: break-word;
+    scroll-margin-top: 12px;
+  }
+  .status.show { display: block; }
+  .status.ok { border-color: var(--hover-line); background: var(--tint); color: var(--txt); }
+  .status.err { border-color: #fecaca; background: #fef2f2; color: var(--red); }
+
+  .card {
+    background: var(--card); border: 1.5px solid var(--line); border-radius: 20px;
+    padding: 22px 26px 24px; box-shadow: var(--card-shadow); margin-bottom: 16px;
+  }
+  .card h2 { font-size: 17px; font-weight: 800; letter-spacing: .1px; }
+  .card .desc { color: var(--sub); font-size: 13px; line-height: 1.65; margin-top: 4px; }
+
+  .srow { display: flex; align-items: flex-start; gap: 20px; padding: 15px 0; border-top: 1px solid var(--line); }
+  .srow:first-of-type { border-top: none; margin-top: 8px; padding-top: 6px; }
+  .srow .meta { flex: 1; min-width: 0; }
+  .srow .name { font-size: 14.5px; font-weight: 700; line-height: 1.4; }
+  .srow .hint { font-size: 12.5px; color: var(--sub); line-height: 1.65; margin-top: 3px; }
+  .srow .ctrl { flex: none; width: 210px; display: flex; align-items: center; justify-content: flex-end; gap: 9px; }
+  .srow .ctrl.wide { width: 250px; }
+
+  input[type=number], input[type=text], select {
+    width: 100%; border: 1.5px solid var(--line); border-radius: 10px;
+    background: var(--field); color: var(--txt); padding: 9px 12px;
+    font-family: inherit; font-size: 14px; outline: none; transition: border-color .15s;
+  }
+  input[type=number]:focus, input[type=text]:focus, select:focus { border-color: var(--green); }
+  select { cursor: pointer; }
+  .val {
+    font-size: 12.5px; font-weight: 700; color: var(--txt); background: var(--soft);
+    border-radius: 999px; padding: 5px 11px; white-space: nowrap;
+  }
+
+  .switch { display: inline-flex; align-items: center; gap: 9px; cursor: pointer; user-select: none; }
+  .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+  .switch .track {
+    position: relative; width: 46px; height: 26px; flex: none; border-radius: 999px;
+    background: var(--soft); border: 1.5px solid var(--line); transition: .18s;
+  }
+  .switch .track::after {
+    content: ""; position: absolute; top: 2.5px; left: 3px; width: 17px; height: 17px;
+    border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.18); transition: .18s;
+  }
+  .switch input:checked + .track { background: var(--green); border-color: var(--green); }
+  .switch input:checked + .track::after { transform: translateX(20px); }
+  .switch input:focus-visible + .track { outline: 2px solid var(--green); outline-offset: 2px; }
+  .switch .state { font-size: 12.5px; font-weight: 600; color: var(--sub); white-space: nowrap; }
+
+  .note { margin-top: 12px; font-size: 13px; color: var(--sub); line-height: 1.7; }
+  .note a { color: var(--blue); font-weight: 600; text-decoration: none; }
+  .note a:hover { text-decoration: underline; }
+
+  .actions {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
+    display: flex; justify-content: flex-end; gap: 12px;
+    padding: 12px 26px; border-top: 1.5px solid var(--line);
+    background: var(--surface); box-shadow: 0 -8px 24px #1f29370f;
+  }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; border: none;
+    border-radius: 12px; cursor: pointer; font-family: inherit; font-weight: 700;
+    font-size: 15px; padding: 11px 26px; transition: .16s;
+  }
+  .btn.g { background: var(--btn-g); color: var(--on-accent); box-shadow: var(--btn-g-shadow); }
+  .btn.g:hover:not(:disabled) { filter: brightness(1.07); }
+  .btn.w { background: var(--surface); color: var(--txt); border: 2px solid var(--line); font-weight: 600; }
+  .btn.w:hover:not(:disabled) { border-color: var(--green); }
+  .btn.w.danger { color: var(--red); }
+  .btn.w.danger:hover:not(:disabled) { border-color: var(--red); }
+  .btn.sm { font-size: 12.5px; padding: 7px 14px; border-radius: 10px; white-space: nowrap; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+
+  @media (max-width: 640px) {
+    .wrap { padding: 4px 14px 96px; }
+    .card { padding: 18px 16px 20px; border-radius: 16px; }
+    .srow { flex-direction: column; gap: 9px; }
+    .srow .ctrl, .srow .ctrl.wide { width: 100%; justify-content: flex-start; }
+    .actions { flex-direction: column-reverse; padding: 10px 14px; }
+    .actions .btn { width: 100%; }
+  }
+</style>
+<link rel="stylesheet" href="/app-shell.css">
+</head>
+<body data-adr-page="settings">
+
+<header>
+  <div class="logo" data-i18n-html="settings.logo">ADR 全局设置<small>合成默认值 · 声音与模型 · 界面</small></div>
+  <button id="back" data-i18n="settings.back">← 返回启动器</button>
+</header>
+
+<div class="wrap">
+  <p class="lead" data-i18n="settings.lead">这些值只是控制台页面的默认参数，不会改变外部 API 调用方的行为。改完点保存。</p>
+  <div id="status" class="status" role="status" aria-live="polite"></div>
+
+  <!-- ================= 合成默认值 ================= -->
+  <section class="card">
+    <h2 data-i18n="settings.sec_synth">合成默认值</h2>
+    <p class="desc" data-i18n="settings.sec_synth_desc">新打开的合成页面会默认带上这些参数。</p>
+
+    <div class="srow">
+      <div class="meta">
+        <label class="name" for="f_top_k" data-i18n="settings.top_k">候选数量（top_k）</label>
+        <div class="hint" data-i18n="settings.top_k_hint">每次采样保留的候选词数，越大越灵活也越慢。范围 1–100，默认 15。</div>
+      </div>
+      <div class="ctrl"><input type="number" id="f_top_k" min="1" max="100" step="1" value="15" inputmode="numeric"></div>
+    </div>
+
+    <div class="srow">
+      <div class="meta">
+        <label class="name" for="f_top_p" data-i18n="settings.top_p">核采样阈值（top_p）</label>
+        <div class="hint" data-i18n="settings.top_p_hint">累计概率阈值，越小越保守。范围 0.05–1.0，默认 1.0。</div>
+      </div>
+      <div class="ctrl"><input type="number" id="f_top_p" min="0.05" max="1" step="0.01" value="1"></div>
+    </div>
+
+    <div class="srow">
+      <div class="meta">
+        <label class="name" for="f_temperature" data-i18n="settings.temperature">随机度（temperature）</label>
+        <div class="hint" data-i18n="settings.temperature_hint">越高起伏越大，越低越平稳。范围 0.05–2.0，默认 1.0。</div>
+      </div>
+      <div class="ctrl"><input type="number" id="f_temperature" min="0.05" max="2" step="0.05" value="1"></div>
+    </div>
+
+    <div class="srow">
+      <div class="meta">
+        <label class="name" for="f_speed_factor" data-i18n="settings.speed_factor">语速倍率</label>
+        <div class="hint" data-i18n="settings.speed_factor_hint">1.0 为原速，大于 1 更快，小于 1 更慢。范围 0.5–2.0，默认 1.0。</div>
+      </div>
+      <div class="ctrl"><input type="number" id="f_speed_factor" min="0.5" max="2" step="0.05" value="1"></div>
+    </div>
+
+    <div class="srow">
+      <div class="meta">
+        <label class="name" for="f_seed" data-i18n="settings.seed">随机种子</label>
+        <div class="hint" data-i18n="settings.seed_hint">-1 表示每次随机；固定为 0–2147483647 可复现结果。默认 -1。</div>
+      </div>
+      <div class="ctrl"><input type="number" id="f_seed" min="-1" max="2147483647" step="1" value="-1" inputmode="numeric"></div>
+    </div>
+
+    <div class="srow">
+      <div class="meta">
+        <label class="name" for="f_repetition_penalty" data-i18n="settings.repetition_penalty">重复惩罚</label>
+        <div class="hint" data-i18n="settings.repetition_penalty_hint">略高于 1 可减少重复读音，过高会显得生硬。范围 1.0–2.0，默认 1.35。</div>
+      </div>
+      <div class="ctrl"><input type="number" id="f_repetition_penalty" min="1" max="2" step="0.01" value="1.35"></div>
+    </div>
+
+    <div class="srow">
+      <div class="meta">
+        <label class="name" for="f_media_type" data-i18n="settings.media_type">默认导出格式</label>
+        <div class="hint" data-i18n="settings.media_type_hint">wav 无损；mp3 / ogg 体积更小，适合分享。</div>
+      </div>
+      <div class="ctrl">
+        <select id="f_media_type">
+          <option value="wav" data-i18n="settings.opt_wav">WAV（无损）</option>
+          <option value="mp3" data-i18n="settings.opt_mp3">MP3（体积小）</option>
+          <option value="ogg" data-i18n="settings.opt_ogg">OGG（体积小）</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="srow">
+      <div class="meta">
+        <label class="name" for="f_streaming_mode" data-i18n="settings.streaming_mode">流式返回</label>
+        <div class="hint" data-i18n="settings.streaming_mode_hint">关闭时一次性返回完整音频；开启或自动由引擎与调用方决定。</div>
+      </div>
+      <div class="ctrl">
+        <select id="f_streaming_mode">
+          <option value="off" data-i18n="settings.opt_stream_off">关闭</option>
+          <option value="on" data-i18n="settings.opt_stream_on">开启</option>
+          <option value="auto" data-i18n="settings.opt_stream_auto">自动</option>
+        </select>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 声音与模型 ================= -->
+  <section class="card">
+    <h2 data-i18n="settings.sec_voice">声音与模型</h2>
+    <p class="desc" data-i18n="settings.sec_voice_desc">默认档案与语言只作用于控制台，外部 API 仍按请求参数走。</p>
+
+    <div class="srow">
+      <div class="meta">
+        <label class="name" for="f_default_profile" data-i18n="settings.default_profile">默认音色档案</label>
+        <div class="hint" data-i18n="settings.default_profile_hint">新建合成时默认选中的档案。留空表示跟随引擎当前的默认音色。</div>
+      </div>
+      <div class="ctrl wide">
+        <select id="f_default_profile">
+          <option value="" data-i18n="settings.profile_none">跟随引擎默认</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="srow">
+      <div class="meta">
+        <label class="name" for="f_voice_language" data-i18n="settings.voice_language">默认合成语言</label>
+        <div class="hint" data-i18n="settings.voice_language_hint">影响音色匹配与读音规则。</div>
+      </div>
+      <div class="ctrl">
+        <select id="f_voice_language">
+          <option value="zh" data-i18n="settings.lang_zh">中文</option>
+          <option value="en" data-i18n="settings.lang_en">English</option>
+        </select>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 界面 ================= -->
+  <section class="card">
+    <h2 data-i18n="settings.sec_ui">界面</h2>
+    <p class="desc" data-i18n="settings.sec_ui_desc">主题和语言直接复用本机浏览器里的控制台设置，在这里改动会立刻生效。</p>
+
+    <div class="srow">
+      <div class="meta">
+        <div class="name" data-i18n="settings.ui_theme">主题</div>
+        <div class="hint" data-i18n="settings.ui_theme_hint">读取 localStorage 的 adr.theme，与各控制台页共用。切换后本机所有页面一起变。</div>
+      </div>
+      <div class="ctrl">
+        <span class="val" id="uiTheme">—</span>
+        <button class="btn w sm" id="themeSwitch" type="button" data-i18n="settings.ui_theme_switch">切换主题</button>
+      </div>
+    </div>
+
+    <div class="srow">
+      <div class="meta">
+        <div class="name" data-i18n="settings.ui_lang">语言</div>
+        <div class="hint" data-i18n="settings.ui_lang_hint">读取 localStorage 的 adr_lang，与各控制台页共用。切换后本页与其它页面立即生效。</div>
+      </div>
+      <div class="ctrl">
+        <span class="val" id="uiLang">—</span>
+        <button class="btn w sm" id="langSwitch" type="button" data-i18n="settings.ui_lang_switch">切换语言</button>
+      </div>
+    </div>
+
+    <div class="note"><a id="uiPreview" href="/easy" data-i18n="settings.ui_preview">去新手台看看效果</a></div>
+  </section>
+
+  <!-- ================= 安全 ================= -->
+  <section class="card">
+    <h2>安全</h2>
+    <p class="desc">导出模型包（含参考音频与微调权重）时要求输入本机账号密码，每次导出都重新验证。</p>
+    <div class="srow">
+      <div class="meta">
+        <div class="name">导出模型包需要密码</div>
+        <div class="hint">密码就是桌面端「全局设置 → 本地账号」里设置的密码；没有本机账号时无法通过验证。</div>
+      </div>
+      <div class="ctrl">
+        <input type="checkbox" id="f_protect_export">
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 高级 ================= -->
+  <section class="card">
+    <h2 data-i18n="settings.sec_adv">高级</h2>
+    <p class="desc" data-i18n="settings.sec_adv_desc">这些开关影响下次打开控制台时的行为；恢复默认会把它们一并重置。</p>
+
+    <div class="srow">
+      <div class="meta">
+        <div class="name" data-i18n="settings.motion">界面动效</div>
+        <div class="hint" data-i18n="settings.motion_hint">关闭后减少过渡动画，远程桌面或低配机器更流畅。</div>
+      </div>
+      <div class="ctrl">
+        <label class="switch">
+          <input type="checkbox" id="f_motion" checked>
+          <span class="track" aria-hidden="true"></span>
+          <span class="state" id="f_motion_state">已开启</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="srow">
+      <div class="meta">
+        <div class="name" data-i18n="settings.onboarding_done">新手引导已完成</div>
+        <div class="hint" data-i18n="settings.onboarding_done_hint">关闭后，下次打开新手台会重新走一遍引导。平时保持开启即可。</div>
+      </div>
+      <div class="ctrl">
+        <label class="switch">
+          <input type="checkbox" id="f_onboarding">
+          <span class="track" aria-hidden="true"></span>
+          <span class="state" id="f_onboarding_state">已关闭</span>
+        </label>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 关于 ================= -->
+  <section class="card">
+    <h2 data-i18n="settings.sec_about">关于</h2>
+    <p class="desc" data-i18n="settings.sec_about_desc">版本信息取自服务的状态接口，取不到时显示“未知”。</p>
+
+    <div class="srow">
+      <div class="meta"><div class="name" data-i18n="settings.version">API 版本</div></div>
+      <div class="ctrl"><span class="val" id="aboutVersion">未知</span></div>
+    </div>
+    <div class="srow">
+      <div class="meta"><div class="name" data-i18n="settings.service">服务</div></div>
+      <div class="ctrl"><span class="val" id="aboutService">未知</span></div>
+    </div>
+    <div class="srow">
+      <div class="meta"><div class="name" data-i18n="settings.meta_schema">设置格式版本</div></div>
+      <div class="ctrl"><span class="val" id="aboutSchema">未知</span></div>
+    </div>
+    <div class="srow">
+      <div class="meta"><div class="name" data-i18n="settings.meta_updated">最近保存</div></div>
+      <div class="ctrl"><span class="val" id="aboutUpdated">—</span></div>
+    </div>
+  </section>
+
+  <div class="actions">
+    <button class="btn w danger" id="reset" type="button" data-i18n="settings.reset">恢复默认</button>
+    <button class="btn g" id="save" type="button" data-i18n="settings.save">保存</button>
+  </div>
+</div>
+
+<script>
+"use strict";
+I.init("settings", { onSwitch: onLangSwitch });
+/* ---- 基础设施: API key (sessionStorage + X-API-Key 头) / 请求 / 状态条 ---- */
+/* key 只在首屏从 ?api_key= 读一次并转存 sessionStorage, 随即从地址栏抹掉;
+   之后 fetch 一律带 X-API-Key 头, 不再把凭据拼进每个请求 URL。 */
+function adrKey() {
+  let k = sessionStorage.getItem("adr_api_key");
+  if (!k) {
+    k = new URLSearchParams(location.search).get("api_key");
+    if (k) sessionStorage.setItem("adr_api_key", k);
+  }
+  return k || "";
+}
+function hdr(extra) {
+  const h = Object.assign({}, extra || {});
+  const k = adrKey();
+  if (k) h["X-API-Key"] = k;
+  return h;
+}
+(function () {  // 先落 sessionStorage, 再把 key 从地址栏/历史里抹掉
+  adrKey();
+  const u = new URL(location.href);
+  if (u.searchParams.has("api_key")) {
+    u.searchParams.delete("api_key");
+    history.replaceState(null, "", u.pathname + u.search + u.hash);
+  }
+})();
+const $ = id => document.getElementById(id);
+
+async function jf(url, opts) {
+  const o = Object.assign({}, opts || {});
+  o.headers = hdr(o.headers);
+  const r = await fetch(url, o);
+  if (r.ok) return r.json();
+  let m = I.t("settings.err_http", { s: r.status });
+  try { m = adrErrMsg(await r.json(), r.status, m); } catch (_) { /* 非 JSON */ }
+  const err = new Error(m);
+  err.status = r.status;
+  throw err;
+}
+
+/* ---- 状态条 (保存/恢复/加载结果) ---- */
+let statusState = null;
+function renderStatus() {
+  const el = $("status");
+  if (!statusState) { el.className = "status"; el.textContent = ""; return; }
+  el.textContent = statusState.text !== undefined
+    ? statusState.text
+    : I.t(statusState.key, statusState.vars);
+  el.className = "status show " + statusState.kind;
+  // 在页面底部点保存时, 顶部状态条已在视口之上, 滚回去让用户看到结果
+  if (el.getBoundingClientRect().bottom < 0) {
+    el.scrollIntoView({ block: "start", behavior: "smooth" });
+  }
+}
+function statusKey(key, kind, vars) {
+  statusState = { key: key, kind: kind || "ok", vars: vars };
+  renderStatus();
+}
+function statusText(text, kind) {
+  statusState = { text: text, kind: kind || "err" };
+  renderStatus();
+}
+function handleError(e) {
+  const msg = String((e && e.message) || e || "");
+  if (e && e.status === 401) return statusKey("settings.err_401", "err");
+  if (/Failed to fetch|NetworkError|Load failed/i.test(msg)) {
+    return statusKey("settings.err_fetch", "err");
+  }
+  statusText(msg || I.t("settings.err_http", { s: 0 }), "err");
+}
+
+/* ---- 返回启动器 (仅桌面壳内且 shell_origin 合法) ---- */
+const params = new URLSearchParams(location.search);
+const isDesktop = params.get("desktop") === "1";
+const shellOrigin = adrSafeShellOrigin(params.get("shell_origin"));
+const back = $("back");
+if (!(isDesktop && shellOrigin)) {
+  back.style.display = "none";
+} else {
+  back.onclick = () => {
+    location.href = shellOrigin.replace(/\/+$/, "") + "/launcher.html";
+  };
+}
+/* 页内跳转保留桌面壳参数 (key 已转存 sessionStorage, 不进 URL) */
+(function () {
+  const p = new URLSearchParams(location.search);
+  p.delete("api_key");
+  const qs = p.toString();
+  $("uiPreview").href = "/easy" + (qs ? "?" + qs : "");
+})();
+
+/* ---- 表单读写 ---- */
+const NUM_KEYS = ["top_k", "top_p", "temperature", "speed_factor", "seed", "repetition_penalty"];
+const INT_KEYS = { top_k: 1, seed: 1 };
+let profileNames = [];
+let selectedProfile = "";
+let meta = { schema: null, updated: null, loaded: false };
+let about = { ok: false, version: "", service: "" };
+
+function fillProfileOptions() {
+  const sel = $("f_default_profile");
+  let html = '<option value="">' + adrEsc(I.t("settings.profile_none")) + "</option>";
+  profileNames.forEach(n => {
+    html += '<option value="' + adrEsc(n) + '">' + adrEsc(n) + "</option>";
+  });
+  if (selectedProfile && profileNames.indexOf(selectedProfile) < 0) {
+    html += '<option value="' + adrEsc(selectedProfile) + '">'
+      + adrEsc(selectedProfile + " " + I.t("settings.profile_missing")) + "</option>";
+  }
+  sel.innerHTML = html;
+  sel.value = selectedProfile;
+}
+
+function syncSwitches() {
+  $("f_motion_state").textContent = I.t($("f_motion").checked ? "settings.on" : "settings.off");
+  $("f_onboarding_state").textContent = I.t($("f_onboarding").checked ? "settings.on" : "settings.off");
+}
+
+function updateUiValues() {
+  const theme = window.adrTheme ? adrTheme.get() : "default";
+  $("uiTheme").textContent = I.t(theme === "classic" ? "settings.theme_classic" : "settings.theme_default");
+  $("uiLang").textContent = I.t(I.lang === "en" ? "settings.lang_en" : "settings.lang_zh");
+}
+
+function renderMeta() {
+  if (!meta.loaded) {
+    $("aboutSchema").textContent = "—";
+    $("aboutUpdated").textContent = "—";
+    return;
+  }
+  $("aboutSchema").textContent = meta.schema === null || meta.schema === undefined
+    ? I.t("settings.version_unknown") : String(meta.schema);
+  $("aboutUpdated").textContent = meta.updated || I.t("settings.updated_never");
+}
+
+function renderAbout() {
+  $("aboutVersion").textContent = about.ok && about.version ? about.version : I.t("settings.version_unknown");
+  $("aboutService").textContent = about.ok && about.service ? about.service : I.t("settings.version_unknown");
+}
+
+function fill(d) {
+  const synth = d.synth || {};
+  NUM_KEYS.forEach(k => {
+    if (synth[k] !== undefined) $("f_" + k).value = String(synth[k]);
+  });
+  $("f_media_type").value = synth.media_type || "wav";
+  $("f_streaming_mode").value = synth.streaming_mode || "off";
+
+  const voice = d.voice || {};
+  selectedProfile = voice.default_profile || "";
+  fillProfileOptions();
+  $("f_voice_language").value = voice.language || "zh";
+
+  const sec = d.security || {};
+  $("f_protect_export").checked = !!sec.protect_export;
+
+  const ui = d.ui || {};
+  $("f_motion").checked = ui.motion !== false;
+  $("f_onboarding").checked = !!ui.onboarding_done;
+  syncSwitches();
+
+  meta = { schema: d.schema_version, updated: d.updated_at || null, loaded: true };
+  renderMeta();
+  updateUiValues();
+}
+
+function collect() {
+  const synth = {
+    media_type: $("f_media_type").value,
+    streaming_mode: $("f_streaming_mode").value
+  };
+  NUM_KEYS.forEach(k => {
+    const raw = $("f_" + k).value.trim();
+    if (!raw) { const e = new Error("empty"); e.code = "empty"; throw e; }
+    const n = Number(raw);
+    if (!isFinite(n)) { const e = new Error("nan"); e.code = "number"; throw e; }
+    if (INT_KEYS[k] && !Number.isInteger(n)) { const e = new Error("int"); e.code = "int"; throw e; }
+    synth[k] = n;
+  });
+  return {
+    synth: synth,
+    voice: {
+      default_profile: $("f_default_profile").value.trim(),
+      language: $("f_voice_language").value
+    },
+    ui: {
+      theme: window.adrTheme ? adrTheme.get() : "default",
+      lang: I.lang,
+      motion: $("f_motion").checked,
+      onboarding_done: $("f_onboarding").checked
+    },
+    security: {
+      protect_export: $("f_protect_export").checked
+    }
+  };
+}
+
+/* ---- 数据加载 ---- */
+async function loadSettings() {
+  try {
+    fill(await jf("/api/adr/v1/settings"));
+  } catch (e) {
+    handleError(e);
+  }
+}
+async function loadProfiles() {
+  try {
+    const d = await jf("/api/adr/v1/profiles");
+    profileNames = (d.profiles || []).map(p => String(p.name || "")).filter(Boolean);
+  } catch (_) { /* 档案列表失败不影响改设置 */ }
+  fillProfileOptions();
+}
+async function loadAbout() {
+  try {
+    const h = await jf("/api/adr/v1/health");
+    about = { ok: true, version: h.api_version || "", service: h.service || "" };
+  } catch (_) { about = { ok: false, version: "", service: "" }; }
+  renderAbout();
+}
+
+/* ---- 保存 / 恢复默认 ---- */
+async function save() {
+  let payload;
+  try {
+    payload = collect();
+  } catch (e) {
+    if (e && e.code) {
+      const key = e.code === "empty" ? "settings.err_empty"
+        : e.code === "int" ? "settings.err_int" : "settings.err_number";
+      statusKey(key, "err");
+      return;
+    }
+    handleError(e);
+    return;
+  }
+  const btn = $("save");
+  btn.disabled = true;
+  btn.textContent = I.t("settings.saving");
+  try {
+    fill(await jf("/api/adr/v1/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }));
+    statusKey("settings.save_ok", "ok");
+  } catch (e) {
+    handleError(e);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = I.t("settings.save");
+  }
+}
+
+async function reset() {
+  if (!confirm(I.t("settings.confirm_reset"))) return;
+  const btn = $("reset");
+  btn.disabled = true;
+  try {
+    fill(await jf("/api/adr/v1/settings", { method: "DELETE" }));
+    statusKey("settings.reset_ok", "ok");
+  } catch (e) {
+    handleError(e);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* ---- 事件 ---- */
+$("save").onclick = save;
+$("reset").onclick = reset;
+$("f_motion").onchange = syncSwitches;
+$("f_onboarding").onchange = syncSwitches;
+$("f_default_profile").onchange = () => { selectedProfile = $("f_default_profile").value; };
+$("themeSwitch").onclick = () => {
+  if (window.adrTheme) adrTheme.toggle();
+  updateUiValues();
+};
+$("langSwitch").onclick = () => I.setLang(I.lang === "zh" ? "en" : "zh");
+
+function onLangSwitch() {
+  fillProfileOptions();
+  syncSwitches();
+  updateUiValues();
+  renderMeta();
+  renderAbout();
+  renderStatus();
+}
+
+/* ---- 启动 ---- */
+fillProfileOptions();
+syncSwitches();
+updateUiValues();
+renderMeta();
+renderAbout();
+loadSettings();
+loadProfiles();
+loadAbout();
+</script>
+<script src="/app-shell.js"></script>
+</body>
+</html>

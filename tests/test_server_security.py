@@ -265,8 +265,9 @@ def test_ws_query_token_allows(auth_client):
         pass
 
 
-def test_ws_query_api_key_allows(auth_client):
-    with auth_client.websocket_connect(f"{WS_PATH}?api_key=k2"):
+def test_ws_query_api_key_allowed_when_opted_in(auth_client_query_on):
+    """WS 的 ?api_key= 与 HTTP 同政策: 仅显式开启查询参数通道时放行。"""
+    with auth_client_query_on.websocket_connect(f"{WS_PATH}?api_key=k2"):
         pass
 
 
@@ -742,11 +743,13 @@ def test_http_header_key_still_accepted(request, fixture_name):
 
 def test_ws_query_token_still_accepted_with_query_key_disabled(
         auth_client_query_off):
-    """WS 通道不受该开关影响: ?token= 仍按原样放行 (浏览器无法带头)。"""
+    """WS 通道: ?token= 不受该开关影响 (浏览器无法带头), ?api_key= 随开关拒绝。"""
     with auth_client_query_off.websocket_connect(f"{WS_PATH}?token=k1"):
         pass
-    with auth_client_query_off.websocket_connect(f"{WS_PATH}?api_key=k2"):
-        pass
+    with pytest.raises(WebSocketDisconnect) as ei:
+        with auth_client_query_off.websocket_connect(f"{WS_PATH}?api_key=k2"):
+            pass
+    assert ei.value.code == 4401
 
 
 STATIC_DIR = Path(__file__).resolve().parents[1] / "adr" / "server" / "static"
@@ -798,8 +801,8 @@ def test_ref_audio_roots_unset_keeps_compat(tmp_path, monkeypatch):
 
 
 def test_server_console_page_is_auth_exempt():
-    """容器/服务端独立控制台 /server 必须与 /pro /easy /call 同档豁免。"""
+    """三个控制台页面必须与 / 同档豁免 (静态页本身不含数据)。"""
     from adr.server.auth import EXEMPT_PATHS
 
-    for p in ("/", "/pro", "/easy", "/call", "/server"):
+    for p in ("/", "/pro", "/easy", "/call"):
         assert p in EXEMPT_PATHS

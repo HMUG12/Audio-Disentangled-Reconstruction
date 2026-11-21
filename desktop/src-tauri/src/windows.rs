@@ -10,7 +10,8 @@ use tauri::{
     tray::TrayIconBuilder,
 };
 
-use crate::lifecycle::{kill_current, shutdown_server, ServerState};
+use crate::lifecycle::{kill_current, shutdown_server, ServerState, PREWARM_ACTIVE};
+use crate::system::{setup_done_flag, terms_agreed_flag};
 
 /// WebView2 前端资源 origin (Windows)。
 /// 导航一律用绝对地址: 当前页面可能停在远端控制台 (http://127.0.0.1:P),
@@ -32,8 +33,11 @@ pub(crate) fn create_main_window(app: &App) -> tauri::Result<()> {
         tauri::WebviewUrl::App("prewarm.html".into()),
     )
     .title("ADR Studio")
-    .inner_size(1280.0, 820.0)
-    .min_inner_size(960.0, 600.0)
+    // 尺寸: 1040×640 是版面能完整显示的最小值 (启动器 4 张卡片单行 998px,
+    // 设置页 920px 内容列; 加上标题栏后仍能放进 1360×768 一类小屏工作区)。
+    // 启动即最小界面, 允许放大, 但不允许再缩。
+    .inner_size(1040.0, 640.0)
+    .min_inner_size(1040.0, 640.0)
     .center()
     .on_download(|webview, event| match event {
         tauri::webview::DownloadEvent::Requested { destination, .. } => {
@@ -65,6 +69,26 @@ pub(crate) fn create_main_window(app: &App) -> tauri::Result<()> {
     Ok(())
 }
 
+/// P0 门禁: 条款 / 首启 / 登录 / 预热全部完成后, 才允许从托盘跳启动器或控制台。
+fn tray_nav_ready() -> bool {
+    terms_agreed_flag()
+        && setup_done_flag()
+        && crate::account::logged_in()
+        && !PREWARM_ACTIVE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 门禁未通过时: 只把预热页显示出来, 不暴露半成品导航。
+fn show_prewarm(app: &tauri::AppHandle, hint: &str) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.set_focus();
+        navigate(&Some(w.clone()), &app_page(&Some(w), "prewarm.html"));
+    }
+    if let Some(t) = app.tray_by_id("adr-tray") {
+        let _ = t.set_tooltip(Some(hint));
+    }
+}
+
 /// 系统托盘 (显示主窗口 / 返回启动器 / 浏览器打开 / 退出)。
 pub(crate) fn create_tray(app: &App) -> tauri::Result<()> {
     let show_i = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
@@ -83,6 +107,10 @@ pub(crate) fn create_tray(app: &App) -> tauri::Result<()> {
                 }
             }
             "home" => {
+                if !tray_nav_ready() {
+                    show_prewarm(app, "ADR Studio — 首启或预热尚未完成");
+                    return;
+                }
                 let state: State<ServerState> = app.state();
                 kill_current(&state);
                 if let Some(t) = app.tray_by_id("adr-tray") {
@@ -92,10 +120,16 @@ pub(crate) fn create_tray(app: &App) -> tauri::Result<()> {
                 navigate(&window, &app_page(&window, "launcher.html"));
             }
             "web" => {
+                if !tray_nav_ready() {
+                    show_prewarm(app, "ADR Studio — 首启或预热尚未完成");
+                    return;
+                }
                 let state: State<ServerState> = app.state();
                 let url = state.base_url.lock().unwrap().clone();
                 if let Some(url) = url {
                     let _ = open::that(url);
+                } else {
+                    show_prewarm(app, "ADR Studio — 引擎尚未就绪");
                 }
             }
             "quit" => {

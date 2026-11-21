@@ -62,31 +62,6 @@ const I = (() => {
     const tt = dict[page + ".title"];
     if (tt) document.title = lang === "en" ? tt[1] : tt[0];
   }
-  function injectSwitch() {
-    const b = document.createElement("button");
-    b.id = "langBtn";
-    b.type = "button";
-    b.textContent = lang === "zh" ? "EN" : "中文";
-    b.onclick = () => setLang(lang === "zh" ? "en" : "zh");
-    const T = window.adrTheme;
-    if (T) T.pill(b); // 主题变量胶囊 (classic 下 var() 兜底 = 下方原值)
-    else {
-      b.style.cssText = "background:#fff;color:#6b7280;border:1.5px solid #e5e9f2;border-radius:999px;"
-        + "padding:8px 16px;font-size:13px;cursor:pointer;font-family:inherit;font-weight:600;"
-        + "margin-left:10px;flex:none;transition:.15s";
-      b.onmouseenter = () => { b.style.borderColor = "#10b981"; b.style.color = "#1f2937"; };
-      b.onmouseleave = () => { b.style.borderColor = "#e5e9f2"; b.style.color = "#6b7280"; };
-    }
-    const header = document.querySelector("header");
-    if (header) {
-      header.appendChild(b);
-      if (T) T.mountSwitch(header); // 主题按钮紧随语言按钮
-      return;
-    }
-    if (T) { const h = T.fixedHost(); h.appendChild(b); T.mountSwitch(h); return; }
-    b.style.cssText += ";position:fixed;top:16px;right:18px;z-index:98";
-    document.body.appendChild(b);
-  }
   function setLang(l) {
     lang = l;
     try { localStorage.setItem("adr_lang", l); } catch {}
@@ -95,13 +70,16 @@ const I = (() => {
     if (window.adrTheme) window.adrTheme.relabel();
     apply();
     changeCbs.forEach(f => { try { f(); } catch {} });
+    // app-shell.js 的顶栏/文档抽屉是 JS 生成并缓存的, data-i18n 覆盖不到;
+    // 用文档级事件通知外壳重建 (无外壳页面无监听, 零副作用)。
+    try { document.dispatchEvent(new CustomEvent("adr:lang", { detail: { lang: l } })); } catch {}
     apply(); // 补扫: onSwitch 重建的动态节点
   }
   function init(pg, opts) {
     page = pg;
     dict = Object.assign({}, I18N_COMMON, typeof I18N_DICT === "object" ? I18N_DICT : {});
     lang = detect();
-    injectSwitch();
+    // P0: 语言切换只保留在「全局设置」页, 控制台顶栏不再注入切换按钮
     apply();
     if (opts && opts.onSwitch) changeCbs.push(opts.onSwitch);
   }

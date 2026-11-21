@@ -278,7 +278,7 @@ pub fn package_variant() -> String {
 
 /// 是否装了 NVIDIA 显卡: 查内核显示驱动服务 nvlddmkm (注册表, 零外进程开销)。
 #[cfg(windows)]
-fn has_nvidia_gpu() -> bool {
+pub(crate) fn has_nvidia_gpu() -> bool {
     let mut cmd = std::process::Command::new("reg");
     cmd.args(["query", r"HKLM\SYSTEM\CurrentControlSet\Services\nvlddmkm"]);
     cmd.creation_flags(crate::system::CREATE_NO_WINDOW);
@@ -286,7 +286,7 @@ fn has_nvidia_gpu() -> bool {
 }
 
 #[cfg(not(windows))]
-fn has_nvidia_gpu() -> bool {
+pub(crate) fn has_nvidia_gpu() -> bool {
     false
 }
 

@@ -2,8 +2,9 @@
 //!
 //! - 存储: `<数据目录>\.local_account` (JSON)。口令按 PBKDF2-HMAC-SHA256
 //!   (16B 随机盐, 120k 轮) 派生后落盘, 明文永不写盘。
-//! - 默认账号: 账号文件不存在时用内置默认 (`ADR` / `Adr12345@`), 开箱即用;
-//!   用户在首启向导或设置里改过口令后, 一律以文件为准。
+//! - 默认账号: 账号文件不存在时仍保留内置默认 (`ADR` / `Adr12345@`) 作为
+//!   旧装机兼容, 但首启向导强制改密; 仍在使用默认口令时禁止进入控制台
+//!   (`using_default_password`), 直到用户在设置里改掉。
 //! - 会话: 登录态存进程内 (`LOGGED_IN`), 退出应用即失效。控制台启动命令
 //!   (`enter_console` / `launch_console`) 校验登录态, 未登录直接拒绝 —
 //!   纯前端遮罩会被绕过, 必须壳侧兜一道。
@@ -25,6 +26,9 @@ const ITERATIONS: u32 = 120_000;
 /// 进程内登录态 (退出应用即失效)。
 static LOGGED_IN: AtomicBool = AtomicBool::new(false);
 
+/// 「记住我」免密时长 (天)。
+const REMEMBER_DAYS: u64 = 7;
+
 /// 账号文件内容 (口令只存派生值 + 盐)。
 #[derive(Serialize, Deserialize)]
 struct AccountFile {
@@ -38,6 +42,43 @@ struct AccountFile {
 /// 账号文件落点: `<数据目录>\.local_account` (与条款标记同目录, 覆盖安装保留)。
 fn account_path() -> Option<PathBuf> {
     crate::config::adr_data_dir().map(|d| d.join(".local_account"))
+}
+
+/// 「记住我」令牌路径 (与账号文件同目录)。
+fn session_path() -> Option<PathBuf> {
+    crate::config::adr_data_dir().map(|d| d.join(".local_account.session"))
+}
+
+/// 写免密令牌: exp + HMAC(账号口令派生值, exp), 到期或被改密即失效。
+fn write_session(acc: &AccountFile) -> Result<(), String> {
+    let p = session_path().ok_or_else(|| "数据目录不可用".to_string())?;
+    let exp = now_ms() + REMEMBER_DAYS * 24 * 3600 * 1000;
+    let sig = hmac_sha256(acc.hash.as_bytes(), exp.to_string().as_bytes());
+    let body = serde_json::json!({ "exp": exp, "sig": hex_encode(&sig) });
+    std::fs::write(&p, body.to_string()).map_err(|e| format!("写入免密令牌失败: {e}"))
+}
+
+/// 校验免密令牌 (过期 / 签名不符 / 账号已删都视为无效)。
+fn session_valid() -> bool {
+    let Some(p) = session_path() else { return false };
+    let Ok(raw) = std::fs::read_to_string(p) else { return false };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else { return false };
+    let exp = v.get("exp").and_then(|x| x.as_u64()).unwrap_or(0);
+    if exp <= now_ms() {
+        return false;
+    }
+    let Some(acc) = load_account() else { return false };
+    let expect = hmac_sha256(acc.hash.as_bytes(), exp.to_string().as_bytes());
+    match v.get("sig").and_then(|x| x.as_str()).and_then(hex_decode) {
+        Some(sig) => ct_eq(&sig, &expect),
+        None => false,
+    }
+}
+
+fn clear_session() {
+    if let Some(p) = session_path() {
+        let _ = std::fs::remove_file(p);
+    }
 }
 
 /// 读取账号文件 (坏 JSON / 读不到 → None = 走默认账号)。
@@ -160,6 +201,26 @@ fn random_salt() -> Result<[u8; 16], String> {
     Ok(buf)
 }
 
+/// 账号文件是否仍对应内置默认口令 (用户名 = ADR 且口令派生值匹配)。
+fn matches_default_password(acc: &AccountFile) -> bool {
+    if acc.username != DEFAULT_USER {
+        return false;
+    }
+    let salt = hex_decode(&acc.salt).unwrap_or_default();
+    let calc = pbkdf2_sha256(DEFAULT_PASS.as_bytes(), &salt, acc.iterations);
+    let stored = hex_decode(&acc.hash).unwrap_or_default();
+    ct_eq(&calc, &stored)
+}
+
+/// 仍处于内置默认口令状态 (无账号文件 / 文件里就是默认口令)。
+/// 壳侧据此拒绝进入控制台, 强制用户先改密。
+pub(crate) fn using_default_password() -> bool {
+    match load_account() {
+        Some(acc) => matches_default_password(&acc),
+        None => true,
+    }
+}
+
 /// 校验用户名 + 口令。账号文件不存在时按内置默认账号比对。
 fn verify(username: &str, password: &str) -> bool {
     match load_account() {
@@ -183,18 +244,28 @@ fn verify(username: &str, password: &str) -> bool {
 /// username 一律返回真实账号名 (未创建文件时 = 默认账号名), 前端据此预填。
 #[tauri::command]
 pub fn account_info() -> serde_json::Value {
+    // 「记住我」: 令牌有效则直接恢复登录态 (每次启动最多验一次)
+    let auto = !LOGGED_IN.load(Ordering::Relaxed) && session_valid();
+    if auto {
+        LOGGED_IN.store(true, Ordering::Relaxed);
+    }
     let acc = load_account();
     serde_json::json!({
         "username": acc.as_ref().map(|a| a.username.clone()).unwrap_or_else(|| DEFAULT_USER.to_string()),
         "customized": acc.is_some(),
+        "default_password": acc.as_ref().map_or(true, matches_default_password),
         "logged_in": LOGGED_IN.load(Ordering::Relaxed),
+        "auto_login": auto,
+        "remember_days": REMEMBER_DAYS,
         "min_pass_len": MIN_PASS_LEN,
     })
 }
 
 /// 设置/修改本地账号 (首启向导与设置中心共用): 派生口令后落盘并直接置登录态。
+/// 已有账号时 old_password 必填且必须匹配 (忘记密码走 account_reset)。
 #[tauri::command]
-pub fn account_set(username: String, password: String) -> Result<(), String> {
+pub fn account_set(username: String, password: String,
+                   old_password: Option<String>) -> Result<(), String> {
     let user = username.trim().to_string();
     if user.is_empty() {
         return Err("用户名不能为空".into());
@@ -204,6 +275,19 @@ pub fn account_set(username: String, password: String) -> Result<(), String> {
     }
     if password.chars().count() < MIN_PASS_LEN {
         return Err(format!("密码至少 {MIN_PASS_LEN} 位"));
+    }
+    if password == DEFAULT_PASS {
+        return Err("请勿使用内置默认口令，换一个只有你知道的密码".into());
+    }
+    // 改密必须验旧密码 (首启/忘记密码时没有账号文件, 不需要)
+    if let Some(acc) = load_account() {
+        let old = old_password.unwrap_or_default();
+        let salt = hex_decode(&acc.salt).unwrap_or_default();
+        let calc = pbkdf2_sha256(old.as_bytes(), &salt, acc.iterations);
+        let stored = hex_decode(&acc.hash).unwrap_or_default();
+        if !ct_eq(&calc, &stored) {
+            return Err("旧密码不正确".into());
+        }
     }
     let salt = random_salt()?;
     let hash = pbkdf2_sha256(password.as_bytes(), &salt, ITERATIONS);
@@ -215,26 +299,68 @@ pub fn account_set(username: String, password: String) -> Result<(), String> {
         updated_at: now_ms(),
     };
     save_account(&acc)?;
+    clear_session();   // 改密后旧免密令牌立即失效
     LOGGED_IN.store(true, Ordering::Relaxed);
     crate::lifecycle::proc_log("account", &format!("本地账号已更新: {}", acc.username));
     Ok(())
 }
 
 /// 登录校验 (失败只回通用文案, 不区分用户名错 / 口令错)。
+/// remember = true 时写 7 天免密令牌。
 #[tauri::command]
-pub fn account_login(username: String, password: String) -> Result<(), String> {
+pub fn account_login(username: String, password: String,
+                     remember: Option<bool>) -> Result<(), String> {
     if verify(&username, &password) {
         LOGGED_IN.store(true, Ordering::Relaxed);
+        if remember.unwrap_or(false) {
+            if let Some(acc) = load_account() {
+                write_session(&acc)?;
+            }
+        } else {
+            clear_session();
+        }
         Ok(())
     } else {
         Err("用户名或密码错误".into())
     }
 }
 
-/// 退出登录 (清会话态; 账号文件保留)。
+/// 校验当前账号口令 (供「进入设置 / 导出模型」二次验证; 不改变登录态)。
+#[tauri::command]
+pub fn account_verify(password: String) -> bool {
+    match load_account() {
+        Some(acc) => {
+            let salt = hex_decode(&acc.salt).unwrap_or_default();
+            let calc = pbkdf2_sha256(password.as_bytes(), &salt, acc.iterations);
+            let stored = hex_decode(&acc.hash).unwrap_or_default();
+            ct_eq(&calc, &stored)
+        }
+        None => ct_eq(DEFAULT_PASS.as_bytes(), password.as_bytes()),
+    }
+}
+
+/// 退出登录 (清会话态与免密令牌; 账号文件保留)。
 #[tauri::command]
 pub fn account_logout() {
     LOGGED_IN.store(false, Ordering::Relaxed);
+    clear_session();
+}
+
+/// 忘记密码: 清除本机账号文件并退出登录态。
+/// 只删 `<数据目录>\.local_account`, 不动声音档案、模型与训练产物;
+/// 前端随后引导用户立即设置新口令 (不回到内置默认口令)。
+#[tauri::command]
+pub fn account_reset() -> Result<(), String> {
+    let p = account_path().ok_or_else(|| "数据目录不可用, 无法重置账号".to_string())?;
+    match std::fs::remove_file(&p) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("清除账号文件失败: {e}")),
+    }
+    LOGGED_IN.store(false, Ordering::Relaxed);
+    clear_session();
+    crate::lifecycle::proc_log("account", "用户通过「忘记密码」重置本机账号");
+    Ok(())
 }
 
 /// 当前登录态 (壳侧命令用, 非前端)。

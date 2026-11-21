@@ -1,4 +1,4 @@
-"""ADR 命令行入口: 数据处理 / 训练 / 推理 / 模型管理 / 服务与 WebUI 启动。
+"""ADR 命令行入口: 数据处理 / 训练 / 推理 / 模型管理 / 服务启动。
 
 运行 `adr --help` 查看全部子命令; 各子模块细节见 adr/ 包内对应实现。
 """
@@ -714,39 +714,6 @@ def train(
         import traceback
         traceback.print_exc()
         sys.exit(1)
-
-
-@main.command()
-@click.option("--host", default="127.0.0.1", help="WebUI 监听地址")
-@click.option("--port", default=7860, help="WebUI 端口")
-@click.option("--share", is_flag=True, help="生成公网分享链接")
-@click.option("--no-browser", is_flag=True, help="启动后不自动打开浏览器")
-def webui(host: str, port: int, share: bool, no_browser: bool) -> None:
-    """启动 legacy WebUI (Gradio, 功能冻结期: 只修 bug 不加新功能)。"""
-    from adr.core import get_logger
-
-    log = get_logger("adr.cli")
-
-    log.info("Launching ADR WebUI...")
-    log.info(f"  URL:  http://{host}:{port}")
-
-    try:
-        from adr.webui import build_ui
-    except ImportError as e:
-        log.error(f"gradio not installed: {e}")
-        log.info("Install with: pip install gradio>=4.0")
-        sys.exit(1)
-
-    demo = build_ui()
-    from adr.webui import _CSS, _theme
-    demo.launch(
-        server_name=host,
-        server_port=port,
-        share=share,
-        inbrowser=not no_browser,
-        theme=_theme(),
-        css=_CSS,
-    )
 
 
 if __name__ == "__main__":

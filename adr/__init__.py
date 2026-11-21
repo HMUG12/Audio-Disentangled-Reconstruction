@@ -12,12 +12,11 @@
     $ adr train --config configs/vram_6gb.yaml
     $ adr infer --ref ref.wav --text "你好世界"
     $ adr export --format gguf
-    $ adr webui
 """
 
 from __future__ import annotations
 
-__version__ = "1.3.1"
+__version__ = "1.3.1-beta.92"
 __author__ = "ADR Team"
 __license__ = "AGPL-3.0-only"
 

@@ -18,7 +18,10 @@ param(
     [switch]$Gpu,
     # 批次70 (Q2): 干跑 — 只验版本/合规门禁与前置 (ISCC / tauri CLI / runtime),
     # 不编译不签名; 门禁必须过 (硬失败), 前置缺失仅 WARN。成功结尾输出 DRY RUN OK。
-    [switch]$DryRun
+    [switch]$DryRun,
+    # 命名规则 (2026-11-15): 默认一律打 <base>-beta.<自 v<base> 起的提交数> 包
+    # (当前 1.3.1-beta.92); 只有明确宣布正式版时才传 -Official 去掉后缀。
+    [switch]$Official
 )
 $ErrorActionPreference = "Stop"
 
@@ -48,6 +51,17 @@ if (Test-Path $rtPy) { $py = $rtPy } else { $py = "python" }
 if ((-not (Test-Path $rtPy)) -and $DryRun) {
   Write-Warning "DryRun: $rtDirName runtime python not found - 门禁用系统 python ($py)"
 }
+
+# 命名规则 (2026-11-15): 版本面由 git 提交数自动打标 (1.3.1-beta.N),
+# 幂等; -Official 时才回退正式版号。必须在 check_versions 之前跑。
+$stampArgs = @((Join-Path $PSScriptRoot "stamp_beta_version.py"))
+if ($Official) { $stampArgs += "--official" }
+Write-Host "[build_installer] stamp: $py $stampArgs" -ForegroundColor Cyan
+Enter-NativeStep
+& $py @stampArgs
+$stampRc = $LASTEXITCODE
+Exit-NativeStep
+if ($stampRc -ne 0) { throw "stamp_beta_version failed - 版本面未统一" }
 
 # 批次69 (Q2): 版本面单源 + 合规门禁前置 — 漂移/缺口在出包前失败, 不产出坏包
 foreach ($gate in @("check_versions.py", "check_compliance.py")) {

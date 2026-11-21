@@ -48,7 +48,7 @@ pub(crate) enum Phase {
 pub(crate) struct ServerState {
     pub(crate) pid: AtomicU32,
     pub(crate) base_url: Mutex<Option<String>>,
-    /// "" (启动器) | legacy | pro | easy
+    /// "" (启动器) | pro | easy | call
     pub(crate) mode: Mutex<String>,
     /// 调用模式: true = 服务监听 0.0.0.0 (局域网可调用 API), false = 仅 127.0.0.1
     pub(crate) expose: AtomicBool,
@@ -186,7 +186,7 @@ fn prewarm_flow_inner(app: AppHandle) {
     // 查询失败时内部记日志放行, 不阻塞预热。
     reap_orphans();
     eval_prewarm(&window, "starting", "正在启动本地服务…");
-    let Some((child, started)) = start_server("pro", &window, &state) else {
+    let Some((child, started)) = start_server(&window, &state) else {
         eval_prewarm(&window, "failed", "服务启动失败, 请检查 Python 环境后重试");
         return;
     };
@@ -434,9 +434,9 @@ pub(crate) fn kill_tree(pid: u32) -> KillOutcome {
 // ---------------------------------------------------------------------------
 
 /// 扫描并收编孤儿服务进程 (幂等)。
-/// 匹配口径宁窄勿宽: 命令行含 ``-m adr.server`` (pro/easy FastAPI 服务) 或
-/// ``-m adr.cli webui`` (legacy Gradio) — 恰是壳拉起服务的两种形状;
-/// 刻意不匹配 ``-m adr.cli`` 其他子命令 (如 train), 训练进程绝不能被误杀。
+/// 匹配口径宁窄勿宽: 命令行含 ``-m adr.server`` (FastAPI 服务) — 恰是壳拉起
+/// 服务的形状; 刻意不匹配 ``-m adr.cli`` 其他子命令 (如 train), 训练进程绝不
+/// 能被误杀。
 fn reap_orphans() {
     let Some(procs) = list_python_processes() else {
         reap_log("PowerShell 查询失败, 本次跳过收编");
@@ -444,7 +444,7 @@ fn reap_orphans() {
     };
     let mut killed = 0u32;
     for (pid, cmdline) in procs {
-        let mine = cmdline.contains("-m adr.server") || cmdline.contains("-m adr.cli webui");
+        let mine = cmdline.contains("-m adr.server");
         if !mine {
             continue;
         }
@@ -516,7 +516,7 @@ pub(crate) fn proc_log(tag: &str, msg: &str) {
     let _ = writeln!(f, "===== [{tag} {ts}] {msg}");
 }
 
-/// 轮询健康端点直到 200 或超时 (legacy: Gradio 首页; pro/easy: FastAPI health)。
+/// 轮询健康端点直到 200 或超时 (FastAPI health)。
 pub(crate) fn wait_healthy(base: &str, path: &str, window: &Option<WebviewWindow>) -> bool {
     let url = format!("{base}{path}");
     let deadline = Instant::now() + HEALTH_TIMEOUT;

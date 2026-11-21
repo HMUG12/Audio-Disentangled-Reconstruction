@@ -30,6 +30,12 @@ body[data-adr-page] :focus-visible {
   border-radius: 6px;
 }
 
+/* 旧页只定义 --green(新手/设置) 或 --accent(专业台), 没有 --brand:
+ * 外壳组件按页映射, 否则经典主题里导航/按钮会串成默认蓝色。 */
+body[data-adr-page="easy"],
+body[data-adr-page="settings"] { --brand: var(--green, #5eaaf7); --brand-d: var(--green-d, #2b6cb0); }
+body[data-adr-page="pro"] { --brand: var(--accent, #2dd4bf); }
+
 /* 旧页 emoji 图标统一降级为文字色, 不再抢视觉 */
 body[data-adr-page] .adr-emoji { display: none; }
 
@@ -189,7 +195,7 @@ body[data-adr-page] .toast { border-radius: 12px; box-shadow: 0 12px 30px rgba(2
 .adr-docs-head button {
   height: 30px; padding: 0 11px; border-radius: 8px; cursor: pointer;
   font-family: inherit; font-size: 12.5px; font-weight: 600;
-  background: var(--card, #fff); color: var(--sub, #5b6b82);
+  background: var(--panel2, var(--card, #fff)); color: var(--sub, #5b6b82);
   border: 1px solid var(--line, #dcebfb); transition: .15s;
 }
 .adr-docs-head button:hover { color: var(--brand, #2b6cb0); border-color: var(--brand, #5eaaf7); }
@@ -200,8 +206,11 @@ body[data-adr-page] .toast { border-radius: 12px; box-shadow: 0 12px 30px rgba(2
 .adr-docs-body { flex: 1; display: grid; grid-template-columns: 264px minmax(0, 1fr); min-height: 0; }
 .adr-docs-list {
   border-right: 1px solid var(--line, #dcebfb);
-  padding: 12px 10px 20px; overflow: auto; background: var(--field, #fafcff);
+  padding: 12px 10px 20px; background: var(--field, #fafcff);
+  display: flex; flex-direction: column; overflow: hidden;
 }
+/* 搜索框固定, 只有目录列表滚动 (nav 可能被页面自身的 nav 规则改成横排 flex) */
+#adrDocsGroups { flex: 1 1 auto; min-height: 0; overflow: auto; }
 .adr-docs-list .adr-docs-group {
   font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase;
   color: var(--dim, #8495ab); padding: 14px 10px 6px;
@@ -216,6 +225,41 @@ body[data-adr-page] .toast { border-radius: 12px; box-shadow: 0 12px 30px rgba(2
 .adr-docs-list button.on { background: var(--tint2, #e2effe); color: var(--brand, #2b6cb0); }
 .adr-docs-list button b { display: block; font-size: 13px; font-weight: 600; }
 .adr-docs-list button span { display: block; font-size: 11px; color: var(--dim, #8495ab); margin-top: 2px; }
+
+/* 文档搜索 (批次: 缺英文/记不住篇名时的模糊检索入口) */
+.adr-docs-search {
+  position: sticky; top: 0; z-index: 2; display: flex; gap: 6px;
+  padding: 2px 4px 10px; background: var(--field, #fafcff);
+}
+.adr-docs-search input {
+  flex: 1; min-width: 0; height: 32px; padding: 0 10px;
+  border: 1px solid var(--line, #dcebfb); border-radius: 8px;
+  background: var(--field, var(--card, #fff)); color: var(--txt, #16202e);
+  font-family: inherit; font-size: 12.5px; outline: none;
+}
+.adr-docs-search input:focus {
+  border-color: var(--brand, #5eaaf7); box-shadow: 0 0 0 3px var(--hover-bg, var(--tint, #eaf4ff));
+}
+.adr-docs-search button {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: auto; flex: none; height: 32px; padding: 0 10px; margin: 0;
+  border: 1px solid var(--line, #dcebfb); border-radius: 8px;
+  background: var(--panel2, var(--card, #fff)); color: var(--sub, #5b6b82);
+  font-family: inherit; font-size: 12px; cursor: pointer;
+}
+.adr-docs-search button:hover { color: var(--brand, #2b6cb0); border-color: var(--brand, #5eaaf7); }
+.adr-docs-list button b .adr-docs-hit {
+  display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 999px;
+  background: var(--nav-on-bg, var(--tint2, #e2effe)); color: var(--brand, #2b6cb0);
+  font-size: 10px; font-weight: 600; vertical-align: 1px;
+}
+.adr-docs-suggest { display: flex; gap: 10px; justify-content: center; margin-top: 16px; }
+.adr-docs-suggest button {
+  padding: 8px 14px; border-radius: 9px; border: 1px solid var(--line, #dcebfb);
+  background: var(--panel2, var(--card, #fff)); color: var(--brand, #2b6cb0);
+  font-family: inherit; font-size: 12.5px; cursor: pointer;
+}
+.adr-docs-suggest button:hover { background: var(--hover-bg, var(--tint, #eaf4ff)); }
 
 .adr-docs-main { overflow: auto; padding: 6px 30px 48px; scroll-behavior: smooth; }
 .adr-docs-meta {
@@ -284,8 +328,8 @@ body[data-adr-page] .toast { border-radius: 12px; box-shadow: 0 12px 30px rgba(2
   font-size: 11.5px; color: var(--dim, #8495ab);
 }
 .adr-docs-foot .adr-docs-spacer { flex: 1; }
-.adr-docs-empty { padding: 60px 20px; text-align: center; color: var(--dim, #8495ab); font-size: 13px; }
-.adr-docs-loading { padding: 50px 20px; text-align: center; color: var(--dim, #8495ab); font-size: 13px; }
+.adr-docs-empty { padding: 60px 20px; text-align: center; color: var(--sub, var(--dim, #8495ab)); font-size: 13px; }
+.adr-docs-loading { padding: 50px 20px; text-align: center; color: var(--sub, var(--dim, #8495ab)); font-size: 13px; }
 .adr-doc-err {
   margin: 16px 0; padding: 14px 16px; border-radius: 12px; font-size: 13px; line-height: 1.7;
   color: var(--err, #c53030); background: var(--err-bg, #fff5f5); border: 1px solid var(--err-line, #feb2b2);
@@ -406,7 +450,8 @@ body[data-adr-page="launcher"] .card .exp-warn.on,
 body[data-adr-page="launcher"] .card:has(.exp input:checked) .exp-warn { display: block; }
 body[data-adr-page="launcher"] .foot { margin-top: 26px; max-width: min(1100px, 92vw); text-align: center; line-height: 1.9; font-size: 12px; }
 body[data-adr-page="launcher"] .foot a { text-decoration: underline; text-underline-offset: 2px; }
-@media (max-width: 1160px) {
+/* 最小窗 1040: 保持四张卡片单行 (窗口不能再缩, 内容必须完整显示) */
+@media (max-width: 1039px) {
   body[data-adr-page="launcher"] .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); max-width: 720px; }
   body[data-adr-page="launcher"] .card { min-height: 0; }
 }
@@ -482,4 +527,25 @@ body[data-adr-page="loading"] .hint { margin-top: 24px; }
   body[data-adr-page] header.adr-topbar .adr-docbtn { margin-left: 0 !important; }
   body[data-adr-page="index"] .hub { padding: 64px 0 44px; }
   .adr-docs-head { min-height: 52px; }
+}
+
+/* ── 轻量 tooltip (纯 CSS, 元素加 data-tip 即用) ─────────────────────── */
+body[data-adr-page] [data-tip] { position: relative; }
+body[data-adr-page] [data-tip]::after {
+  content: attr(data-tip);
+  position: absolute; left: 50%; bottom: calc(100% + 8px);
+  transform: translate(-50%, 4px);
+  width: max-content; max-width: 260px;
+  padding: 6px 10px; border-radius: 8px;
+  background: #17243a; color: #f2f6ff;
+  font-size: 11.5px; font-weight: 500; line-height: 1.55; letter-spacing: 0;
+  text-align: left; white-space: normal;
+  box-shadow: 0 8px 22px rgba(10, 20, 35, .28);
+  opacity: 0; pointer-events: none; z-index: 90;
+  transition: opacity .14s ease, transform .14s ease;
+}
+body[data-adr-page] [data-tip]:hover::after,
+body[data-adr-page] [data-tip]:focus-visible::after { opacity: 1; transform: translate(-50%, 0); }
+@media (prefers-reduced-motion: reduce) {
+  body[data-adr-page] [data-tip]::after { transition: none; }
 }

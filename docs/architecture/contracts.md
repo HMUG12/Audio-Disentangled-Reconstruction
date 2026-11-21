@@ -10,8 +10,7 @@
 
 | 形态 | 启动方 | 命令行 | 说明 |
 | --- | --- | --- | --- |
-| 桌面 pro/easy/call | 壳 `start_server` | `python -m adr.server --addr <h> --port <p> --from-shell` | `--from-shell` 表示条款已由壳层 gate，服务不再 exit 2 |
-| 桌面 legacy | 壳 `start_server` | `python -m adr.cli webui --host <h> --port <p> --no-browser` | Gradio 经典控制台，不承载 TTS |
+| 桌面 pro/easy/call/settings | 壳 `start_server` | `python -m adr.server --addr <h> --port <p> --from-shell` | `--from-shell` 表示条款已由壳层 gate，服务不再 exit 2 |
 | Windows 无 UI | `server.bat` | `python -m adr.server --addr <h> --port <p>` | 无 `--from-shell`，需 `ADR_AGREE_TERMS` 或已落条款标记 |
 | 容器 | Dockerfile `CMD` | `python -m adr.server --addr 0.0.0.0 --port "${ADR_PORT}"` | `exec` 让 python 接管 PID 1 |
 
@@ -21,8 +20,7 @@
 
 | 形态 | 顺序 | 回退提示 |
 | --- | --- | --- |
-| 桌面（非 legacy） | `shell.json.service_port`（>0 且可用）→ 9881（可用）→ 系统分配空闲端口 | 9881 被占且未指定时，启动器提示"本次改用端口 N（NEKO 侧需手动填写该端口）" |
-| 桌面 legacy | 系统分配空闲端口 | — |
+| 桌面 | `shell.json.service_port`（>0 且可用）→ 9881（可用）→ 系统分配空闲端口 | 9881 被占且未指定时，启动器提示"本次改用端口 N（NEKO 侧需手动填写该端口）" |
 | 容器 | `ADR_PORT`（默认 9881） | 探针与服务读同一变量（[Dockerfile](../../docker/Dockerfile#L136-L142)） |
 
 约束：探测结果**不回写** `shell.json`；`ADR_PORT` 只用于容器，桌面不设置该变量。
@@ -33,7 +31,6 @@
 | --- | --- | --- |
 | `GET /api/adr/v1/health` | HTTP 可达 + 引擎阶段（`engine_stage` / `engine_stage_text` / `engine_error`） | **豁免**（壳轮询不带 key） |
 | `GET /api/adr/v1/readyz` | 引擎就绪且未永久降级；未就绪返回 503 | 豁免 |
-| `GET /`（legacy） | Gradio 页面可访问 | 不适用 |
 
 壳探活超时 180s；容器 `HEALTHCHECK` 用 `/readyz`，`start-period=600s`（首启下载权重）。
 

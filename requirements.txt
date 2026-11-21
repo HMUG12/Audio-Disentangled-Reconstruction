@@ -23,7 +23,6 @@ uvicorn[standard]>=0.27,<1
 python-multipart>=0.0.9,<1
 
 # ===== M1 完整 (Day 4-10) =====
-# gradio>=4.0,<7
 # faster-whisper>=1.0,<2
 # g2pW>=0.1
 # pypinyin>=0.49,<1

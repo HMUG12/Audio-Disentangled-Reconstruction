@@ -1,6 +1,6 @@
 [package]
 name = "adr-desktop"
-version = "1.3.1"
+version = "1.3.1-beta.92"
 description = "ADR Studio 桌面壳: 托管本地 ADR TTS 服务 (Python sidecar)"
 license = "AGPL-3.0-only"
 edition = "2021"
@@ -15,6 +15,8 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
+# 首次最小化到任务栏时给一次系统通知 (说明引擎仍在后台运行)
+tauri-plugin-notification = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = "2"

@@ -3,10 +3,9 @@
 //! 职责:
 //! 1. 启动即预热: 窗口先展示 prewarm.html, setup 后台拉起 FastAPI 服务并轮询
 //!    引擎预热阶段 (torch 导入 → 权重加载 → kernel 预热), 就绪后才放行进 launcher
-//! 2. 启动器: launcher.html 三种控制台
-//!    - legacy: ``python -m adr.cli webui`` (Gradio 经典控制台, 按需拉起)
-//!    - pro/easy: 复用常驻 FastAPI 服务秒进 (引擎已预热, 不再杀进程)
-//! 3. 健康探活: legacy 探 ``GET /``; pro/easy 探 ``GET /api/adr/v1/health``
+//! 2. 启动器: launcher.html 三种控制台 (pro / easy / call)
+//!    - 复用常驻 FastAPI 服务秒进 (引擎已预热, 不再杀进程)
+//! 3. 健康探活: 单一探 ``GET /api/adr/v1/health``
 //! 4. 进程守护: 服务意外退出按同 mode 自动重启 (稳定 60s 重置失败计数, 上限 4 次)
 //! 5. 孤儿收编 (批次37): 壳崩溃/强杀会遗留 python 服务孤儿 (占显存/9881 端口),
 //!    启动预热前按命令行特征扫描收编 (kill 整棵树)
@@ -54,9 +53,13 @@ mod commands;
 mod tests;
 
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 
 use tauri::Manager;
+use tauri_plugin_notification::NotificationExt;
+
+/// 首次最小化到任务栏时提示一次 (引擎仍在后台, 后续最小化不再打扰)
+static MIN_NOTIFIED: AtomicBool = AtomicBool::new(false);
 
 use config::reload_shell_config;
 use lifecycle::{prewarm_flow, shutdown_server, Phase, ServerState};
@@ -69,6 +72,7 @@ pub fn run() {
     #[cfg(windows)]
     create_app_mutex();
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             app.manage(ServerState {
                 pid: AtomicU32::new(0),
@@ -99,10 +103,14 @@ pub fn run() {
             commands::reject_terms,
             commands::setup_done,
             commands::complete_setup,
+            commands::env_check,
+            commands::factory_reset,
             account::account_info,
             account::account_set,
             account::account_login,
             account::account_logout,
+            account::account_reset,
+            account::account_verify,
             commands::enter_launcher,
             commands::check_models,
             commands::skip_prewarm,
@@ -122,10 +130,26 @@ pub fn run() {
             update::package_hint
         ])
         .on_window_event(|window, event| {
-            // 关窗 = 隐藏到托盘; 真正退出走托盘菜单 (保证 sidecar 被清理)
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let _ = window.hide();
-                api.prevent_close();
+            match event {
+                // 关窗 = 隐藏到托盘; 真正退出走托盘菜单 (保证 sidecar 被清理)
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    let _ = window.hide();
+                    api.prevent_close();
+                }
+                // 首次最小化提示一次: 引擎仍在后台, 从托盘恢复
+                tauri::WindowEvent::Resized(_) => {
+                    let minimized = window.is_minimized().unwrap_or(false);
+                    if minimized && !MIN_NOTIFIED.swap(true, Ordering::Relaxed) {
+                        let _ = window
+                            .app_handle()
+                            .notification()
+                            .builder()
+                            .title("ADR Studio 仍在后台运行")
+                            .body("合成引擎不会停止，可从托盘图标恢复窗口。")
+                            .show();
+                    }
+                }
+                _ => {}
             }
         })
         .build(tauri::generate_context!())

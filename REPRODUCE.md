@@ -9,7 +9,7 @@
 要求：Windows 10/11，Python 3.10+（实测 3.13.7）；NVIDIA GPU 可选（CPU 可推理，训练建议 GPU）。
 
 ```powershell
-pip install -e .[m1]        # 基础 + WebUI
+pip install -e .[m1]        # 基础 + TTS 服务依赖
 pip install -e .[m2]        # 训练加速 (LoRA/QLoRA), 按需
 
 $env:NUMBA_CACHE_DIR = "E:\adr_numba_cache"   # 任意可写目录, 避免 numba 缓存落只读路径

@@ -1,209 +1,296 @@
 # ADR Studio — 本地语音克隆与合成工作台
-![alt text](ADR图标-1.png)
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 
-**ADR**（Audio Disentangled Reconstruction）是一个运行在**你自己电脑上**的语音克隆 / TTS 工作台：用几分钟参考音频完成声音克隆训练，并提供 GPT-SoVITS 兼容的流式合成服务。所有推理与训练均在本地完成，**你的语音与文本数据不会上传到任何服务器**。
+ADR Studio is a local-first voice cloning and text-to-speech workbench. It runs on your own
+machine: build a voice profile from a few seconds of reference audio, fine-tune it with
+LoRA/QLoRA if you want a closer match, and serve synthesis over a GPT-SoVITS-compatible HTTP
+API. Training, inference and your voice data stay local; nothing is uploaded. The desktop app
+ships a portable Python runtime, an offline documentation center, and three browser consoles.
 
-## 特性
+许可证 AGPL-3.0-only · Python 3.10+ · Windows 安装包 / 源码 / Docker 三种形态
 
-- **低资源训练** — LoRA / QLoRA 微调只训约 1% 参数，显存占用降低约 70%；梯度检查点 + 混合精度，消费级显卡（4-8GB VRAM）即可训练，CPU 也可推理
-- **流式 TTS 服务** — 实现 GPT-SoVITS api_v3 双工流式协议（`/api/v3/voices` + `/api/v3/tts/stream-input`），流式返回 WAV 音频块
-- **OpenAI 兼容接口** — `POST /v1/audio/speech`、`GET /v1/models`，任何 OpenAI TTS 兼容客户端可直接接入
-- **N.E.K.O 零配置对接** — provider 选 GPT-SoVITS、地址保持默认 `http://127.0.0.1:9881` 即可，音色下拉自动列出 ADR 声音档案
-- **全离线桌面应用** — Tauri 桌面端内置便携 Python 运行时与全部依赖，安装即用；首次启动自动下载预训练底模（预热页实时显示进度，就绪后才进入），之后完全离线
-- **多语言合成** — 中/英/日/粤及中英混说（`text_lang` 参数 + 控制台语言选择）；声音档案可标记语种，合成默认语言自动联动
-- **控制台中英文切换** — 控制台四页（索引/新手/专业/调用）一键切换中/英，语言偏好自动记忆
-- **数据处理管线** — 音频切片 / ASR 转写 / F0 提取 / 音素化一条龙（`adr process`）
+## 项目定位与关键能力
 
-## 风险披露与使用边界
+ADR（Audio Disentangled Reconstruction）是运行在**你自己电脑上**的语音克隆 / TTS 工作台；推理、训练、声音档案与参考音频均在本地，不上传任何服务器。
 
-ADR 具备克隆任意人声的技术能力，使用前请务必确认以下边界（Windows 安装包首次启动时会在应用内展示完整条款）：
+- **零样本克隆** — 上传 3–10 秒干净人声即可建档出声，无需训练
+- **微调训练** — LoRA / QLoRA 只训少量参数，配梯度检查点与混合精度，降低显存门槛
+- **中文语速与风格预设** — `speed_factor` 调速，`style_presets` 提供关键词风格组合；
+  情感输入通道尚未实现，风格预设只影响采样与语速（见「已知限制」）
+- **局域网 API** — GSV api_v2 / v3、OpenAI `/v1`、ADR 原生 `/api/adr/v1` 四套协议面
+- **N.E.K.O 对接** — provider 选 GPT-SoVITS，地址填 `http://127.0.0.1:9881` 即可
+- **离线文档** — 控制台内置 10 篇用户文档，中英双语，断网可读
+- **桌面端开箱即用** — Tauri 2 壳内置便携 Python 运行时、预热与系统托盘
 
-- **授权前提** — 克隆、合成任何真实人物的声音，必须事先取得该声音权利人的明确授权
-- **禁止用途** — 严禁将本软件用于诈骗、冒充他人、诽谤、伪造证据、侵犯隐私等违法违规用途
-- **责任自负** — 您使用本软件生成的内容及其用途由您自行决定并负责，因滥用产生的法律后果由使用者承担
-- **声纹告知** — 您上传或录制的语音样本属于个人敏感信息（含声纹特征），仅在本地数据目录存储与处理，不上传云端；删除样本即删除对应声纹数据
-- **数据采集** — 默认不采集设备标识、不上报使用数据
+## 三个控制台与独立设置页
 
-使用同意方式（任选其一，同意记录仅存本地数据目录）：桌面壳首次启动在条款页点击"同意"；命令行加 `--agree-terms` 参数；服务端形态（Docker 等）设环境变量 `ADR_AGREE_TERMS=1`。未同意时服务进程会拒绝启动（exit 2）。
+服务启动后，同一套引擎挂载三个入口页与一个设置页（路由见
+`adr/server/console.py` 的 `register_pages`）：
 
-## 安装
+| 入口 | 页面 | 适合谁 | 主要能力 |
+| --- | --- | --- | --- |
+| `/easy` | `adr/server/static/easy.html` | 第一次使用 | 选声音 → 输入文字 → 试听，三步完成，零参数 |
+| `/pro` | `adr/server/static/pro.html` | 训练、调参、管模型 | 总览、声音克隆、语音合成、模型库 |
+| `/call` | `adr/server/static/call.html` | 接入其他软件 | 双端点调试、参数说明、生成 cURL / Python / JS 代码 |
+| `/settings` | `adr/server/static/settings.html` | 设定全局默认值 | 合成默认值、声音与模型、界面、高级、关于 |
 
-### 方式一：Windows 安装包（推荐）
+`/` 是索引页（`index.html`），只做入口，不参与合成。四个页面顶栏都支持中英文与主题切换，
+并有「文档」按钮直达文档中心。
 
-1. 下载安装包（二选一；
-   - **CPU 版**：[ADR-Studio-1.3.1-x64-setup.exe](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/download/v1.3.1/ADR-Studio-1.3.1-x64-setup.exe)（约 460MB，无独立显卡设备）
-   - **GPU 版**：[ADR-Studio-1.3.1-x64-gpu-setup.exe](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/download/v1.3.1/ADR-Studio-1.3.1-x64-gpu-setup.exe)（约 1.9GB，NVIDIA CUDA 加速）
+**桌面壳怎么进**：首次启动依次经过条款页 → 三步首启向导 → 预热页（下载约 2 GB 底模并加载
+引擎）→ 启动器。启动器里是三张控制台卡片，以及模型入口、设置和关于页；卡片会拉起本地服务
+并跳转路由。源码 / 服务形态没有登录页，直接打开 `http://127.0.0.1:9881/easy`。
 
-   SHA256 校验值见 [Release 页面](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases/tag/v1.3.1)；安装包未经充分测试，如遇问题请提 [Issues](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/issues)
-2. 双击安装，按向导阅读并接受许可协议（per-user 安装，无需管理员权限）；两版共用同一 AppId，可原地升级覆盖旧版，已下载的底模与声音档案均保留
-3. 首次启动会自动进行环境预热：下载预训练底模（约 2GB，预热页实时显示进度，**下载 + 引擎加载完成后才进入启动器**）；完成后此后**完全离线**运行
+设置页写入的是**控制台前端默认值**，落盘为数据目录下的 `settings.json`，通过
+`GET/PUT/DELETE /api/adr/v1/settings` 读写，不改变未显式传参的外部 API 调用行为；临时改参只对当前一次合成或训练生效。
 
-安装内容：Python 便携运行时 + 全部依赖 + GPT-SoVITS 代码 + ADR 引擎，磁盘占用约 2GB（CPU 版）/ 4GB（GPU 版），不含底模与声音档案数据。
+## 文档
 
-> 批量部署可使用静默安装：`ADR-Studio-1.3.1-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="安装目录"`
+### 内置文档中心
 
-### 方式二：源码安装
+- 入口：各控制台右上角「文档」，或索引页的「文档中心」卡片
+- 离线可读：随安装包携带 10 篇用户文档；联网时可「检查更新」与官方仓库逐篇比对
+- 中英双语：有译文的篇目可切换 English；缺英文时**回落中文原文并明确提示**，不报错、不空白
+- 模糊搜索：拼写近似、中文短句按字符覆盖率兜底；无结果时推荐排障与使用指南。范围只收录
+  用户文档 / API 规范 / 发布说明，内部计划与审计材料不在白名单
 
-环境要求：Windows 推荐，Python 3.10+；NVIDIA GPU 可选（CPU 可推理，训练建议 GPU）。
+| 分组（篇数） | 篇目（slug） | 本地文件 |
+| --- | --- | --- |
+| 入门（3） | quickstart、guide、demos | `README.md`、[docs/en/quickstart.md](docs/en/quickstart.md)、[docs/guide.md](docs/guide.md)、[docs/en/guide.md](docs/en/guide.md)、[docs/demos.md](docs/demos.md) |
+| 指南（4） | troubleshooting、gpu、install、update | [docs/troubleshooting.md](docs/troubleshooting.md)、[docs/en/troubleshooting.md](docs/en/troubleshooting.md)、[docs/gpu-compat.md](docs/gpu-compat.md)、[docs/architecture/windows-install-acceptance.md](docs/architecture/windows-install-acceptance.md)、[docs/update-manifest.md](docs/update-manifest.md) |
+| 开发（2） | api、arch | [docs/tts-api-spec.md](docs/tts-api-spec.md)、[docs/architecture-design.md](docs/architecture-design.md) |
+| 发布（1） | release | [docs/release-notes-v1.2.0.md](docs/release-notes-v1.2.0.md) |
+
+文档 API 前缀为 `/api/adr/v1/docs`：`GET /` 索引、`GET /search?q=` 搜索、`GET /check` 比对
+官方仓库、`GET /{slug}?lang=zh|en&source=local|online` 读取单篇。
+
+### 官网文档站
+
+`site/` 是纯静态官网文档站，由 `scripts/build_site.py` 从 `docs/` 与根 `README.md` 生成，
+**不要手改**；生成物不入库（已在 `.gitignore`），克隆后先构建。中文页生成到 `site/docs/`，
+英文页生成到 `site/en/`，站点约定基址为 `https://adr-studio.pages.dev/`。重建用
+`python scripts/build_site.py`，自检用 `python scripts/build_site.py --check`。
+
+## 问题与意见反馈
+
+使用中遇到问题、想要新功能或反馈体验，请填写
+[ADR Studio 问题与意见收集表](https://docs.qq.com/form/page/DSkhyWHJnS0ZUa1ZB)（腾讯文档，免登录即可提交）。
+官网顶栏「问题反馈」、页脚与首页入口指向同一张表；缺陷类问题也可直接开
+[GitHub Issue](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/issues)，
+并附上 `adr doctor` 输出、日志片段与复现步骤。
+
+## 快速开始
+
+### 方式一：Windows 安装包
+
+1. 从 [GitHub Releases](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases)
+   下载安装包：CPU 版用于无独立显卡设备，GPU 版用于 NVIDIA CUDA 加速。两版共用同一 AppId，
+   可原地升级覆盖，底模与声音档案保留。
+2. 双击安装，按向导接受许可协议（per-user 安装，无需管理员权限）。
+3. 首次启动同意使用条款，完成首启向导，等待预热页下载底模并加载引擎，随后进入启动器；
+   预热完成后即可完全离线运行。
+
+批量部署可用静默安装：`ADR-Studio-1.3.1-beta.92-x64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR="安装目录"`。
+
+### 方式二：源码运行
+
+环境要求：Python 3.10+；Windows 推荐，其他平台可跑推理。NVIDIA GPU 可选。
 
 ```powershell
-# 1. 安装（M1 基础 + WebUI）
-pip install -e .[m1]
-
-# 训练加速（LoRA/QLoRA, 按需）
-pip install -e .[m2]
-
-# 日/粤/韩合成 G2P（按需; Windows 安装包已内置）
-pip install -e .[multilang]
-
-# 2. 启动 TTS 服务（默认端口 9881, NEKO 直连）
-$env:NUMBA_CACHE_DIR = "E:\adr_numba_cache"   # 任意可写目录, 避免 numba 缓存落只读路径
-python -m adr.server
-
-# 3. 或启动 legacy WebUI (Gradio, 7860)
-adr webui          # 等价于双击 启动WebUI.bat
+pip install -e ".[m1]"          # 基础依赖 + TTS 服务
+pip install -e ".[m2]"          # 训练加速（LoRA / QLoRA，按需）
+pip install -e ".[multilang]"   # 日 / 粤 / 韩 G2P（按需）
+python -m adr.server --agree-terms   # 默认 127.0.0.1:9881
 ```
+
+启动后打开 `http://127.0.0.1:9881/easy`（新手）、`/pro`（专业）、`/call`（调用）、
+`/settings`（设置）。
 
 常用命令：
 
 | 命令 | 说明 |
 | --- | --- |
-| `python -m adr.server` | 启动 GSV 兼容 TTS 服务（默认 127.0.0.1:9881，`-p` 改端口 / `-a` 改地址） |
-| `adr process -i <音频文件或目录> -o ./output/processed` | 数据处理管线：切片 / 转写 / 音素化 |
-| `adr train -d <数据目录> --lora --lora-rank 8` | LoRA 微调训练 |
+| `python -m adr.server -p 9880` | 换端口；`-a 0.0.0.0` 监听局域网（须配 API Key） |
+| `adr process -i <音频文件或目录> -o ./output/processed` | 切片 / ASR 转写 / 音素化 |
+| `adr train -d <数据目录> --lora --lora-rank 8` | LoRA 微调；`--qlora` 走 4-bit 量化 |
 | `adr clone --ref <wav> --text <文本>` | 单句克隆推理 |
 | `adr model list / download / info` | 预训练模型管理 |
-| `adr doctor [--fix]` | 环境 / 数据体检 |
-| `adr webui` | legacy WebUI（功能冻结期） |
+| `adr doctor [--fix]` | 环境与数据体检 |
 
-### 三种运行形态对照
+### 方式三：Docker
 
-v1.2 起 ADR 有三种分发形态，引擎与 API 同源，按部署场景选择：
+容器版是纯 HTTP 服务镜像，无 Gradio WebUI，入口为
+`python -m adr.server --addr 0.0.0.0 --port 9881`：
 
-| | 桌面版（Windows 安装包） | 无 UI 服务版（server.bat） | 容器版（Docker） |
+```bash
+cd docker
+docker compose up -d --build                                    # CPU
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build   # CUDA
+curl http://127.0.0.1:9881/api/adr/v1/health
+```
+
+两个镜像标签：`adr-server:1.3.1-beta.92-cpu` 与 `adr-server:1.3.1-beta.92-cuda`
+（compose 已按标签引用，本地构建会就地覆盖同名镜像）。
+
+CUDA 变体需要 NVIDIA 驱动与 Container Toolkit；无 GPU 时引擎会回退 CPU。详细说明见
+[docker/README.md](docker/README.md)。
+
+## TTS API
+
+服务默认只监听 `127.0.0.1:9881`。四套协议面共用同一引擎：
+
+| 协议面 | 端点 | 用途 |
+| --- | --- | --- |
+| ADR 原生 | `POST` / `GET` `/api/adr/v1/tts` | 按音色档案名合成，档案是一等公民 |
+| GSV api_v2 | `POST` / `GET` `/api/v2/tts` | N.E.K.O 与 GPT-SoVITS 生态客户端 |
+| GSV api_v3 | `GET /api/v3/voices`、`WS /api/v3/tts/stream-input` | 双向流式；无任务队列，逐句串行 |
+| OpenAI 兼容 | `POST /v1/audio/speech`、`GET /v1/models` | OpenAI TTS 兼容客户端 |
+| 健康检查 | `GET /api/adr/v1/health` | 探活；`engine_stage` 可区分引擎预热阶段 |
+
+最小示例（字段与 [docs/tts-api-spec.md](docs/tts-api-spec.md) 原生 API 一节一致）：
+
+```bash
+# 先确认有哪些音色档案
+curl http://127.0.0.1:9881/api/adr/v1/profiles
+
+# 合成一段 wav
+curl -X POST http://127.0.0.1:9881/api/adr/v1/tts \
+  -H "Content-Type: application/json" \
+  -d "{\"text\": \"你好，这是 ADR 合成测试\", \"profile\": \"demo\", \"media_type\": \"wav\"}" \
+  --output out.wav
+```
+
+```python
+import json
+import urllib.request
+
+payload = {
+    "text": "你好，这是 ADR 合成测试",
+    "profile": "demo",          # 也可改用 ref_audio_path 走 v2
+    "media_type": "wav",
+}
+req = urllib.request.Request(
+    "http://127.0.0.1:9881/api/adr/v1/tts",
+    data=json.dumps(payload).encode("utf-8"),
+    headers={"Content-Type": "application/json"},
+)
+with urllib.request.urlopen(req) as resp, open("out.wav", "wb") as f:
+    f.write(resp.read())
+```
+
+GSV api_v2 的流式约定：`streaming_mode=1/2/3` 时第一块是 44 字节 WAV 头，其后为裸 s16le PCM；
+该「头 + 裸块」契约只在 `media_type=wav` 时成立。完整参数、错误码与差异清单见
+[docs/tts-api-spec.md](docs/tts-api-spec.md)。
+
+### N.E.K.O 对接
+
+启动桌面端或 `python -m adr.server`，确认监听端口（默认 9881）。N.E.K.O 设置 → 语音合成 →
+provider 选 **GPT-SoVITS**，API 地址填 `http://127.0.0.1:9881`，刷新音色列表即可看到 ADR
+声音档案；也可用 OpenAI provider 配合 `/v1/audio/speech`。
+
+### 局域网与鉴权
+
+默认仅本机可达。局域网调用须同时设置 API Key，否则服务拒绝启动：
+`$env:ADR_TTS_API_KEY="<你的密钥>"; python -m adr.server --addr 0.0.0.0`。
+
+客户端凭据三选一：`Authorization: Bearer <key>`、`X-API-Key: <key>` 头、`?api_key=<key>`。
+未设置 Key 且确实要监听 `0.0.0.0` 时，需显式设 `ADR_ALLOW_UNAUTHENTICATED=1` 接受风险；
+跨站请求默认被拦截，放行用 `ADR_CORS_ORIGINS` / `ADR_ALLOWED_HOSTS`。
+
+## GPU 与显存要求
+
+档位结论以 [docs/gpu-compat.md](docs/gpu-compat.md) 为准：
+
+| 功能 | NVIDIA CUDA | AMD / Intel GPU（Windows） | 纯 CPU |
 | --- | --- | --- | --- |
-| 适用场景 | Windows 桌面开箱即用 | Windows 后台常驻 / 无人值守 | Linux 服务器 / NAS / 云端 |
-| 启动方式 | 双击 `adr-desktop.exe` | 命令行运行安装目录下 `server.bat` | `docker run` |
-| 交互入口 | 壳内启动器 + 控制台 | HTTP API（五套 API 面） | HTTP API（五套 API 面） |
-| 数据目录 | `%LOCALAPPDATA%\ADR\data` | 同桌面版（`ADR_DATA_DIR` 可覆盖） | `/data`（挂卷） |
-| 变体 | CPU / GPU 双安装包 | 同桌面版 | 镜像 tag `-cpu` / `-cuda` |
-| 配置方式 | 壳内界面 | 环境变量：`ADR_DATA_DIR` / `ADR_TTS_API_KEY` / `ADR_TTS_DEVICE` / `ADR_LOG_LEVEL` | 环境变量 + 挂卷 |
+| 微调训练（s2 / s1） | 全功能，4 GB 配方实测 | 不支持 | 不支持 |
+| 数据准备（切片 / ASR / 特征） | 支持 | 仅切片 + ASR 可跑 | 可跑，较慢，有缓存 |
+| 推理合成（整段 / 流式） | 支持，峰值约 1410 MB | 走 CPU 路径 | 支持，短文本 RTF 约 1.9x |
+| 声纹门禁 | 支持 | 支持（纯 CPU 实现） | 支持 |
 
-无 UI 服务版与桌面版共用同一安装目录（`server.bat` 随安装包附带），透传 `python -m adr.server` 全部参数：
+训练配置预设位于 `configs/`：[default.yaml](configs/default.yaml)、
+[vram_4gb.yaml](configs/vram_4gb.yaml)、[vram_6gb.yaml](configs/vram_6gb.yaml)、
+[vram_8gb.yaml](configs/vram_8gb.yaml)。没有 NVIDIA 显卡时，可在本机做 CPU 推理与评分，
+训练改到任意 NVIDIA 机器或云 GPU 完成后，把音色档案拷回即可（档案 = 权重 + 参考音频）。
+
+## 目录结构
+
+```text
+ADR/
+├─ adr/             Python 引擎与服务（server/ core/ training/ models/ inference/）
+├─ desktop/         Tauri 2 桌面壳（src/ 界面，src-tauri/ Rust）
+├─ docs/            用户文档、architecture/ 设计文档、en/ 英文译文
+├─ site/            官网静态文档站（由 scripts/build_site.py 生成）
+├─ scripts/         构建、训练、打包与站点生成脚本
+├─ tests/           pytest 用例
+├─ configs/         训练配置预设（default / vram_4gb / vram_6gb / vram_8gb）
+└─ docker/          Dockerfile、compose 文件与容器版说明
+```
+
+## 开发与测试
 
 ```powershell
-cd "C:\Users\you\AppData\Local\Programs\ADR Studio"
-.\server.bat                       # 默认 127.0.0.1:9881
-.\server.bat -a 0.0.0.0 -p 9881    # 局域网暴露（务必配合 ADR_TTS_API_KEY）
+# 开发依赖与全量测试；必须带 --basetemp（Windows 默认临时目录可能 PermissionError）
+pip install -e ".[dev]"
+python -m pytest --basetemp=.pytest_tmp
 ```
 
-容器版镜像已发布至 GitHub Container Registry（cpu / cuda 双变体）：
+- 控制台前端是纯静态页面，位于 `adr/server/static/`（`index/easy/pro/call/settings.html`
+  加 `i18n*.js`），由 `register_pages` 挂到服务根；没有 Node 构建步骤
+- 桌面壳构建（以 `desktop/package.json` scripts 为准，需要 Rust 工具链）：
 
 ```powershell
-# CPU（默认只发布到本机回环；对外暴露改用 -p 9881:9881 并设 ADR_TTS_API_KEY）
-docker run -d --name adr-server -p 127.0.0.1:9881:9881 -v adr-data:/data ghcr.io/hmug12/adr-server:1.3.1-cpu
-# GPU（需 NVIDIA Container Toolkit）
-docker run -d --name adr-server --gpus all -p 127.0.0.1:9881:9881 -v adr-data:/data ghcr.io/hmug12/adr-server:1.3.1-cuda
+cd desktop
+npm install
+npm run dev      # tauri dev
+npm run build    # tauri build
 ```
 
-常青 tag：`ghcr.io/hmug12/adr-server:cpu` / `:cuda` 始终指向最新发布版；容器版详细用法见 [docker/README.md](docker/README.md)。
+安装包由 `scripts/build_installer.ps1` 打包。
 
-### API 一览
+## 版本规则
 
-服务默认只监听 `127.0.0.1:9881`（仅本机可达，N.E.K.O 本机对接不受影响）。
+- **未正式发布一律 `1.3.1-beta.<提交数>`**，不因功能合入升 minor；正式发布才升 minor
+- 版本号三处必须一致：`pyproject.toml`、`desktop/package.json`、
+  `desktop/src-tauri/tauri.conf.json`；当前均为 `1.3.1-beta.92`
+- 容器镜像 tag 跟随版本号（`-cpu` / `-cuda`），常青 tag 指向最新发布版
 
-| 接口 | 用途 |
-| --- | --- |
-| `POST /api/v3/tts/stream-input` | GPT-SoVITS api_v3 双工流式合成 |
-| `GET /api/v3/voices` | 音色列表 |
-| `POST /v1/audio/speech` | OpenAI 兼容 TTS |
-| `GET /v1/models` | OpenAI 兼容模型列表（即音色档案） |
-| `GET /api/adr/v1/health` | 健康检查（引擎阶段 / 就绪状态） |
+## 已知限制与故障排查
 
-需要局域网内其他设备调用时，**必须同时设置 API key**：
+- **情感控制未实现**：GSV v2 没有 emotion 输入通道；`style_presets` 只调整采样与语速，
+  不产生情感。1.3.0 范围只保留语速可调
+- **v3 兼容面无任务队列**：逐句串行合成，`overrides.media_type` 被忽略，binary 帧恒为 WAV
+- **流式非 wav 格式**：`ogg` / `aac` / `raw` 流式是每块独立容器，不能直接顺序拼成单流
+- **训练需要 NVIDIA CUDA**：AMD / Intel 与纯 CPU 只能做推理与数据准备
+- **首次合成有冷启动**：引擎加载约数十秒，之后为流式秒级响应
+- **端口冲突**：9881 被占用时用 `-p` 换端口；桌面端在启动器填 0 可自动回退
+- **beta 阶段**：尚未正式发布，接口与行为仍可能变化
 
-```powershell
-$env:ADR_TTS_API_KEY = "<你的密钥>"     # 支持逗号分隔多个
-python -m adr.server --addr 0.0.0.0
-```
+启动失败、显存不足、合成异常、训练中断、401/413/429、文档中心为空等问题，先看
+[docs/troubleshooting.md](docs/troubleshooting.md)；使用流程与设置说明见
+[docs/guide.md](docs/guide.md)。
 
-客户端凭据三选一：`Authorization: Bearer <key>` / `X-API-Key: <key>` 头 / `?api_key=<key>` 查询参数。监听 `0.0.0.0` 且未设置 key 时，局域网内任何设备均可**无鉴权**调用（启动横幅会打安全警告）。
+## 风险披露与使用边界
 
-未设置 key 时，服务会拦截浏览器跨站请求，防止你访问的网页偷调本机服务：只接受控制台同源、桌面壳、本机 `localhost` 页面这几类来源，并拒绝非 IP、带点的 Host（防 DNS 重绑定）。N.E.K.O 后端、curl、Python 客户端不带 `Origin` 头，不受影响。需要放行时：`ADR_CORS_ORIGINS=https://你的前端` 增加允许来源，`ADR_ALLOWED_HOSTS=mypc.local` 增加允许主机名；两者设为 `*` 恢复旧的全开行为。
+ADR 具备克隆任意人声的技术能力，使用前请确认：
 
-## N.E.K.O 对接
+- 克隆、合成任何真实人物的声音，必须事先取得该声音权利人的明确授权
+- 严禁用于诈骗、冒充他人、诽谤、伪造证据、侵犯隐私等违法违规用途
+- 语音样本含声纹特征，仅在本地数据目录存储与处理；生成内容及用途由使用者自行负责
+- 模型输出可能被误用或伪造，请自行评估传播风险并为生成内容标注来源
 
-1. 启动 ADR Studio 桌面端（或 `python -m adr.server`），确认横幅显示监听端口（默认 9881）
-2. N.E.K.O 设置 → 语音合成 → provider 选 **GPT-SoVITS**，API 地址填 `http://127.0.0.1:9881`（也可使用 OpenAI provider 配合 `POST /v1/audio/speech`）
-3. 刷新音色列表，ADR 声音档案会自动出现
+同意方式：桌面端条款页点击同意；命令行加 `--agree-terms`；服务端 / Docker 设
+`ADR_AGREE_TERMS=1`。未同意时服务以退出码 2 拒绝启动。默认不采集设备标识、不上报使用数据。
 
-注意：首次合成有模型冷启动（数十秒），之后为流式秒级响应。若桌面端提示 "9881 被占用"，说明端口被其他 GSV 服务占用，改用提示的端口即可。
+**源码获取途径（AGPL-3.0 §6）**：本项目源码托管在本仓库，发行版对应同一 tag 的完整源码，
+可在 [GitHub Releases](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases)
+的对应版本附件中下载；安装包与 Docker 镜像均由该源码构建，若你通过二进制分发本软件，
+须同时提供本节所述源码获取方式。
 
-## 技术架构
+## 许可证
 
-```mermaid
-flowchart LR
-    UI["ADR Studio 桌面端<br/>Tauri: 启动器 / 预热 / 托盘 / 日志"] -- "sidecar 守护 + 探活" --> SRV
-    NK["N.E.K.O / OpenAI 兼容客户端"] -- "HTTP 127.0.0.1:9881<br/>GSV v3 / OpenAI /v1" --> SRV
-    subgraph engine["ADR 引擎 (Python)"]
-        SRV["FastAPI TTS 服务"]
-        GSV["GPT-SoVITS 模型族"]
-        VOC["BigVGAN Vocoder"]
-        LORA["LoRA / QLoRA 训练栈"]
-    end
-    SRV --> GSV --> VOC
-    LORA --> GSV
-```
+本项目以 [GNU Affero General Public License v3.0（AGPL-3.0-only）](LICENSE) 授权发布。
+若修改本软件并以其对外提供网络服务，须以 AGPL-3.0-only 向服务使用者提供修改版的完整源码。
+第三方组件（GPT-SoVITS、BigVGAN、python-build-standalone、Tauri 等）遵循其原始许可证，
+完整清单见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)。
 
-- **桌面端**（Rust + WebView）：启动器、预热流程（底模下载进度透传）、系统托盘常驻、服务守护与日志面板、关于页
-- **引擎**（Python + FastAPI）：GSV 兼容流式 TTS、OpenAI 兼容接口、声音克隆训练、数据处理管线
-- **数据与日志目录**：优先级为 `ADR_DATA_DIR` 环境变量 → `F:/ADR_data`（旧版遗留路径，存在即用）→ `%LOCALAPPDATA%\ADR\data`；服务日志位于 `<数据目录>\logs\server.log`
-
-## FAQ
-
-**Q：首次启动 / 预热很慢？**
-A：首次启动需下载约 2GB 的预训练底模，取决于网速可能需要较长时间；预热页会实时显示下载进度，**底模下载 + 引擎加载完成后才进入启动器**，此后不再需要网络。
-
-**Q：纯 CPU 机器能用吗？**
-A：可以。推理支持纯 CPU 运行（速度较慢）；训练建议 NVIDIA GPU（4-8GB VRAM 即可）。
-
-**Q：9881 端口被占用？**
-A：说明已被其他 GPT-SoVITS 服务占用。用 `-p <端口>` 改端口启动源码版；桌面端会在提示中给出可用端口。
-
-**Q：我的声音档案和数据存在哪里？**
-A：见"技术架构"末条的数据目录优先级。安装包默认不含任何声音数据；升级 / 重装不会丢失已训练的声音档案。
-
-**Q：与 GPT-SoVITS 是什么关系？**
-A：ADR 的推理服务实现了 GPT-SoVITS api_v3 兼容协议并复用其模型体系与训练思路，让 N.E.K.O 等现成客户端无需改动即可接入；本项目对训练流程做了低资源化改造（LoRA / QLoRA 等）。感谢上游开源项目，详见下节第三方声明。
-
-**Q：是否可以商用？**
-A：本软件以 AGPL-3.0-only 授权，允许商用，但需遵守其条款（包括网络服务场景下向用户提供修改版源代码、保留版权声明等）；同时必须遵守协议页中的声音伦理条款（未经许可不得克隆他人声音）。
-
-## 第三方组件
-
-| 组件 | 许可证 |
-| --- | --- |
-| GPT-SoVITS | MIT |
-| BigVGAN | MIT |
-| python-build-standalone | MIT |
-| Tauri | MIT / Apache-2.0 |
-
-各组件遵循其原始许可证，相应许可声明随软件一同分发；完整清单与说明见 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)。
-
-## License
-
-本项目以 [GNU Affero General Public License v3.0（AGPL-3.0-only）](LICENSE)授权发布。
-
-- **源码获取** — 本项目的完整对应源码随版本发布：可从 [GitHub Releases](https://github.com/HMUG12/Audio-Disentangled-Reconstruction/releases) 下载源码包（`Source code (zip / tar.gz)`），或直接克隆本仓库（AGPL-3.0 §6：以任何形式分发软件须同时提供对应源码）
-- **网络服务义务** — 若您修改本软件并以其对外提供网络服务，须以 AGPL-3.0-only 向服务使用者提供您修改版的完整源码
-- **附加条款** — Windows 安装包的许可协议页另附本项目附加使用条款（声音伦理与使用边界等），首次启动时应用内也会展示；闭源集成或商用授权请通过「联系方式」洽谈
-
-## 文档
-
-- [docs/](docs/) — 设计文档、里程碑计划、批次记录（m9-phase3-plan.md）
-- [configs/](configs/) — 训练配置预设（default / vram_4gb / vram_8gb / ...）
-
-## 联系方式
-
-维护者：未知之致 · 联系QQ：3699672176
+维护者：未知之致 · 联系 QQ：3699672176

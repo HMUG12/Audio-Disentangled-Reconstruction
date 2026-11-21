@@ -9,7 +9,7 @@
 #     clone + scripts/apply_compat_patches.py 打补丁, 与本地树可复现对齐
 #   - 双变体: TORCH_VARIANT=cpu (默认) | cuda (cu130, 与 Windows GPU 包对齐)
 #     torch 不进 requirements-linux.txt, 按变体单独安装
-#   - 无 WebUI: gradio 不装, `adr webui` 在容器内不可用 (CLI + HTTP API 形态)
+#   - 无 WebUI: gradio 不装, 经典 Gradio 控制台已移除 (CLI + HTTP API + 静态控制台页形态)
 #   - 权重自引导: 首次启动自动下载 pretrained_models (~1.4GB) + G2PWModel
 #     (~560MB), 生产环境用 compose 卷持久化 (见 docker-compose.yml)
 # =============================================================================
@@ -87,7 +87,7 @@ RUN git clone ${GSV_PROXY_PREFIX}https://github.com/RVC-Boss/GPT-SoVITS.git \
 # ================================ Stage 2: 运行时 ==============================
 FROM python:3.11-slim AS runtime
 
-ARG ADR_VERSION=1.3.1
+ARG ADR_VERSION=1.3.1-beta.92
 ARG APT_MIRROR
 
 ENV PATH="/opt/venv/bin:$PATH" \

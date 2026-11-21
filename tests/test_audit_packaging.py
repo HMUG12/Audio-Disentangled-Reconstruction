@@ -71,7 +71,7 @@ def test_build_installer_dry_run():
 
 CHECK_RUNTIME = REPO / "scripts" / "check_runtime.py"
 
-# 训练子进程实际调用的脚本 (console.py:386/439 + webui/__init__.py)
+# 训练子进程实际调用的脚本 (console.py 的 /train/start 与质量门禁)
 TRAIN_SCRIPTS = ("gsv_finetune.py", "train_gate.py",
                  "smoke_train_opencpop.py", "rvc_train.py")
 

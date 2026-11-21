@@ -5,9 +5,9 @@
 - /pro     pro.html    专业控制台 (深色数据可视化, 全参数)
 - /easy    easy.html   新手控制台 (向导式, 零参数)
 - /call    call.html   调用控制台 (局域网 API 调试, 批次26 补记)
-- /server  server.html 容器/服务端独立控制台 (深蓝控制台, 与桌面页视觉分离)
 
-训练链路与 webui._run_gsv_finetune 完全同构:
+
+训练链路与 gsv_finetune.py 完全同构:
     python -u scripts/gsv_finetune.py <audio> --exp <name> --s2-epochs <N>
          --batch-size 4|1 --skip-s1 [--max-clip-sec 10] [--bind-voice <v>]
   + 可选质量门禁 scripts/train_gate.py (CPU 打分, sim>=0.80 写 STOP 早停)
@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -47,7 +48,7 @@ REPO = Path(__file__).resolve().parents[2]
 STATIC_DIR = Path(__file__).parent / "static"
 OUTPUT_DIR = REPO / "output"
 UPLOAD_DIR = OUTPUT_DIR / "uploads"
-# 与 webui 一致: 2h 兜底; 批次66: 真正生效 (reader 线程起看门狗定时强杀), 可用环境变量放宽
+# 2h 兜底; 批次66: 真正生效 (reader 线程起看门狗定时强杀), 可用环境变量放宽
 def _parse_timeout(raw: str | None, default: float = 7200.0) -> float:
     """批次66: 非法/非正/非有限值回落默认并告警, 不让坏环境变量拖垮导入或秒杀训练。"""
     try:
@@ -218,7 +219,7 @@ def system_stats():
 
 
 # ---------------------------------------------------------------------------
-# 声音克隆训练 (gsv_finetune 子进程 + 可选门禁, 同 webui._run_gsv_finetune)
+# 声音克隆训练 (gsv_finetune 子进程 + 可选门禁)
 # ---------------------------------------------------------------------------
 
 _train_lock = threading.Lock()
@@ -423,7 +424,7 @@ async def train_start(body: TrainStartReq):
         cmd = [sys.executable, "-u", str(script), str(audio),
                "--exp", exp, "--s2-epochs", str(epochs),
                "--batch-size", "1" if recipe == "4gb" else "4",
-               "--skip-s1"]  # s1 全量微调降相似度 (webui 实测结论)
+               "--skip-s1"]  # s1 全量微调降相似度 (实测结论)
         if recipe == "4gb":
             cmd += ["--max-clip-sec", "10"]
         # 批次50: 续训默认绑回同一档案 (训完自动版本化绑定, 闭环)
@@ -802,6 +803,7 @@ async def models_list():
     hub = get_hub()
     items = [{
         "name": i.name,
+        "filename": i.filename,
         "category": i.category,
         "description": i.description,
         "version": i.version,
@@ -882,6 +884,98 @@ async def models_download_status():
         }
 
 
+_MODEL_CHUNK = 1024 * 1024
+
+
+def _model_target(name: str) -> Path:
+    from adr.models.hub import PRETRAINED_REGISTRY, get_hub
+    if name not in PRETRAINED_REGISTRY:
+        raise HTTPException(404, f"未知模型: {name}")
+    return get_hub().cache_dir / PRETRAINED_REGISTRY[name].filename
+
+
+@router.post("/models/{name}/verify", summary="校验本地模型文件 SHA256")
+async def models_verify(name: str):
+    from adr.models.hub import PRETRAINED_REGISTRY
+    info = PRETRAINED_REGISTRY.get(name)
+    target = _model_target(name)
+    if not target.is_file():
+        raise HTTPException(404, "本地未找到该模型文件")
+
+    def _digest() -> tuple[str, int]:
+        sha = hashlib.sha256()
+        size = 0
+        with open(target, "rb") as f:
+            for chunk in iter(lambda: f.read(_MODEL_CHUNK), b""):
+                sha.update(chunk)
+                size += len(chunk)
+        return sha.hexdigest(), size
+
+    # 大文件哈希放到线程里, 不阻塞事件循环 (合成/进度轮询保持响应)
+    actual, size = await asyncio.to_thread(_digest)
+    if not info.sha256:  # 注册表无官方校验值: 只做存在性+体积检查
+        return {"ok": size > 1024, "checked": "size", "sha256": actual,
+                "expected": None, "size_bytes": size}
+    return {"ok": actual == info.sha256, "checked": "sha256", "sha256": actual,
+            "expected": info.sha256, "size_bytes": size}
+
+
+@router.delete("/models/{name}", summary="删除本地模型缓存")
+async def models_delete(name: str):
+    target = _model_target(name)
+    with _dl_lock:
+        if _dl["state"] == "downloading" and _dl["name"] == name:
+            raise HTTPException(409, "该模型正在下载, 请稍后再删")
+    removed = 0
+    for p in (target, target.with_suffix(target.suffix + ".part")):
+        if p.is_file():
+            p.unlink()
+            removed += 1
+    return {"state": "deleted" if removed else "absent", "name": name}
+
+
+@router.post("/models/{name}/import", summary="导入本地权重 (离线恢复, SHA256 校验)")
+async def models_import(name: str, file: UploadFile = File(...)):
+    from adr.models.hub import PRETRAINED_REGISTRY
+    info = PRETRAINED_REGISTRY.get(name)
+    target = _model_target(name)
+    if Path(file.filename or "").name != info.filename:
+        raise HTTPException(400, f"文件名不匹配: 该模型应为 {info.filename}")
+    with _dl_lock:
+        if _dl["state"] == "downloading":
+            raise HTTPException(409, "已有下载在进行")
+
+    # 原子写入: 先落 .part, 校验通过才 os.replace, 失败不破坏已有文件
+    part = target.with_suffix(target.suffix + ".part")
+    sha = hashlib.sha256()
+    total = 0
+    try:
+        with open(part, "wb") as out:
+            while True:
+                chunk = await file.read(_MODEL_CHUNK)
+                if not chunk:
+                    break
+                total += len(chunk)
+                sha.update(chunk)
+                out.write(chunk)
+        actual = sha.hexdigest()
+        if total <= 1024:
+            raise HTTPException(400, "文件过小, 不是有效权重")
+        if info.sha256 and actual != info.sha256:
+            raise HTTPException(
+                400,
+                f"SHA256 校验失败: 期望 {info.sha256[:12]}…, 实际 {actual[:12]}…")
+        os.replace(part, target)
+    except HTTPException:
+        part.unlink(missing_ok=True)
+        raise
+    except Exception as e:
+        part.unlink(missing_ok=True)
+        raise HTTPException(500, f"导入失败: {e}")
+    return {"state": "imported", "name": name, "size_bytes": total,
+            "verified": bool(info.sha256), "sha256": actual}
+
+
 # ---------------------------------------------------------------------------
 # 退出回收 (批次90 / R3-LIFE-01)
 # ---------------------------------------------------------------------------
@@ -911,7 +1005,7 @@ def stop_background_procs() -> None:
 # ---------------------------------------------------------------------------
 
 def register_pages(app) -> None:
-    """把静态控制台页挂到服务根: / → index, /pro, /easy, /call。"""
+    """把静态控制台页挂到服务根: / → index, /pro, /easy, /call, /settings。"""
 
     @app.get("/", include_in_schema=False)
     async def _index():
@@ -929,20 +1023,19 @@ def register_pages(app) -> None:
     async def _call():
         return FileResponse(STATIC_DIR / "call.html", media_type="text/html")
 
-    # 容器/服务端形态的独立 Web 控制台 (视觉与桌面 pro/easy/call 分离)
-    @app.get("/server", include_in_schema=False)
-    async def _server():
-        return FileResponse(STATIC_DIR / "server.html", media_type="text/html")
+    @app.get("/settings", include_in_schema=False)
+    async def _settings():
+        return FileResponse(STATIC_DIR / "settings.html", media_type="text/html")
 
     # 批次54: 控制台中英文切换运行时 (页面统一引用 /i18n.js, 同源不撞 CSP)
     @app.get("/i18n.js", include_in_schema=False)
     async def _i18n_js():
         return FileResponse(STATIC_DIR / "i18n.js", media_type="application/javascript")
 
-    # 批次54: 各页字典 /i18n-easy.js /i18n-pro.js /i18n-call.js (白名单, 缺文件 404)
+    # 批次54: 各页字典 /i18n-easy.js /i18n-pro.js /i18n-call.js /i18n-settings.js (白名单, 缺文件 404)
     @app.get("/i18n-{page}.js", include_in_schema=False)
     async def _i18n_dict_js(page: str):
-        if page not in ("easy", "pro", "call", "index"):
+        if page not in ("easy", "pro", "call", "index", "settings"):
             raise HTTPException(status_code=404)
         f = STATIC_DIR / f"i18n-{page}.js"
         if not f.is_file():

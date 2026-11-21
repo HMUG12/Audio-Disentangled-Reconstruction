@@ -26,7 +26,7 @@ _INVALID_CHARS = '\\/:*?"<>|'
 # subprocess.run(shell=True) 命令串 (作为 slicer_opt/<exp> 等路径段), Linux
 # /bin/sh 在双引号内仍会做命令替换/变量展开, 构成 RCE。这些字符在合法的
 # 目录/档案名中本就无意义, 在清洗咽喉处一并剔除, 一处堵住所有训练端点
-# (/train/start, webui) 的注入面。与 _INVALID_CHARS 合并后统一过滤。
+# (/train/start, 控制台) 的注入面。与 _INVALID_CHARS 合并后统一过滤。
 _SHELL_META = "$`;&(){}[]!~'"
 
 

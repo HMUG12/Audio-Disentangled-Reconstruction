@@ -114,6 +114,27 @@ def _warn_unauthenticated_listen(addr: str, *, from_shell: bool = False) -> None
     raise SystemExit(2)
 
 
+def _warn_ref_audio_roots() -> None:
+    """S3: 设了 API Key 但未设 ADR_TTS_AUDIO_ROOTS 时提示 ref_audio_path 面。
+
+    v2 兼容面按契约接受调用方本机绝对路径 (N.E.K.O), 默认不设目录白名单。
+    对局域网/容器部署, 建议显式收口, 否则任何持 Key 的客户端都能让服务读取
+    本机任意音频文件并以其音色合成。
+    """
+    if not settings.has_api_key() or settings.audio_roots():
+        return
+    print(
+        "\n" + "=" * 64,
+        "⚠  提示: 已启用 ADR_TTS_API_KEY, 但未设置 ADR_TTS_AUDIO_ROOTS",
+        "   v2 的 ref_audio_path 仍可指向本机任意音频文件。",
+        "   如需限制可读范围, 设置逗号分隔的根目录后重启:",
+        '     set ADR_TTS_AUDIO_ROOTS=D:\\voices,D:\\samples   (Windows CMD)',
+        "   仅本机使用可忽略此提示。",
+        "=" * 64 + "\n",
+        sep="\n", file=sys.stderr, flush=True,
+    )
+
+
 def _print_banner(addr: str, port: int) -> None:
     """启动横幅: 标明这是 ADR TTS 服务而非 GSV 官方 API, 排障时便于区分
     (NEKO 日志只显示 "GPT-SoVITS 连接失败", 需要能确认对端到底是谁)。"""
@@ -147,6 +168,17 @@ def _hold_app_mutex() -> None:
         pass
 
 
+def _app_log_file():
+    """应用日志落点: ``<数据目录>/logs/adr.log`` (按日轮转, 14 份 / 200MB)。"""
+    try:
+        from adr.core.config import adr_data_dir
+        d = adr_data_dir() / "logs"
+        d.mkdir(parents=True, exist_ok=True)
+        return str(d / "adr.log")
+    except OSError:
+        return None
+
+
 def main():
     # 批次57: native 层崩溃 (如 Intel 13/14 代 AVX-512 缺陷触发 oneDNN/MKL 段错误)
     # 通常无 Python traceback、stderr 零输出 — faulthandler 在崩溃瞬间把 Python 侧
@@ -170,9 +202,13 @@ def main():
     # 批次56 review: 此前 server 从不调 setup_logging, root logger 默认 WARNING —
     # adr.* 的 INFO 日志 (gsv_engine [prewarm] 就绪/预热等排障关键行) 全部被吞,
     # server.log 与 docker logs 只剩 uvicorn 行。级别可用 ADR_LOG_LEVEL 覆盖。
-    setup_logging(level=os.environ.get("ADR_LOG_LEVEL", "INFO"))
+    # 批次103: 同时写 <数据目录>/logs/adr.log (按日轮转 14 份 / 总量 200MB),
+    # 排障不再只能翻会被截断的原始 server.log。
+    setup_logging(level=os.environ.get("ADR_LOG_LEVEL", "INFO"),
+                  log_file=_app_log_file())
     _enforce_terms(args)
     _warn_unauthenticated_listen(args.addr, from_shell=args.from_shell)
+    _warn_ref_audio_roots()
     _print_banner(args.addr, args.port)
     # 批次90 (R3-CON-01 / CON-01): 进程级 watchdog。
     # 卡死的 worker 线程可能同时持有引擎锁与 _CHDIR_LOCK, 进程内任何"自愈"

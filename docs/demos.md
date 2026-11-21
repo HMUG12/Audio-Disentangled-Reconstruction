@@ -396,7 +396,7 @@ sample.save("data/my_001.npz")
 
 | 想做 | 看 |
 |------|-----|
-| WebUI | `adr/webui/` (4 Tab: Data/Train/Clone/Models) |
+| 控制台 | `/easy`（新手）、`/pro`（训练与调参）、`/call`（接口调试）、`/settings`（默认值） |
 | 量化导出 | (M3 规划中) GGUF / AWQ |
 | 跨语言 | (M2+) 接入 WavLM 多语种 |
 | ASR WER 早停 | (M4 规划) |

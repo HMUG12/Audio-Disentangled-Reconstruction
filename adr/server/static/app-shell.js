@@ -12,7 +12,7 @@
   if (!body) return;
   var page = body.getAttribute("data-adr-page") || "";
   var docsEnabled = body.getAttribute("data-adr-docs") !== "off" &&
-    ["index", "easy", "pro", "call"].indexOf(page) >= 0;
+    ["index", "easy", "pro", "call", "settings"].indexOf(page) >= 0;
 
   var ICON = {
     mark: '<svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v-4M8 17V7M12 20V4M16 17V7M20 14v-4"/></svg>',
@@ -24,10 +24,33 @@
   };
 
   var NAV = [
-    { id: "easy", href: "/easy", label: "新手台" },
-    { id: "pro", href: "/pro", label: "专业台" },
-    { id: "call", href: "/call", label: "调用台" }
+    { id: "easy", href: "/easy", label: ["新手台", "Easy"] },
+    { id: "pro", href: "/pro", label: ["专业台", "Pro"] },
+    { id: "call", href: "/call", label: ["调用台", "API"] },
+    { id: "settings", href: "/settings", label: ["设置", "Settings"] }
   ];
+
+  /* 语言与 i18n.js 同源 (localStorage adr_lang); i18n.js 尚未装载时回落中文。 */
+  function lang() {
+    try {
+      if (typeof I !== "undefined" && I && I.lang) return I.lang;
+    } catch (e) { /* noop */ }
+    try { return localStorage.getItem("adr_lang") === "en" ? "en" : "zh"; } catch (e) { return "zh"; }
+  }
+  function tr(zh, en) { return lang() === "en" ? en : zh; }
+
+  /* 页面切换修复: 顶栏链接保留桌面壳参数 (desktop/shell_origin), 否则从
+     /easy 切到 /pro 后「返回启动器」消失; api_key 已转存 sessionStorage,
+     不再放进 URL (避免历史记录/截图外泄)。 */
+  function pageHref(path) {
+    var qs = "";
+    try {
+      var p = new URLSearchParams(location.search);
+      p.delete("api_key");
+      qs = p.toString();
+    } catch (e) { qs = ""; }
+    return path + (qs ? "?" + qs : "");
+  }
 
   function esc(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
@@ -84,9 +107,10 @@
   function buildTopnav(into) {
     var nav = into || document.createElement("nav");
     nav.className = "adr-topnav";
-    nav.setAttribute("aria-label", "控制台导航");
+    nav.setAttribute("aria-label", tr("控制台导航", "Console navigation"));
     nav.innerHTML = NAV.map(function (x) {
-      return '<a href="' + x.href + '"' + (x.id === page ? ' class="on" aria-current="page"' : "") + ">" + x.label + "</a>";
+      return '<a href="' + esc(pageHref(x.href)) + '"' +
+        (x.id === page ? ' class="on" aria-current="page"' : "") + ">" + esc(tr(x.label[0], x.label[1])) + "</a>";
     }).join("");
     return nav;
   }
@@ -223,7 +247,10 @@
 
   /* ── 文档抽屉 ──────────────────────────────────────────────────────── */
   var API = "/api/adr/v1/docs";
-  var docs = { open: false, index: null, slug: "", built: false, busy: false, updates: {} };
+  var docs = {
+    open: false, index: null, slug: "", built: false, busy: false,
+    updates: {}, query: "", results: null, pending: ""
+  };
 
   function el(tag, cls, html) {
     var n = document.createElement(tag);
@@ -239,15 +266,26 @@
     root.id = "adrDocs";
     root.innerHTML =
       '<div class="adr-docs-scrim" data-close></div>' +
-      '<aside class="adr-docs-panel" role="dialog" aria-modal="true" aria-label="文档中心">' +
-      '<div class="adr-docs-head"><b>文档中心</b><span class="adr-docs-badge" id="adrDocsBadge">内置</span>' +
+      '<aside class="adr-docs-panel" role="dialog" aria-modal="true" aria-label="' +
+      esc(tr("文档中心", "Documentation")) + '">' +
+      '<div class="adr-docs-head"><b>' + esc(tr("文档中心", "Documentation")) + '</b>' +
+      '<span class="adr-docs-badge" id="adrDocsBadge">' + esc(tr("内置", "Built-in")) + "</span>" +
       '<span class="adr-docs-spacer"></span>' +
-      '<button type="button" id="adrDocsCheck">检查更新</button>' +
-      '<button type="button" class="adr-docs-x" data-close aria-label="关闭">✕</button></div>' +
-      '<div class="adr-docs-body"><nav class="adr-docs-list" id="adrDocsList"></nav>' +
-      '<div class="adr-docs-main" id="adrDocsMain"><div class="adr-docs-loading">正在载入文档…</div></div></div>' +
-      '<div class="adr-docs-foot"><span id="adrDocsState">离线可用 · 联网可拉取官方最新版</span>' +
-      '<span class="adr-docs-spacer"></span><span>ADR Studio</span></div>' +
+      '<button type="button" id="adrDocsCheck">' + esc(tr("检查更新", "Check updates")) + "</button>" +
+      '<button type="button" class="adr-docs-x" data-close aria-label="' +
+      esc(tr("关闭", "Close")) + '">✕</button></div>' +
+      '<div class="adr-docs-body"><nav class="adr-docs-list" id="adrDocsList">' +
+      '<div class="adr-docs-search"><input id="adrDocsQ" type="search" autocomplete="off" ' +
+      'placeholder="' + esc(tr("搜索文档（支持模糊匹配）", "Search docs (fuzzy match)")) + '" ' +
+      'aria-label="' + esc(tr("搜索文档", "Search documentation")) + '">' +
+      '<button type="button" id="adrDocsGo" aria-label="' + esc(tr("搜索", "Search")) + '">' +
+      esc(tr("搜索", "Go")) + "</button></div>" +
+      '<div id="adrDocsGroups"></div></nav>' +
+      '<div class="adr-docs-main" id="adrDocsMain"><div class="adr-docs-loading">' +
+      esc(tr("正在载入文档…", "Loading documentation…")) + "</div></div></div>" +
+      '<div class="adr-docs-foot"><span id="adrDocsState">' +
+      esc(tr("离线可用 · 联网可拉取官方最新版", "Works offline · fetch the latest from upstream when online")) +
+      '</span><span class="adr-docs-spacer"></span><span>ADR Studio</span></div>' +
       "</aside>";
     document.body.appendChild(root);
 
@@ -257,14 +295,39 @@
       if (item) loadDoc(item.getAttribute("data-slug"));
     });
     root.querySelector("#adrDocsCheck").addEventListener("click", checkUpdates);
+    var q = root.querySelector("#adrDocsQ");
+    root.querySelector("#adrDocsGo").addEventListener("click", function () { runSearch(q.value); });
+    q.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); runSearch(q.value); }
+      if (e.key === "Escape" && q.value) { e.stopPropagation(); q.value = ""; runSearch(""); }
+    });
     document.addEventListener("keydown", function (e) {
       if (e.key === "Escape" && docs.open) closeDocs();
     });
   }
 
+  function badgeFallback(d) {
+    return d && d.fallback ? '<span class="adr-docs-hit">' + esc(tr("中文原文", "Chinese only")) + "</span>" : "";
+  }
+
   function renderList() {
-    var list = document.getElementById("adrDocsList");
-    if (!list || !docs.index) return;
+    var list = document.getElementById("adrDocsGroups");
+    if (!list) return;
+    if (docs.results) {
+      if (!docs.results.length) {
+        list.innerHTML = '<div class="adr-docs-empty">' + esc(tr("没有匹配的文档", "No matching documents")) + "</div>";
+        return;
+      }
+      list.innerHTML = '<div class="adr-docs-group">' +
+        esc(tr("搜索结果", "Search results")) + " · " + docs.results.length + "</div>" +
+        docs.results.map(function (d) {
+          return '<button type="button" data-slug="' + esc(d.slug) + '"' +
+            (d.slug === docs.slug ? ' class="on"' : "") + "><b>" + esc(d.title) + badgeFallback(d) +
+            "</b><span>" + esc(d.snippet || d.summary || "") + "</span></button>";
+        }).join("");
+      return;
+    }
+    if (!docs.index) return;
     var groups = {};
     docs.index.forEach(function (d) {
       (groups[d.group] = groups[d.group] || []).push(d);
@@ -272,46 +335,100 @@
     list.innerHTML = Object.keys(groups).map(function (g) {
       return '<div class="adr-docs-group">' + esc(g) + "</div>" + groups[g].map(function (d) {
         return '<button type="button" data-slug="' + esc(d.slug) + '"' +
-          (d.slug === docs.slug ? ' class="on"' : "") + "><b>" + esc(d.title) + "</b>" +
-          "<span>" + esc(d.summary || ("更新于 " + (d.updated || "—"))) + "</span></button>";
+          (d.slug === docs.slug ? ' class="on"' : "") + "><b>" + esc(d.title) + badgeFallback(d) + "</b>" +
+          "<span>" + esc(d.summary || (tr("更新于 ", "Updated ") + (d.updated || "—"))) + "</span></button>";
       }).join("");
     }).join("");
   }
 
   function markActive() {
-    var list = document.getElementById("adrDocsList");
+    var list = document.getElementById("adrDocsGroups");
     if (!list) return;
     Array.prototype.forEach.call(list.querySelectorAll("[data-slug]"), function (b) {
       b.classList.toggle("on", b.getAttribute("data-slug") === docs.slug);
     });
   }
 
-  function openDocs() {
+  /* 无结果兜底: 直接给「问题处理 / 使用指南」两个入口, 不让用户卡在空列表。 */
+  function renderNoResult(q) {
+    var main = document.getElementById("adrDocsMain");
+    if (!main) return;
+    main.innerHTML = '<div class="adr-docs-empty">' +
+      esc(tr("没有找到与「" + q + "」相关的文档。", "No documents match “" + q + "”.")) +
+      '<div class="adr-docs-suggest">' +
+      '<button type="button" data-slug="troubleshooting">' + esc(tr("问题处理", "Troubleshooting")) + "</button>" +
+      '<button type="button" data-slug="guide">' + esc(tr("使用指南", "User guide")) + "</button>" +
+      "</div></div>";
+  }
+
+  function runSearch(raw) {
+    var q = String(raw == null ? "" : raw).trim();
+    docs.query = q;
+    if (!q) {
+      docs.results = null;
+      renderList();
+      return;
+    }
+    var groups = document.getElementById("adrDocsGroups");
+    if (groups) groups.innerHTML = '<div class="adr-docs-loading">' + esc(tr("搜索中…", "Searching…")) + "</div>";
+    fetch(API + "/search?q=" + encodeURIComponent(q) + "&lang=" + encodeURIComponent(lang()),
+      { headers: authHeaders() })
+      .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error((j && j.detail) || ("HTTP " + r.status)); return j; }); })
+      .then(function (res) {
+        docs.results = (res && res.results) || [];
+        renderList();
+        if (!docs.results.length) {
+          renderNoResult(q);
+        } else {
+          loadDoc(docs.results[0].slug);
+        }
+      })
+      .catch(function (err) {
+        docs.results = [];
+        renderList();
+        var main = document.getElementById("adrDocsMain");
+        if (main) main.innerHTML = '<div class="adr-doc-err">' + esc(tr("搜索失败：", "Search failed: ") + err.message) + "</div>";
+      });
+  }
+
+  function openDocs(wantSlug) {
     buildDocs();
     docs.open = true;
+    if (wantSlug) docs.pending = wantSlug;
     var root = document.getElementById("adrDocs");
     root.classList.add("open");
     document.documentElement.style.overflow = "hidden";
-    if (!docs.index) {
-      fetch(API, { headers: authHeaders() })
-        .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
-        .then(function (data) {
-          docs.index = (data && data.docs) || [];
-          if (!docs.index.length) {
-            document.getElementById("adrDocsMain").innerHTML =
-              '<div class="adr-docs-empty">安装包内未找到文档。请确认 docs/ 目录完整。</div>';
-            return;
-          }
-          renderList();
-          var first = docs.index.filter(function (d) { return d.slug === "quickstart"; })[0] || docs.index[0];
-          loadDoc(first.slug);
-        })
-        .catch(function (err) {
-          document.getElementById("adrDocsMain").innerHTML =
-            '<div class="adr-doc-err">文档接口不可用：' + esc(err.message) +
-            "<br>控制台页面需由 ADR 服务端提供（同源 /api/adr/v1/docs）。</div>";
-        });
+    if (docs.index) {
+      var target = docs.pending || docs.slug || "quickstart";
+      docs.pending = "";
+      loadDoc(target);
+      return;
     }
+    fetch(API + "?lang=" + encodeURIComponent(lang()), { headers: authHeaders() })
+      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(function (data) {
+        docs.index = (data && data.docs) || [];
+        if (!docs.index.length) {
+          document.getElementById("adrDocsMain").innerHTML =
+            '<div class="adr-docs-empty">' +
+            esc(tr("安装包内未找到文档。请确认 docs/ 目录完整。",
+              "No bundled documentation found. Check that the docs/ folder is present.")) +
+            "</div>";
+          return;
+        }
+        renderList();
+        var wanted = docs.pending && docs.index.filter(function (d) { return d.slug === docs.pending; })[0];
+        docs.pending = "";
+        var first = wanted ||
+          docs.index.filter(function (d) { return d.slug === "quickstart"; })[0] || docs.index[0];
+        loadDoc(first.slug);
+      })
+      .catch(function (err) {
+        document.getElementById("adrDocsMain").innerHTML =
+          '<div class="adr-doc-err">' + esc(tr("文档接口不可用：", "Documentation API unavailable: ") + err.message) +
+          "<br>" + esc(tr("控制台页面需由 ADR 服务端提供（同源 /api/adr/v1/docs）。",
+            "Console pages must be served by the ADR server (same-origin /api/adr/v1/docs).")) + "</div>";
+      });
   }
 
   function closeDocs() {
@@ -326,8 +443,10 @@
     markActive();
     var main = document.getElementById("adrDocsMain");
     if (!main) return;
-    main.innerHTML = '<div class="adr-docs-loading">正在载入…</div>';
-    var url = API + "/" + encodeURIComponent(slug) + (source === "online" ? "?source=online" : "");
+    main.innerHTML = '<div class="adr-docs-loading">' + esc(tr("正在载入…", "Loading…")) + "</div>";
+    var qs = "lang=" + encodeURIComponent(lang());
+    if (source === "online") qs += "&source=online";
+    var url = API + "/" + encodeURIComponent(slug) + "?" + qs;
     fetch(url, { headers: authHeaders() })
       .then(function (r) {
         return r.json().then(function (j) {
@@ -337,14 +456,15 @@
       })
       .then(function (doc) {
         var badges = '<span class="tag ' + (doc.source === "online" ? "online" : "") + '">' +
-          (doc.source === "online" ? "在线最新" : "本地内置") + "</span>";
-        if (docs.updates[slug]) badges += '<span class="tag update">有新版本</span>';
+          (doc.source === "online" ? tr("在线最新", "Latest online") : tr("本地内置", "Bundled locally")) + "</span>";
+        if (docs.updates[slug]) badges += '<span class="tag update">' + esc(tr("有新版本", "Update available")) + "</span>";
+        if (doc.fallback) badges += '<span class="tag">' + esc(tr("中文原文（英文版待补）", "Chinese original (English pending)")) + "</span>";
         badges += "<span>" + esc(doc.updated || "") + "</span>";
         if (doc.source !== "online") {
           badges += '<span class="adr-docs-spacer" style="flex:1"></span>' +
             '<button type="button" id="adrDocsOnline" style="height:26px;padding:0 10px;border-radius:7px;' +
             'border:1px solid var(--line,#dcebfb);background:none;color:var(--sub,#5b6b82);' +
-            'font-family:inherit;font-size:11.5px;cursor:pointer">在线版</button>';
+            'font-family:inherit;font-size:11.5px;cursor:pointer">' + esc(tr("在线版", "Online")) + '</button>';
         }
         main.innerHTML = '<div class="adr-docs-meta">' + badges + "</div>" +
           '<article class="adr-doc">' + mdToHtml(doc.markdown) + "</article>";
@@ -357,11 +477,13 @@
       .catch(function (err) {
         if (source === "online") {
           var state = document.getElementById("adrDocsState");
-          if (state) state.textContent = "在线版不可用：" + err.message + " · 已切回本地内置";
+          if (state) state.textContent = tr("在线版不可用：", "Online version unavailable: ") +
+            err.message + tr(" · 已切回本地内置", " · fell back to bundled copy");
           loadDoc(slug, "local");
           return;
         }
-        main.innerHTML = '<div class="adr-doc-err">读取《' + esc(slug) + "》失败：" + esc(err.message) + "</div>";
+        main.innerHTML = '<div class="adr-doc-err">' +
+          esc(tr("读取《" + slug + "》失败：", "Failed to open “" + slug + "”: ") + err.message) + "</div>";
       });
   }
 
@@ -371,48 +493,50 @@
     if (!btn || docs.busy) return;
     docs.busy = true;
     btn.disabled = true;
-    btn.textContent = "检查中…";
-    if (state) state.textContent = "正在比对官方仓库…";
+    btn.textContent = tr("检查中…", "Checking…");
+    if (state) state.textContent = tr("正在比对官方仓库…", "Comparing with the upstream repository…");
     fetch(API + "/check", { headers: authHeaders() })
       .then(function (r) { return r.json().then(function (j) { if (!r.ok) throw new Error((j && j.detail) || ("HTTP " + r.status)); return j; }); })
       .then(function (res) {
         if (res.online === false) {
           if (state) {
-            state.textContent = "离线：无法访问官方仓库" +
-              (res.error ? "（" + res.error + "）" : "") + " · 继续使用内置文档";
+            state.textContent = tr("离线：无法访问官方仓库", "Offline: cannot reach the upstream repository") +
+              (res.error ? "（" + res.error + "）" : "") +
+              tr(" · 继续使用内置文档", " · continuing with bundled docs");
           }
           return;
         }
         docs.updates = {};
         (res.updates || []).forEach(function (s) { docs.updates[s] = true; });
         var badge = document.getElementById("adrDocsBadge");
-        if (badge) badge.textContent = res.online ? "已联网" : "内置";
+        if (badge) badge.textContent = res.online ? tr("已联网", "Online") : tr("内置", "Built-in");
         if (state) {
           if (res.local === 0) {
             // 本机一份文档都没有 (安装包漏拷 docs/) — 不能报"已是最新"
-            state.textContent = "本机安装包未包含文档，无法比对（请重新安装完整版本）";
+            state.textContent = tr("本机安装包未包含文档，无法比对（请重新安装完整版本）",
+              "No bundled docs on this install — cannot compare (reinstall the full package)");
           } else {
             state.textContent = res.updates && res.updates.length
-              ? "发现 " + res.updates.length + " 篇有更新，可切换「在线版」查看"
-              : "已是最新（官方仓库无变化）";
+              ? tr("发现 " + res.updates.length + " 篇有更新，可切换「在线版」查看",
+                res.updates.length + " document(s) have updates — switch to “Online” to read")
+              : tr("已是最新（官方仓库无变化）", "Up to date (no upstream changes)");
           }
         }
         if (docs.slug) loadDoc(docs.slug);
       })
       .catch(function (err) {
-        if (state) state.textContent = "无法访问官方仓库：" + err.message;
+        if (state) state.textContent = tr("无法访问官方仓库：", "Cannot reach upstream: ") + err.message;
       })
       .then(function () {
         docs.busy = false;
         btn.disabled = false;
-        btn.textContent = "检查更新";
+        btn.textContent = tr("检查更新", "Check updates");
       });
   }
 
-  /* 首页没有各页自己的 adrKey(): 带 ?api_key= 打开首页后, 点顶栏/卡片跳到
-     /easy 等新页面时 URL 里没有 key → 业务接口 401。这里统一转存, 并把 key
-     从地址栏摘掉 (避免进入历史记录/截图/粘贴外发)。 */
-  function persistIndexKey() {
+  /* 各页共享: 带 ?api_key= 打开时统一转存 sessionStorage, 并从地址栏摘掉
+     (避免进入历史记录/截图/粘贴外发, 同时保证页面切换后业务接口仍有 key)。 */
+  function persistKey() {
     try {
       var params = new URLSearchParams(location.search);
       var k = params.get("api_key") || "";
@@ -425,10 +549,75 @@
     } catch (e) { /* file:// / 隐私模式: 忽略 */ }
   }
 
+  /* 语言切换: 顶栏与文档抽屉是 JS 生成/缓存的, i18n.js 的 data-i18n 覆盖不到,
+     这里整体重建 (在 i18n.js 派发 adr:lang 事件后执行)。 */
+  function onLangChange() {
+    var nav = document.querySelector(".adr-topnav");
+    if (nav) buildTopnav(nav);
+    var db = document.querySelector(".adr-docbtn");
+    if (db) {
+      db.title = tr("打开内置文档中心", "Open built-in documentation");
+      var label = db.querySelector("span");
+      if (label) label.textContent = tr("文档", "Docs");
+    }
+    var root = document.getElementById("adrDocs");
+    if (root && root.parentNode) root.parentNode.removeChild(root);
+    docs.built = false;
+    docs.index = null;
+    docs.results = null;
+    docs.updates = {};
+    docs.query = "";
+    docs.slug = "";
+    if (docs.open) openDocs();
+  }
+
   /* ── 启动 ─────────────────────────────────────────────────────────── */
+  // 无 favicon 时浏览器会 404 请求 /favicon.ico, 用内联 SVG 补一个 (零额外请求)
+  var FAVICON = "data:image/svg+xml," + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">' +
+    '<rect width="32" height="32" rx="8" fill="#2b6cb0"/>' +
+    '<path d="M16 6l7 20h-4l-1.4-4.2h-3.2L13 26H9zm0 6.4l-1.4 5.6h2.8z" fill="#fff"/></svg>');
+
+  function ensureFavicon() {
+    if (document.querySelector('link[rel="icon"]')) return;
+    var l = document.createElement("link");
+    l.rel = "icon";
+    l.href = FAVICON;
+    document.head.appendChild(l);
+  }
+
+  /* P0: 首启 / 全局设置写入的服务端 ui.theme / ui.lang 作为首次默认值。
+     只在本机还没有本地偏好时应用, 之后用户在各页手动切换的值优先。 */
+  function applyServerUiDefaults() {
+    var hasLang = false, hasTheme = false;
+    try {
+      hasLang = !!localStorage.getItem("adr_lang");
+      hasTheme = !!localStorage.getItem("adr.theme");
+    } catch (e) { return; }
+    if (hasLang && hasTheme) return;
+    var key = "";
+    try { key = sessionStorage.getItem("adr_api_key") || ""; } catch (e) {}
+    fetch("/api/adr/v1/settings", { headers: key ? { "X-API-Key": key } : {} })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (!j || !j.ui) return;
+        if (!hasTheme && window.adrTheme
+            && (j.ui.theme === "default" || j.ui.theme === "classic")) {
+          adrTheme.set(j.ui.theme);
+        }
+        if (!hasLang && window.I && (j.ui.lang === "zh" || j.ui.lang === "en")
+            && j.ui.lang !== I.lang) {
+          I.setLang(j.ui.lang);
+        }
+      })
+      .catch(function () {});
+  }
+
   function boot() {
+    applyServerUiDefaults();
+    persistKey();
+    ensureFavicon();
     if (page === "index") {
-      persistIndexKey();
       var host = document.querySelector(".hub-top");
       // 页面模板里已有一个空的 .adr-topnav (index.html), 复用它而不是再插一个
       var existing = (host && host.querySelector(".adr-topnav")) || document.querySelector(".adr-topnav");
@@ -436,7 +625,7 @@
       if (!existing && host) host.appendChild(nav);
       var mark = document.querySelector(".hub-brand .adr-mark");
       if (mark) mark.innerHTML = ICON.mark;
-    } else if (["easy", "pro", "call"].indexOf(page) >= 0) {
+    } else if (["easy", "pro", "call", "settings"].indexOf(page) >= 0) {
       var header = enhanceHeader();
       // 正文标题/按钮里的 emoji 一并清掉 (跳过 pre/code/textarea/.adr-doc)
       stripEmoji(document.querySelector("main") || document.body);
@@ -444,16 +633,21 @@
         var btn = document.createElement("button");
         btn.type = "button";
         btn.className = "adr-docbtn";
-        btn.title = "打开内置文档中心";
-        btn.innerHTML = ICON.docs + "<span>文档</span>";
-        btn.addEventListener("click", openDocs);
+        btn.title = tr("打开内置文档中心", "Open built-in documentation");
+        btn.innerHTML = ICON.docs + "<span>" + esc(tr("文档", "Docs")) + "</span>";
+        btn.addEventListener("click", function () { openDocs(); });
         header.appendChild(btn);
       }
     }
-    Array.prototype.forEach.call(document.querySelectorAll("[data-adr-docs-open]"), function (n) {
-      n.addEventListener("click", function (e) { e.preventDefault(); openDocs(); });
+    // 事件委托: 文档入口可能被 i18n 的 data-i18n-html 重建, 逐节点绑会失效
+    document.addEventListener("click", function (e) {
+      var opener = e.target.closest && e.target.closest("[data-adr-docs-open]");
+      if (!opener) return;
+      e.preventDefault();
+      openDocs(opener.getAttribute("data-doc-slug") || "");
     });
     if (docsEnabled && location.hash === "#docs") openDocs();
+    document.addEventListener("adr:lang", onLangChange);
   }
 
   if (document.readyState === "loading") {

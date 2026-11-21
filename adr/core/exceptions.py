@@ -1,7 +1,7 @@
 """ADR 框架自定义异常 + 错误协议 (批次35)。
 
 错误协议: 每个 ADR 异常携带稳定错误码 ``code`` (wire 字段, 不得改名);
-四面 (v2/native HTTP, v3 WS, webui) 各自按 wire 形态序列化, 唯一映射点是
+各面 (v2/native HTTP, v3 WS) 各自按 wire 形态序列化, 唯一映射点是
 ``error_code()``。code 为增量字段, 既有消息 (``message`` 等) 逐字保留。
 """
 

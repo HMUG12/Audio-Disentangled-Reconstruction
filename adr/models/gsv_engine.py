@@ -131,6 +131,40 @@ def resolve_runtime_device(device: str) -> str:
     return "cpu"
 
 
+_OOM_STREAK_LOCK = threading.Lock()
+_OOM_LAST_AT = 0.0
+_OOM_STREAK = 0
+# 连续 OOM 自愈窗口: 120s 内累计 3 次 → 重置模型 (碎片/池膨胀只能靠重建)。
+_OOM_RESET_WINDOW_SEC = 120.0
+_OOM_RESET_THRESHOLD = 3
+
+
+def _maybe_reset_after_oom() -> bool:
+    """连续 OOM 达阈值时重置引擎 (自愈); 返回是否触发重置。
+
+    仅在窗口内累计计数, 单次偶发 OOM 仍走原来的"释放缓存 + 503 提示"。
+    重置用 1s 锁等待: OOM 请求必须快速返回, 抢不到锁 (命中其他合成) 就跳过,
+    由下一次 OOM 或用户手动重启处理。
+    """
+    global _OOM_LAST_AT, _OOM_STREAK
+    now = time.monotonic()
+    with _OOM_STREAK_LOCK:
+        if now - _OOM_LAST_AT <= _OOM_RESET_WINDOW_SEC:
+            _OOM_STREAK += 1
+        else:
+            _OOM_STREAK = 1
+        _OOM_LAST_AT = now
+        streak = _OOM_STREAK
+        if streak < _OOM_RESET_THRESHOLD:
+            return False
+        _OOM_STREAK = 0
+    try:
+        return bool(reset_engine("cuda_oom_streak", wait_sec=1.0))
+    except Exception as exc:
+        logging.getLogger("adr").warning("[oom] 自动重置引擎失败: %s", exc)
+        return False
+
+
 def handle_cuda_oom(e: BaseException) -> str:
     """CUDA OOM 统一善后 (单点): 立即 empty_cache 释放碎片显存 — 否则显存
     碎片化后后续请求持续 OOM; 落警告日志; 返回用户可读提示 (API 层包 503/cuda_oom)。"""
@@ -143,6 +177,10 @@ def handle_cuda_oom(e: BaseException) -> str:
     logging.getLogger("adr").warning(
         "[oom] CUDA 显存不足: %s — 已自动释放缓存",
         (str(e).splitlines() or [""])[0])
+    if _maybe_reset_after_oom():
+        logging.getLogger("adr").warning(
+            "[oom] 连续 %d 次显存不足: 已重置引擎, 下次请求重建模型以清理碎片",
+            _OOM_RESET_THRESHOLD)
     return ("GPU 显存不足 (CUDA out of memory): 已自动释放缓存。"
             "建议缩短合成文本、避免并发请求, 或在 设置 → 高级 → 设备 改为 cpu 后重试。")
 
@@ -807,6 +845,41 @@ class GSVEngine:
         self._tts = None
         self._loaded = {"t2s": None, "vits": None}
         return True
+
+    def reset(self, reason: str = "manual", wait_sec: float = _LOCK_WAIT_SEC) -> bool:
+        """丢弃已加载模型并释放显存, 下次预热/合成按需重建。
+
+        手动重启与自愈 (连续 OOM) 共用。带超时取 ``_lock``:
+        - 正常空闲: 立即完成, 返回 True;
+        - 卡死 worker 持锁: 超时后抛 ``EngineStalledError`` (转 503), 不会把
+          请求线程无限挂住; OOM 自愈路径传更小的 ``wait_sec`` 以便快速返回。
+        未加载过模型时只清降级计时, 返回 False。
+        """
+        if self._tts is None and not self._stalled:
+            self._degraded_since = None
+            return False
+        if not self._lock.acquire(timeout=wait_sec):
+            log_event("engine_reset_timeout", reason=reason, wait_s=wait_sec)
+            raise EngineStalledError(
+                f"合成引擎忙或已卡死 ({wait_sec:.0f}s 未获得锁), 无法重置, 请稍后重试")
+        try:
+            self._tts = None
+            self._loaded = {"t2s": None, "vits": None}
+            self._stalled = False
+            self._degraded_since = None
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                logging.getLogger("adr").debug(
+                    "[gsv] 重启时释放显存失败", exc_info=True)
+            logging.getLogger("adr").warning(
+                "[gsv] 引擎已重置 (%s): 下次请求重新加载模型", reason)
+            log_event("engine_reset", reason=reason)
+            return True
+        finally:
+            self._lock.release()
 
     def _lazy_init(self):
         if self._drop_stalled_model():
@@ -1626,6 +1699,18 @@ def get_gsv_engine() -> GSVEngine:
             if _ENGINE is None:
                 _ENGINE = GSVEngine()
     return _ENGINE
+
+
+def reset_engine(reason: str = "manual", wait_sec: float = _LOCK_WAIT_SEC) -> bool:
+    """重置已创建的引擎实例 (不新建; 未初始化返回 False)。
+
+    只丢弃模型与权重指纹, 不拉起加载 — 调用方 (手动重启 / OOM 自愈) 决定
+    是否随后 ``prewarm()`` 重建。
+    """
+    eng = _ENGINE
+    if eng is None:
+        return False
+    return eng.reset(reason, wait_sec=wait_sec)
 
 
 def prewarm(default_profile: str | None = None) -> None:

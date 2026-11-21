@@ -12,6 +12,7 @@
 """
 import json
 import shutil
+import time
 
 import numpy as np
 import pytest
@@ -363,6 +364,44 @@ def test_native_readyz_reflects_engine_state(client, monkeypatch):
     monkeypatch.setattr(gsv_engine, "is_ready", lambda: False)
     assert client.get("/api/adr/v1/readyz").status_code == 503
     assert client.get("/api/adr/v1/health").status_code == 200
+
+
+def test_engine_restart_endpoint(client, monkeypatch):
+    """批次103: 手动重启引擎 — 丢弃模型 + 后台重预热; 预热中 409; 卡死 503。"""
+    from adr.core.exceptions import EngineStalledError
+    from adr.models import gsv_engine
+
+    called = {}
+    monkeypatch.setattr(gsv_engine, "is_loading", lambda: False)
+    monkeypatch.setattr(
+        gsv_engine, "reset_engine",
+        lambda reason="manual", wait_sec=55.0: called.setdefault("reset", reason))
+    monkeypatch.setattr(
+        gsv_engine, "prewarm",
+        lambda prof=None: called.setdefault("prewarm", prof))
+    r = client.post("/api/adr/v1/engine/restart")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True and body["reloading"] is True
+    assert called.get("reset") == "manual"
+    for _ in range(60):          # 后台线程异步预热, 等调度
+        if "prewarm" in called:
+            break
+        time.sleep(0.05)
+    assert "prewarm" in called
+
+    monkeypatch.setattr(gsv_engine, "is_loading", lambda: True)
+    assert client.post("/api/adr/v1/engine/restart").status_code == 409
+
+    monkeypatch.setattr(gsv_engine, "is_loading", lambda: False)
+
+    def _stalled(reason="manual", wait_sec=55.0):
+        raise EngineStalledError("引擎锁超时")
+
+    monkeypatch.setattr(gsv_engine, "reset_engine", _stalled)
+    r = client.post("/api/adr/v1/engine/restart")
+    assert r.status_code == 503
+    assert r.json()["code"] == "engine_stalled"
 
 
 def test_native_profiles(client, voice_dir):

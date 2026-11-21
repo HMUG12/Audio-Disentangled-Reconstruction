@@ -35,6 +35,10 @@ pub(crate) struct ShellSettings {
     pub(crate) autostart: Option<bool>,
     /// ADR_TTS_DEFAULT_PROFILE — /tts 缺省档案
     pub(crate) default_profile: Option<String>,
+    /// ADR_UI_LANG — 控制台默认语言 (zh/en); 仅首启 / 全局设置写入
+    pub(crate) lang: Option<String>,
+    /// 进入「全局设置」是否需要再次输入本机账号密码 (每次打开都验)
+    pub(crate) protect_settings: Option<bool>,
     // --- 高级抽屉 ---
     /// 服务端口覆盖; 0/None = 默认逻辑 (9881 探测 → 随机回退)
     pub(crate) service_port: Option<u16>,
@@ -126,6 +130,12 @@ pub(crate) fn env_overrides(c: &ShellSettings, auto_compat: bool) -> Vec<(String
     }
     if let Some(p) = c.default_profile.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         v.push(("ADR_TTS_DEFAULT_PROFILE".into(), p.into()));
+    }
+    // P0: 控制台默认语言 (只认 zh/en, 其他值不注入)
+    if let Some(l) = c.lang.as_deref().map(str::trim) {
+        if l == "zh" || l == "en" {
+            v.push(("ADR_UI_LANG".into(), l.into()));
+        }
     }
     if c.cudagraph.unwrap_or(false) {
         v.push(("ADR_T2S_CUDAGRAPH".into(), "1".into()));

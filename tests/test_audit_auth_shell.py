@@ -164,8 +164,9 @@ def test_launcher_profiles_fetch_forwards_key():
     ("/app-shell.css/", False), ("/app-shell.js/", False),
     ("/app-shell.css.map", False), ("/APP-SHELL.JS", False),
     ("/app-shell.js/../api/adr/v1/profiles", False),
-    # 控制台页精确豁免, 子路径不算
-    ("/server", True), ("/server/", False), ("/pro", True), ("/pro/x", False),
+    # 控制台页精确豁免, 子路径不算 (/server 已随 legacy WebUI 删除, 不再豁免)
+    ("/settings", True), ("/settings/", False), ("/pro", True), ("/pro/x", False),
+    ("/server", False),
     # i18n 语言包: 只认 console.py 真正提供的四页
     ("/i18n.js", True), ("/i18n-easy.js", True), ("/i18n-call.js", True),
     ("/i18n-.js", False), ("/i18n-foo.js", False), ("/i18n.js.map", False),
