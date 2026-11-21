@@ -12,7 +12,7 @@ runtime 1.78GB。本脚本固化排除规则, 防止垃圾再混入。
 3. 底模 pretrained_models/ → FAIL (按设计首启 bootstrap 下载, 打包含底模
    会让安装包 +5GB)
 4. CPU 包不得含 nvidia_* CUDA 库 (torch CUDA 版 ~2.5GB 经 pip 包拆分进入;
-   GPU 包构建时传 --allow-cuda 放行) — 双包拍板见 docs/m10-plan.md G 节
+   GPU 包构建时传 --allow-cuda 放行) — 双包拍板见内部批次计划 G 节
 5. 体积分布 + 总量告警 (>2.2GB WARN: 高于清理后基线 1.78GB+余量)
 6. configs/*.yaml 必须随包 (v1.0.0 缺口: build_runtime.ps1 未拷 configs/,
    安装机 preset 全部静默回落内置默认值, 日志报 default.yaml 缺失)

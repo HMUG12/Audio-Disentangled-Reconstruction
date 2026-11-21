@@ -16,7 +16,7 @@
 #   redist\               VC++ 2015-2022 x64 (批次71: PBS Python 的 CRT 依赖,
 #                         installer.iss [Run] 静默安装)
 #
-# Variants (双包拍板, docs/m10-plan.md G 节):
+# Variants (双包拍板, 内部批次计划 G 节):
 #   CPU (default): torch 2.10.0 from PyPI (Windows PyPI wheels are CPU builds)
 #   GPU (-AllowCuda): torch 2.10.0+cu130 from download.pytorch.org/whl/cu130
 #                     (+ nvidia_* CUDA 库 ~2.5GB); smoke 断言 cuda 可用

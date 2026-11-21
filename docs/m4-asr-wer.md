@@ -438,7 +438,6 @@ print(" ".join(s.text for s in segs))
 | [smoke_train_opencpop.py](file:///E:/新创意构思/新建文件夹/ADR/scripts/smoke_train_opencpop.py) | CLI 集成 (`--asr-wer-patience`) |
 | [test_asr_callback.py](file:///E:/新创意构思/新建文件夹/ADR/tests/test_asr_callback.py) | 32 个单元测试 |
 | [m3-wav-quality.md](file:///E:/新创意构思/新建文件夹/ADR/docs/m3-wav-quality.md) | M3 wav 早停文档 (互补) |
-| [implementation-plan.md](file:///E:/新创意构思/新建文件夹/ADR/docs/implementation-plan.md) | 总体路线图 |
 
 ---
 

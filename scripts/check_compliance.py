@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """合规门禁断言（批次 61-62，源自 2026-10-24 会议纪要 + 规划重排方案 C）。
 
-门禁清单（docs/m10-plan.md 规划重排 ③，方案 C 定稿）：
+门禁清单（内部批次计划「规划重排 ③」，方案 C 定稿）：
   1. LICENSE 为 AGPL-3.0 全文；pyproject / Cargo.toml / package.json 许可证精确为 AGPL-3.0-only
   2. README 含源码获取途径（AGPL-3.0 §6 源码随包提供）
   3. README 含风险披露与禁止性条款

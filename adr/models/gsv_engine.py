@@ -889,7 +889,7 @@ class GSVEngine:
             return
         # 批次10: t2s CUDA Graph 桥 — AR 提速 3.77x 但官方 SDPA 实现下 AR 分布
         # 漂移 (同输入 45→254 token, 音频时长翻倍), 默认关闭; 需上游修复后
-        # 可设 ADR_T2S_CUDAGRAPH=1 启用 (诊断见 docs/m9-phase3-plan.md 批次10)
+        # 可设 ADR_T2S_CUDAGRAPH=1 启用 (诊断记录见内部批次计划 批次10)
         os.environ.setdefault("ADR_T2S_CUDAGRAPH", "0")
         # 批次63: t2s 静态 KV Cache 桥 — decode 每步 cat 重建 KV (O(L^2) 拷贝)
         # 换预分配 buffer + 原地写, 与原路径逐 token 位等; 默认关闭

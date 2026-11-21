@@ -3,7 +3,7 @@
 - 基线版本：`pyproject.toml` 1.3.1（commit `ac33ffd` 之后的文档批）
 - 盘点日期：2026-11-14
 - 口径：只读静态盘点 + 源码取证；不含运行时压测
-- 上游报告：[audit-2026-10-31.md](../audit-2026-10-31.md)（11 条保留发现）
+- 上游报告：2026-10-31 全仓审计（内部材料，不随仓库发布；11 条保留发现）
 - 关联 issue：#2（M0 首阶段）
 
 本文件回答三个问题：**现在是什么结构**、**哪些面在对外**、**上一轮审计还剩什么**。目标架构见 [target-architecture.md](target-architecture.md)，改造排期见 [refactoring-roadmap.md](refactoring-roadmap.md)。

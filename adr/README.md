@@ -4,7 +4,7 @@
 
 ## 当前状态：M0+（骨架已跑通）
 
-- ✅ M0: Fish Speech 推理管线验证（M0 报告 [docs/m0-report.md](m0-report.md)）
+- ✅ M0: Fish Speech 推理管线验证（M0 报告为内部材料，不随仓库发布）
 - ✅ M0 异常诊断：379s 异常 = 无 prompt 失控，修复脚本 [scripts/m0_rerun_fix.py](../scripts/m0_rerun_fix.py) 已就绪，留待 M1 上云重跑
 - ✅ M0+：自研代码骨架 5 模块跑通，验证脚本 [scripts/m0plus_verify.py](../scripts/m0plus_verify.py) ✅ 全部通过
 
@@ -83,8 +83,6 @@ Sing mel shape: torch.Size([1, 80, 270])
 ## 关联文档
 
 - 技术设计：[docs/architecture-design.md](architecture-design.md)
-- M0 执行报告：[docs/m0-report.md](m0-report.md)
-- 异常诊断：[docs/m0-diagnose.md](m0-diagnose.md)（待补）
 
 ## 决策记录
 
